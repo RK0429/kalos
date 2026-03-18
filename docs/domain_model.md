@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.1.0 |
+| バージョン | 0.1.1 |
 | 最終更新日 | 2026-03-18 |
 | ステータス | ドラフト |
 | 入力 | requirements.md v0.1.0 |
@@ -62,7 +62,9 @@ graph LR
                     ↓
                [診断] ← RuleConfig + SuppressionComment
                     ↓
-         DiagnosticReport(診断 + 改善提案 + ExitCode)
+         DiagnosticReport(診断 + テンプレート提案 + ExitCode)
+                    ↓
+      Optional LlmSuggestionBundle(DiagnosticId ごとの補助提案)
                     ↓
                [レポート] → human / JSON / SARIF
 ```
@@ -272,7 +274,7 @@ classDiagram
         +String message
         +f64 metric_value
         +f64 threshold
-        +Option~ImprovementSuggestion~ suggestion
+        +Option~TemplateSuggestion~ suggestion
     }
     class MetricRule {
         <<Entity>>
@@ -292,11 +294,23 @@ classDiagram
         +String suggestion_template
         +detect(cpg: CpgSubgraph) List~Diagnostic~
     }
-    class ImprovementSuggestion {
+    class DiagnosticId {
+        <<ValueObject>>
+        +String value
+    }
+    class TemplateSuggestion {
         <<ValueObject>>
         +String explanation
         +Option~String~ code_example
-        +SuggestionMode mode
+    }
+    class LlmSuggestionBundle {
+        <<ValueObject>>
+        +Map~DiagnosticId_LlmSuggestion~ enrichments
+    }
+    class LlmSuggestion {
+        <<ValueObject>>
+        +String explanation
+        +Option~String~ code_example
     }
     class RuleId {
         <<ValueObject>>
@@ -327,11 +341,6 @@ classDiagram
         DiagnosticFailure
         ToolError
     }
-    class SuggestionMode {
-        <<Enum>>
-        Template
-        Llm
-    }
     class PatternType {
         <<Enum>>
         GodClass
@@ -347,15 +356,17 @@ classDiagram
     DiagnosticReport *-- Diagnostic
     DiagnosticReport --> DiagnosticSummary
     DiagnosticReport --> ExitCode
+    Diagnostic --> DiagnosticId
     Diagnostic --> RuleId
     Diagnostic --> Severity
     Diagnostic --> FileLocation
-    Diagnostic --> ImprovementSuggestion
+    Diagnostic --> TemplateSuggestion
     MetricRule --> RuleId
     MetricRule --> Severity
     PatternRule --> RuleId
     PatternRule --> PatternType
-    ImprovementSuggestion --> SuggestionMode
+    LlmSuggestionBundle *-- LlmSuggestion
+    LlmSuggestionBundle ..> DiagnosticId
     InlineSuppression --> FileLocation
     InlineSuppression ..> RuleId
 ```
@@ -363,7 +374,7 @@ classDiagram
 **設計意図:**
 
 - ルールを `MetricRule`（メトリクス値→閾値比較）と `PatternRule`（CPG→パターンマッチ）に分離。入力データと評価ロジックが根本的に異なるため、単一 Rule では閾値・メトリクス値フィールドが PatternRule に対して無意味になり不変条件が弱まる
-- `ImprovementSuggestion` の `mode` でテンプレート/LLM を区別（REQ-FUNC-015）。LLM フォールバック時は mode が Template に切り替わる（REQ-NF-008）
+- `TemplateSuggestion` は決定論的コアの出力として `Diagnostic` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、`DiagnosticReport` 自体は変更しない（REQ-FUNC-015, REQ-NF-008）
 - `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`rule_id` が None の場合は該当行の全診断を抑制（REQ-FUNC-029）
 - `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` フラグで warning → error 昇格（REQ-FUNC-022）
 
@@ -413,7 +424,7 @@ classDiagram
 
 | 入力（ドメイン） | 出力形式 | 関連要件 |
 |---|---|---|
-| DiagnosticReport + AnalysisMetrics + OverallScore | human（端末表示） | REQ-FUNC-019 |
+| DiagnosticReport + AnalysisMetrics + OverallScore + Option~LlmSuggestionBundle~ | human（端末表示） | REQ-FUNC-019 |
 | 同上 | JSON | REQ-FUNC-020 |
 | 同上 | SARIF 2.1.0 | REQ-FUNC-021 |
 
@@ -485,16 +496,24 @@ stateDiagram-v2
 
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
-| 診断 (Diagnostic) | 閾値違反または構造的パターン検出の結果。位置・ルールID・重大度・値・閾値・改善提案を含む | MetricRule, PatternRule |
+| 診断 (Diagnostic) | 閾値違反または構造的パターン検出の結果。位置・ルールID・重大度・値・閾値・テンプレート改善提案を含む | MetricRule, PatternRule |
 | 診断レポート (DiagnosticReport) | 全診断の集合とサマリー・Exit codeを束ねる集約ルート | Diagnostic, DiagnosticSummary |
 | メトリクスルール (MetricRule) | メトリクス値を閾値と比較して診断を生成するルール。RuleId `KAL-XXXX` で識別 | RuleId, Severity |
 | パターンルール (PatternRule) | CPGから構造的パターン（God class等）を直接検出するルール | PatternType |
-| 改善提案 (ImprovementSuggestion) | 何が問題か・なぜ問題か・どう改善すべきかを含むテキスト。テンプレートまたはLLMで生成 | SuggestionMode |
+| 診断ID (DiagnosticId) | 診断を一意に識別する値。LLM 補助提案との関連付けに使う | Diagnostic |
+| テンプレート改善提案 (TemplateSuggestion) | 何が問題か・なぜ問題か・どう改善すべきかを含む決定論的な提案 | Diagnostic |
 | ルールID (RuleId) | ルールの一意識別子。`KAL-XXXX` 形式 | — |
 | 重大度 (Severity) | 診断の深刻さ: Error（品質基準を明確に逸脱）/ Warning（改善を強く推奨）/ Info（許容範囲内だが改善の余地あり） | — |
 | インライン抑制 (InlineSuppression) | `kalos-ignore` コメントによる診断抑制。ルールID指定で個別抑制、省略で全抑制 | RuleId |
 | 診断サマリー (DiagnosticSummary) | 重大度別の診断件数集計 | — |
 | Exit code | 解析結果のプロセス終了コード: Success(0) / DiagnosticFailure(1) / ToolError(2) | — |
+
+### 5.5 用語集: レポートコンテキスト
+
+| 用語 | 定義 | 関連概念 |
+|---|---|---|
+| LLM補助提案バンドル (LlmSuggestionBundle) | `DiagnosticId` ごとに report 層で併記される任意の補助提案集合。コア診断は変更しない | DiagnosticId, LlmSuggestion |
+| LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
 
 ### 5.4 用語集: 構成管理コンテキスト
 
@@ -559,4 +578,5 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.1.1 | 2026-03-18 | LLM 補助提案を report 境界の sidecar に分離し、用語集とレポート入力を更新 | Codex (`architecture-designer` スキル) |
 | 0.1.0 | 2026-03-18 | 初版作成 | Claude（domain-modeler スキル） |
