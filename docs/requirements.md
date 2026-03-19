@@ -270,7 +270,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
 - **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
-- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
+- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_cpu_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate CPU time budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない。diff mode では、現在の実行で正常にロード・評価されなかったプラグインの baseline cache 済み `MetricValue` も `metrics` 出力から除外し、stale なプラグインメトリクスを部分的に再利用しない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
@@ -287,7 +287,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `participation = ScoredAndDiagnosable` な各メトリクスの `normalized_risk` をルールごとの閾値と比較し、違反をメトリクス診断として報告する
 - **入力**: メトリクス算出結果、ルールごとの閾値設定
 - **処理**: `participation = ScoredAndDiagnosable` な各メトリクスの `normalized_risk` を閾値と比較し、超過があれば `kind = "metric"` の診断オブジェクトを生成する。v1 の plugin metric（`participation = ReportOnly`）はメトリクス診断の対象外とする
-- **出力**: メトリクス診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` と、`metric` フィールド `{ metric_id, raw_value, normalized_risk, threshold, overflow_ratio }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は根拠 scope 群のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。human 形式ではこの位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
+- **出力**: メトリクス診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` と、`metric` フィールド `{ metric_id, raw_value, normalized_risk, threshold, overflow_ratio }` を持つ。内部的には各診断が canonical `primary_scope_id` を持ち、metric 診断では評価対象 `ScopeId` と一致する。diff mode の診断一覧判定と baseline の `ScopeDiagnosticSnapshot` への帰属はこの `primary_scope_id` で決定する。単一ファイルへ結び付かない cross-scope 診断では、`location` は根拠 scope 群のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。human 形式ではこの位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
 - **受け入れ基準**:
   - Given 関数のCFGエントロピーが閾値を超過, When 診断実行, Then 当該関数の位置・ルールID・重大度・メトリクス値・閾値を含む診断が報告される
   - Given すべてのメトリクスが閾値内, When 診断実行, Then 診断は0件で正常終了する
@@ -310,7 +310,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `KAL-PAT001` は `--level all` または `--level module` のときのみ評価し、`PatternEvidence.evidence_scopes` には対象 owner scope を `ScopeId(level = Module)` として格納する
   - `public_member_count` は TypeScript では対象 class の public メソッド・public フィールド数（constructor, private, protected を除く）とし、Python では class body へ直接宣言されたメンバーのうち論理名が `_` で始まらない public method・class attribute・property descriptor 数を数える。Python の public method には `@property` / `@cached_property` / setter / deleter を含めず、property 系は public field 相当として 1 件だけ数える。Python の `__init__` と dunder method は除外し、メソッド本体内で初めて代入される instance attribute は数えない。Rust では対象 module/file root 直下の `pub` な top-level item 数、Go では対象 package 直下の exported top-level declaration 数とする
   - `foreign_accesses` は「現在の関数が所属する owner scope（class / module / package）以外」への参照・呼び出し数、`local_accesses` は同一 owner scope 内への参照・呼び出し数とする。Python/TypeScript の `self` / `this`、Rust の `self` / `Self` / 同一 module 内 item、Go の同一 package 内識別子参照は local に数える
-- **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。PAT001 の `M-F002` 平均は対象 owner scope 配下関数の既算出結果から求める。human 形式では `column = null` の位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
+- **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。内部的には各診断が canonical `primary_scope_id` を持ち、rule の主対象 scope を優先する。単一の主対象 scope が定義できない cross-scope 診断では `evidence_scopes` の辞書順最小 `ScopeId` を `primary_scope_id` とする。diff mode の診断一覧判定と baseline の `ScopeDiagnosticSnapshot` への帰属はこの `primary_scope_id` で決定する。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。PAT001 の `M-F002` 平均は対象 owner scope 配下関数の既算出結果から求める。human 形式では `column = null` の位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
 - **受け入れ基準**:
   - Given 過度に多くの責務を持つ module owner scope, When `--level module` または `--level all` で診断実行, Then `KAL-PAT001` として検出される
   - Given モジュール依存グラフに循環がある, When 診断実行, Then `KAL-PAT003` として検出される
@@ -378,6 +378,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
   - `--level all`（デフォルト）では、summary と exit code は「変更後プロジェクト全体」の診断集合を母集団とする
   - `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
+  - summary は `summary_scope` に応じて Application Pipeline が materialize する。`summary_scope = listed_diagnostics` では現在の診断一覧から、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
 - **主要オプション**:
   - `--format <human|json|sarif>`: 出力形式（デフォルト: human）
   - `--level <function|module|project|all>`: 解析階層（デフォルト: all）
@@ -502,6 +503,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
 - **サマリー母集団**: `--level all`（デフォルト）では summary は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。表示される総合スコア自体は REQ-FUNC-011 のメトリクス集約結果を用いる
+- **materialization 契約**: summary は `DiagnosticReport` の内部で再計算しない。Application Pipeline が `summary_scope` に応じて materialize し、`summary_scope = whole_project` の diff mode では merged post-change `ScopeDiagnosticSnapshot` から重大度別件数を再構成する
 - **受け入れ基準**:
   - Given `--level all` で解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
   - Given `--level function` で解析完了, When 結果を出力, Then 総合スコア・関数階層スコア・重大度別診断件数が表示され、module/project のスコアは表示されない
@@ -637,6 +639,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - 指定された `base-ref` からの変更ファイルを特定し、当該ファイルのみを再抽出する
   - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する。diff 最適化が有効な実行では `Project` scope を常に再計算対象へ含め、project-level metrics と `scores.overall` / `scores.project` を stale な baseline 断片からそのまま流用してはならない
   - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する。ベースラインの互換性は `BaselineFingerprint`（`workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash`、`rule_catalog_version`、`extractor_version`、`kalos_version`）の完全一致で判定する
+  - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。ロード失敗・タイムアウト・スキップされたプラグインの `MetricValue` は baseline 断片から除外する
   - ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。これにより、異なる `--level` での実行間でもベースラインを再利用できる
   - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff の全解析へフォールバックする
   - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff の全解析へフォールバックする
@@ -685,6 +688,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-NF-003: 決定論的評価
 
 - **基準**: 同一ソースコード・同一設定に対する評価結果（メトリクス値・診断・総合スコア）がビット単位で一致する。テンプレートベースの改善提案も決定論的とする
+- **追加規約**: プラグインメトリクスの budget 制御は WASM fuel metering による CPU 時間で行い、壁時間に依存させない。diff mode では現在の実行で失敗またはスキップしたプラグインの baseline cache 済み `MetricValue` を出力へ持ち込まない
 - **例外**: LLM連携モード（`--llm`）使用時の改善提案テキストは非決定論的となりうる。ただし、テンプレートベースの結果も併記するため、スコア・診断の決定論性は保たれる
 - **優先度**: Must
 - **出典**: ユーザー明示
@@ -793,6 +797,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.12 | 2026-03-20 | `primary_scope_id` による診断の canonical scope 契約、Application Pipeline による summary materialization、plugin baseline 再利用ゲートと `aggregate_cpu_time_budget` による決定論性規約を追加 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` のフィールド名を `start_line`/`end_line`/`column` に統一、full mode の診断完全性を「選択された --level に関して完全」へ明確化、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | `kalos check` の位置引数省略時デフォルト `.` を明記、`analysis_targets` の正規化・検証責務を Configuration に一本化、SARIF の rule/severity/location 写像を拡充、stray `API` 表記を除去、メタ情報バージョンを同期 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 正規化基準、diff fallback 条件のトレーサビリティを補強 | Codex |

@@ -71,7 +71,11 @@ graph LR
                       ↓
                [診断] ← ProjectConfig + SourceAnalysis
                       ↓
-        DiagnosticReport(診断 + テンプレート提案 + ExitCode)
+ List<Diagnostic>(テンプレート提案と canonical scope を含む)
+                      ↓
+ [Application Pipeline] summary materialization + ExitCode 判定
+                      ↓
+        DiagnosticReport(診断 + summary + ExitCode)
                       ↓
   Optional LlmSuggestionBundle(DiagnosticId ごとの補助提案)
                       ↓
@@ -299,7 +303,7 @@ classDiagram
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
 - `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。project スコープの正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一値とし、スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
-- プラグインのロード失敗、checksum 不一致、タイムアウト、メモリ超過、aggregate budget 超過は `MetricValue` を生成しない非致命の運用イベントとして扱う。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
+- プラグインのロード失敗、checksum 不一致、タイムアウト、メモリ超過、aggregate CPU time budget 超過は `MetricValue` を生成しない非致命の運用イベントとして扱う。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
 ### 3.3 診断コンテキスト
@@ -312,12 +316,12 @@ classDiagram
         +DiagnosticSummary summary
         +DiagnosticsScope diagnostics_scope
         +SummaryScope summary_scope
-        +compute_summary(scope: SummaryScope) DiagnosticSummary
         +determine_exit_code(strict: bool) ExitCode
     }
     class Diagnostic {
         <<Entity>>
         +DiagnosticId id
+        +ScopeId primary_scope_id
         +RuleId rule_id
         +DiagnosticKind kind
         +Severity severity
@@ -451,6 +455,7 @@ classDiagram
     DiagnosticReport --> SummaryScope
     DiagnosticReport --> ExitCode
     Diagnostic --> DiagnosticId
+    Diagnostic --> ScopeId
     Diagnostic --> RuleId
     Diagnostic --> DiagnosticKind
     Diagnostic --> Severity
@@ -474,11 +479,12 @@ classDiagram
 - ルールを `MetricRule`（メトリクス値→閾値比較）と `PatternRule`（構造情報中心のパターン検出）に分離。入力データと評価ロジックが根本的に異なるため、単一 Rule では閾値・メトリクス値フィールドが PatternRule に対して無意味になり不変条件が弱まる
 - `PatternRule` は構造情報を主入力とするが、`KAL-PAT001` のように対象 scope に集約済みメトリクスが必要な場合は `AnalysisMetrics` の既算出結果を参照できる
 - `Diagnostic` は `kind` を discriminant とし、`MetricObservation` または `PatternEvidence` のどちらか一方だけを持つ。これによりメトリクス診断とパターン診断の出力契約を同一 aggregate の中で型安全に表現できる
+- `Diagnostic.primary_scope_id` は差分表示・`ScopeDiagnosticSnapshot` への永続化・決定論的順序付けで使う canonical owner である。metric 診断では評価対象 `ScopeId` と一致し、pattern 診断では rule の主対象 scope を使う。cross-scope pattern で単一の主対象 scope が定義できない場合は `PatternEvidence.evidence_scopes` の辞書順最小 `ScopeId` を `primary_scope_id` とする
 - メトリクス診断の重大度は `MetricRule` に固定値を持たせず、`overflow_ratio` と `RuleConfig.severity` オーバーライドから導出する。固定のデフォルト重大度を持つのは `PatternRule` のみ
 - `PatternRule.detect(..., config)` は解決済み `RuleConfig` を値として受け取る。`config.enabled = Some(false)` の場合は空リストを返し、診断生成後は `config.severity` を最終 `Diagnostic.severity` に上書きできる
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = None` を代表位置として使う。human 形式では `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では column を出力しない
 - `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では「選択された `--level` に関して完全」であることを `WholeProject` で表し、diff mode では `AffectedOnly` を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
-- `DiagnosticReport.summary_scope` は summary と exit code がどの母集団に対する集計かを表す。diff mode では `diagnostics` が `AffectedScopeSet` のみでも、`summary_scope = WholeProject` により summary は変更後プロジェクト全体値を表現できる
+- `DiagnosticReport.summary_scope` は summary と exit code がどの母集団に対する集計かを表す。`DiagnosticReport.summary` は materialized value であり、`SummaryScope.ListedDiagnostics` では現在の `diagnostics` 一覧から、diff mode かつ `summary_scope = WholeProject` では merged post-change `ScopeDiagnosticSnapshot` から Application Pipeline が再構成してから `DiagnosticReport` へ束ねる
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
 - JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`scores.overall` は `summary_scope` や診断件数の写像ではない。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
@@ -548,7 +554,7 @@ classDiagram
 - `DiffBaseline` は `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない。これにより、異なる `--level` での実行間でもベースラインを再利用できる
 - `InvalidationPlan.recompute_scopes` は diff 最適化が有効な限り project スコープの正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` を必ず含む。`OverallScore` と project-level metrics は merged post-change snapshot から再計算し、baseline の project 断片をそのまま最終結果へ流用しない
 - `DiffBaseline` の永続化は全ワークスペース解析に限定する。`analysis_targets` が全 target 群の部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合は diff 最適化を無効化し、要求された target 群に対する non-diff 全解析へフォールバックする
-- `ScopeDiagnosticSnapshot` を保持することで、差分モードでもプロジェクト全体の重大度件数を再構成できる。完全な `DiagnosticReport` をキャッシュへ保存する必要はない
+- `ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id == scope_id` を満たす診断だけを保持する。これにより診断断片の永続化単位が一意に定まり、差分モードでもプロジェクト全体の重大度件数を再構成できる。完全な `DiagnosticReport` をキャッシュへ保存する必要はない
 
 ### 3.5 構成管理コンテキスト
 
@@ -700,8 +706,8 @@ stateDiagram-v2
 
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
-| 診断 (Diagnostic) | 閾値違反または構造的パターン検出の結果。`kind` に応じて `MetricObservation` または `PatternEvidence` を持つ | MetricRule, PatternRule |
-| 診断レポート (DiagnosticReport) | 診断一覧、一覧の完全性、summary、summary の母集団、Exit code を束ねる集約ルート | Diagnostic, DiagnosticSummary, DiagnosticsScope, SummaryScope |
+| 診断 (Diagnostic) | 閾値違反または構造的パターン検出の結果。`kind` に応じて `MetricObservation` または `PatternEvidence` を持ち、差分表示とベースライン断片化に使う canonical `primary_scope_id` を持つ | MetricRule, PatternRule, ScopeId |
+| 診断レポート (DiagnosticReport) | 診断一覧、一覧の完全性、materialized な summary、summary の母集団、Exit code を束ねる集約ルート | Diagnostic, DiagnosticSummary, DiagnosticsScope, SummaryScope |
 | メトリクスルール (MetricRule) | 組み込みメトリクス値を閾値と比較して診断を生成するルール。`KAL-Fxxx` / `KAL-Mxxx` / `KAL-Pxxx` 形式の RuleId で識別し、重大度は `overflow_ratio` と設定オーバーライドから導出する | RuleId |
 | パターンルール (PatternRule) | CPG を主入力とし、必要に応じて既算出メトリクスを参照して構造的パターンを検出するルール。`KAL-PATxxx` 形式の RuleId で識別 | PatternType, AnalysisMetrics |
 | 診断ID (DiagnosticId) | 診断を一意に識別する値。LLM 補助提案との関連付けに使う | Diagnostic |
@@ -725,7 +731,7 @@ stateDiagram-v2
 | 依存インデックス manifest (DependencyIndexManifest) | `ScopeId` 間の逆依存関係を永続化した値 | ScopeId |
 | ベースライン識別子 (BaselineFingerprint) | 差分ベースラインの互換性判定に使う版情報とハッシュ集合。`workspace_root_hash`、`base_snapshot_hash`、正規化済み `ProjectConfig` を反映した `config_hash`、`analysis_targets_hash` を含む | DiffBaseline |
 | ワークスペースルートハッシュ (workspace_root_hash) | `BaselineFingerprint` の構成要素。Configuration が解決した `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュ値。異なるワークスペース間でベースラインキャッシュが衝突しないことを保証する | BaselineFingerprint |
-| スコープ診断断片 (ScopeDiagnosticSnapshot) | ある `ScopeId` に属する既知診断の断片とサマリー | DiagnosticId, DiagnosticSummary |
+| スコープ診断断片 (ScopeDiagnosticSnapshot) | `Diagnostic.primary_scope_id` が一致する診断だけを 1 つの `ScopeId` に束ねた既知診断の断片とサマリー | DiagnosticId, DiagnosticSummary |
 
 ### 5.5 用語集: 構成管理コンテキスト
 
@@ -806,6 +812,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.12 | 2026-03-20 | `Diagnostic.primary_scope_id` による canonical scope 所有権、`ScopeDiagnosticSnapshot` のキー付け規則、Application Pipeline による summary materialization を追加 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` フィールド名を `start_line`/`end_line`/`column` に統一、`DiagnosticsScope.WholeProject` の定義を `--level` 限定時の完全性として明確化、plugin の level-to-subgraph 契約と `LlmEnrichmentRequest` 組み立て者を Application Pipeline に統一、`schema_version` 初期値 `"1.0.0"` とバンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | パイプライン状態図に diff/impact ステージを復元、SARIF の rule/severity/location/message 写像を同期、`analysis_targets` 正規化の owner を Configuration に明記、CLI path 省略時のデフォルト `["."]` を明記 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 検証境界、`InvalidationPlan.fallback_to_full` の主トリガを反映 | Codex |
