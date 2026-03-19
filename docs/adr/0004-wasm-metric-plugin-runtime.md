@@ -51,9 +51,14 @@
 ## 根拠
 
 - kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
-- ホストが渡すのは additive-only な `CpgSubgraph` の安定ビューと `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
+- ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
+- Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、`metric_id` のグローバル一意性を検証する。組み込みメトリクスまたは先行ロード済みプラグインと `metric_id` が衝突したモジュールは deterministic なロード失敗として扱い、warning を出してスキップする
 - `REQ-NF-003` を守るため、評価 SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
 - 実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を既定上限として適用する
+- **v1 SPI 互換性契約**: Plugin Host は SPI プロファイル `kalos-metric-spi-v1` を定義する。WASM モジュールは custom section `kalos_spi_version` にプロファイル名（例: `kalos-metric-spi-v1`）を宣言する。ホストはロード時にこの値を検証し、以下の規則で互換性を判定する
+  - プロファイル名が完全一致する場合のみロードを許可する
+  - custom section が存在しない、または値が不一致の場合はロード失敗として扱い、当該プラグインの評価をスキップする。運用警告を `stderr` / 構造化ログへ出力し、v1 の診断・スコア・Exit code 契約には影響させない
+  - SPI プロファイルの更改（`kalos-metric-spi-v2` 等）はバイナリ互換を保証しない破壊的変更として扱い、新規 ADR で決定する
 - 組み込みメトリクスは引き続きネイティブ実装とし、高頻度パスの性能を守る
 
 ## 帰結
@@ -70,7 +75,7 @@
 
 ### ネガティブ
 
-- プラグイン ABI/SPI の設計と保守が必要
+- SPI プロファイル `kalos-metric-spi-v1` の保守が必要であり、破壊的変更時は新プロファイルと移行計画を ADR で決定する
 - 実行性能の測定が不可欠
 - プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが `WorkspaceRoot` 基準の `plugin_manifest` へ正規化する）
 - タイムアウト、メモリ上限、aggregate budget 超過時のプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る。v1 の診断・スコア・Exit code は既存契約のまま維持する

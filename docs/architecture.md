@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.5 |
+| バージョン | 0.2.7 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.5, domain_model.md v0.2.5 |
+| 入力 | requirements.md v0.2.7, domain_model.md v0.2.7 |
 
 ## 1. 設計目標
 
@@ -152,6 +152,7 @@ graph TB
 |---|---|---|---|---|
 | CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
 | Configuration | 設定探索・`WorkspaceRoot` 解決・優先順位マージ・デフォルト提供 | CLI、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot` を含む） | `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
+| Git Diff Adapter | `base-ref` 解決、変更ファイル列挙、`base_snapshot_hash` 取得 | `WorkspaceRoot`、`analysis_targets`、`base-ref` | 変更対象 path 群、`base_snapshot_hash` | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、依存定義/lockfile からの外部シンボル解決、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig`、依存定義/lockfile、ローカル stub / metadata cache | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
 | Managed Tool Cache Adapter | CodeQL bundle の bootstrap、checksum 検証、ローカル cache 解決 | kalos release と一体で versioning された固定版 manifest、cache directory | 解決済み extractor bundle | `REQ-FUNC-031`, `REQ-FUNC-032`, `REQ-NF-009`, `REQ-NF-010` |
 | Metrics | メトリクス計算、正規化、階層スコア集約 | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
@@ -176,6 +177,10 @@ CLI Shell
       -> Impact Analysis Service
       -> Reporting
       -> Baseline Cache Adapter
+
+Application Pipeline
+  -> Diff Source Port
+      -> Git Diff Adapter
 
 Application Pipeline
   -> LLM Enrichment Port
@@ -204,13 +209,14 @@ CPG Extraction
 - ドメインコンテキスト同士は公開契約でのみ接続する
 - `Reporting` は ACL としてのみ存在し、ドメインへ逆流しない
 - `CLI Shell` が受け取った path 群を `WorkspaceRoot` 基準の `analysis_targets` へ正規化し、入力順を保持したまま `ReportMetadata` として下流へ渡す
+- `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す
 - `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得し、`source_excerpt` または `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得する。request を生成する場合、`source_excerpt` と `cpg_excerpt` は相互排他的に一方のみを設定し、`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する。multi-file / multi-language 診断で必須根拠を代表ファイル断片へ還元できない場合は LLM sidecar を起動しない
 - `ReportViewOptions.minimum_severity` は診断一覧の表示/出力対象だけを絞り込み、`DiagnosticReport.summary` と exit code の計算母集団は変えない
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
-- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。乱数・時刻・ネットワーク・ファイル書込を禁止する
+- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う
 - `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
 ### 4.3 推奨コード構成
@@ -292,6 +298,7 @@ sequenceDiagram
     participant U as User/CI
     participant CLI as CLI
     participant APP as Application Pipeline
+    participant GIT as Git Diff
     participant Cache as Baseline Cache
     participant CPG as CPG Extraction
     participant Impact as Impact Analysis
@@ -301,9 +308,11 @@ sequenceDiagram
 
     U->>CLI: kalos check --diff <base-ref>
     CLI->>APP: 実行要求
+    APP->>GIT: base-ref 解決 + analysis_targets との交差
+    GIT-->>APP: changed paths + base_snapshot_hash
     APP->>Cache: 既存ベースライン取得
     Cache-->>APP: DiffBaseline?
-    APP->>CPG: 正規化済み analysis_targets に基づき変更ファイルのみ再抽出
+    APP->>CPG: changed paths のみ再抽出
     CPG-->>APP: 変更スコープ SourceAnalysis
     APP->>Impact: 逆依存閉包と無効化計画を計算
     Impact-->>APP: AffectedScopeSet + InvalidationPlan + 再利用断片
@@ -318,6 +327,7 @@ sequenceDiagram
 差分解析では、以下を不変条件とする。
 
 - `--level all`（デフォルト）の総合スコアは「変更後のプロジェクト全体」を意味する。`--level` で階層を限定した場合、総合スコアは `AffectedScopeSet` 内の指定階層診断を母集団とする
+- `--level` で階層を限定した場合も、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出する。これらは報告・スコア集約の対象にはならない
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
 - `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `WholeProject`、`--level` で階層を限定した場合は `ListedDiagnostics` となる
@@ -332,14 +342,17 @@ sequenceDiagram
 - 影響範囲の owner は `Impact Analysis Service` とし、`UnifiedCpg` から生成したモジュール/関数依存グラフの逆閉包で `AffectedScopeSet` を求める
 - ベースライン断片の保存単位は、丸め済み `scope_risk` を含む `ScopeMetrics(function/module/project)`、`ScopeDiagnosticSnapshot`、丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score` を含む `OverallScore`、`DependencyIndexManifest` とする
 - `WorkspaceRoot` は Configuration が `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で一意に解決し、内部 `FilePath` / `workspace_relative_path` / `plugin_manifest` はすべてこの基準から導出する
-- ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + rule_catalog_version + extractor_version + kalos_version` とする
+- ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + analysis_targets_hash + rule_catalog_version + extractor_version + kalos_version` とする
 - `workspace_root_hash` は `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
+- `analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュであり、解析対象パスが変わった場合にベースラインの不正な再利用を防ぐ
+- ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない
+- ベースラインキャッシュの永続化対象は全ワークスペース解析に限定する。`analysis_targets` が部分集合の実行は cache を生成せず、既存 cache も読まない
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree を表し、現在ワークツリーのハッシュは含めない
 - 外部シンボル解決は `Dependency Symbol Resolver Port` の責務であり、依存定義・lockfile・ローカル stub / metadata cache だけを入力に使う。解決失敗は `SourceAnalysis.warnings` として下流へ渡し、解析時の追加ネットワーク通信は行わない
 - Managed Tool Cache Adapter が参照する bundle manifest（version/checksum）は kalos release の一部として versioning され、GitHub Action はその manifest を差し替えずに prewarm / restore/save の wrapper として振る舞う
 - 次の場合は差分再利用を諦めて全解析へフォールバックする
   - ベースラインが存在しない
-  - `workspace_root_hash`、`base_snapshot_hash`、`config_hash` のいずれかが一致しない
+  - `workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash` のいずれかが一致しない
   - 版情報が一致しない
   - 逆依存閉包が未解決で `AffectedScopeSet` を安全に確定できない
   - 抽出エンジンまたはルールカタログの版が変わっている
@@ -540,6 +553,8 @@ plugin aggregate budget（全解析 `3s` / 差分 `0.5s`）は、それぞれ Me
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.7 | 2026-03-19 | Git Diff Adapter の責務、plugin `metric_id` 衝突契約、diff フローの責務分離を反映 | Codex |
+| 0.2.6 | 2026-03-19 | ベースライン識別子に analysis_targets_hash 追加、パターンルール入力の内部算出契約、全階層ベースライン保存を明文化 | Claude |
 | 0.2.5 | 2026-03-19 | `SourceAnalysis` を ExtractorPort 公開契約に統一し、resolver/report metadata/DAG fitness/managed manifest 契約を追加 | Codex |
 | 0.2.4 | 2026-03-19 | `requirements.md` / `domain_model.md` v0.2.4 への入力参照を同期 | Codex |
 | 0.2.3 | 2026-03-19 | plugin aggregate budget を Metrics stage 内数へ調整し、PoC と LLM excerpt one-of 契約を整合 | Codex |

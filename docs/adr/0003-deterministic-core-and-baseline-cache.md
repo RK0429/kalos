@@ -51,13 +51,16 @@ kalos は同時に以下を満たす必要がある。
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
 - `WholeProject` summary は `--level all` のときだけ使い、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
-- ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 6 要素で決定する
+- ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
   - `workspace_root_hash`: Configuration が `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
   - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
-  - `rule_catalog_version`: 組み込みルールカタログの版
-  - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
-  - `kalos_version`: kalos バイナリ自体の版
+- `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ
+- `rule_catalog_version`: 組み込みルールカタログの版
+- `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
+- `kalos_version`: kalos バイナリ自体の版
+- ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけで、保存範囲は変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
+- `analysis_targets` でサブセットを指定した実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む
 - コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
 
@@ -76,6 +79,7 @@ kalos は同時に以下を満たす必要がある。
 - 設定変更やプラグイン差し替えで再計算が増える
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree hash であり、取得元が曖昧だと再利用判定が壊れるため、`git rev-parse <base-ref>^{tree}` 相当の取得方法を実装で固定する必要がある
 - checkout path が実行ごとに変わる CI では `workspace_root_hash` によりキャッシュヒット率が下がる。再利用は best-effort とし、ヒット率を重視する環境では checkout path を安定化させ、baseline cache を restore/save する運用が必要
+- 保存不変条件により、`--level` 限定実行や `analysis_targets` サブセット実行ではベースラインが生成されない。CI で差分解析のベースラインを蓄積するには、定期的な `--level all` の全ワークスペース解析（nightly ビルド等）が必要となる
 
 ### リスク
 
