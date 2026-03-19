@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.2 |
+| バージョン | 0.2.3 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -266,7 +266,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
 - **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
-- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。Plugin Host はロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では `aggregate_wall_time_budget = 12s`（全解析）/ `2s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。ロード失敗、checksum 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
+- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。Plugin Host はロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。ロード失敗、checksum 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
@@ -315,10 +315,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-015: 具体的な改善提案テキストの生成
 
 - **説明**: 各診断に対して、何が問題か・なぜ問題か・どう改善すべきかを含む具体的な改善提案テキストを生成する。テンプレートベースの生成を基本とし、オプションでLLM連携による文脈に即した提案生成を提供する
-- **入力**: Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から取得し、`language` は代表ファイル（`Diagnostic.location.file_path`）に対応する `SourceAnalysis.source_files` メタデータから解決する。`source_excerpt` / `cpg_excerpt` は代表ファイルに還元できる対象スコープの CPG・ソースから取得し、`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
+- **入力**: Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から取得し、`language` は代表ファイル（`Diagnostic.location.file_path`）に対応する `SourceAnalysis.source_files` メタデータから解決する。`source_excerpt` / `cpg_excerpt` は代表ファイルに還元できる対象スコープの CPG・ソースから取得し、request を生成する場合はどちらか一方だけを含める。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
 - **処理**:
   - テンプレートモード（デフォルト）: 違反パターンごとの定型テンプレートにコード文脈を埋め込んで提案文を生成する
-  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` と `SourceAnalysis` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `workspace_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答、タイムアウト、代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合は `llm_suggestion` を付与せず、テンプレート結果だけを返す
+  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` と `SourceAnalysis` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `workspace_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、`source_excerpt` と `cpg_excerpt` は request ごとに相互排他的とする。それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答、タイムアウト、代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合は `llm_suggestion` を付与せず、テンプレート結果だけを返す
 - **出力**: 各診断に対し `template_suggestion`（必須）を生成し、`--llm` 指定時は出力境界で `llm_suggestion`（任意）を併記する
 - **受け入れ基準**:
   - Given CFGエントロピー超過の診断, When テンプレートモードで改善提案を生成, Then 「この関数は分岐が複雑すぎる。条件分岐を抽出関数に分離することで複雑度を低減できます」のような具体的な提案が出力される
@@ -710,7 +710,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - ネットワーク通信は (a) kalos CLI が行う CodeQL 管理対象 bundle の bootstrap、(b) `--llm` 指定時の LLM 呼び出し、のみに限定する
   - CodeQL bundle 取得は固定バージョン + SHA-256 検証付きで行う
   - LLM の API キーは環境変数のみから取得し、設定ファイルへ保存しない
-  - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る
+  - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る。request ごとに `source_excerpt` と `cpg_excerpt` は相互排他的とする
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - LLM 呼び出しは `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` とする
 - **優先度**: Must
@@ -764,6 +764,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.3 | 2026-03-19 | plugin aggregate budget を Metrics stage 内数へ調整し、LLM excerpt one-of 契約を明文化 | Codex |
 | 0.2.2 | 2026-03-19 | WorkspaceRoot/`workspace_relative_path` 契約、Go owner scope=package、Rust semantic edge、plugin report-only 契約、PAT001 Python 規則を明文化 | Codex |
 | 0.2.1 | 2026-03-19 | PAT001 粒度、`--strict`、`exclude` マージ、plugin manifest、LLM representative file 契約を明文化 | Codex |
 | 0.2.0 | 2026-03-19 | メトリクス数式・総合スコア集約・重大度境界・差分解析契約・CodeQL 自動取得・LLM 入力制約を確定 | Codex |

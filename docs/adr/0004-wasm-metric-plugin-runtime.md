@@ -53,7 +53,7 @@
 - kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
 - ホストが渡すのは additive-only な `CpgSubgraph` の安定ビューと `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
 - `REQ-NF-003` を守るため、評価 SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
-- 実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では `aggregate_wall_time_budget = 12s`（全解析）/ `2s`（diff mode）を既定上限として適用する
+- 実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を既定上限として適用する
 - 組み込みメトリクスは引き続きネイティブ実装とし、高頻度パスの性能を守る
 
 ## 帰結
@@ -78,4 +78,4 @@
 ### リスク
 
 - WASM オーバーヘッドが大きい場合、初期リリースでは組み込みメトリクス中心で運用し、外部プラグインを experimental 扱いにする可能性がある
-- 既定上限（50ms / 64MiB）が厳しすぎる、または緩すぎる可能性があるため、PoC で計測し必要なら v1.1 で再調整する
+- 既定上限（50ms / 64MiB / 3s / 0.5s）が厳しすぎる、または緩すぎる可能性があるため、PoC で計測し必要なら v1.1 で再調整する

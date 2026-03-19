@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.2 |
+| バージョン | 0.2.3 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.2, domain_model.md v0.2.2 |
+| 入力 | requirements.md v0.2.3, domain_model.md v0.2.3 |
 
 ## 1. 設計目標
 
@@ -201,11 +201,11 @@ CPG Extraction
 - `Reporting` は ACL としてのみ存在し、ドメインへ逆流しない
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す
-- `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得し、`source_excerpt` または `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得し、`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する。multi-file / multi-language 診断で必須根拠を代表ファイル断片へ還元できない場合は LLM sidecar を起動しない
+- `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得し、`source_excerpt` または `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得する。request を生成する場合、`source_excerpt` と `cpg_excerpt` は相互排他的に一方のみを設定し、`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する。multi-file / multi-language 診断で必須根拠を代表ファイル断片へ還元できない場合は LLM sidecar を起動しない
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
 - `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。乱数・時刻・ネットワーク・ファイル書込を禁止する
-- `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では `aggregate_wall_time_budget = 12s`（全解析）/ `2s`（diff mode）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
+- `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
 ### 4.3 推奨コード構成
 
@@ -395,7 +395,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | LLM タイムボックス | `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
 | 出力データ | SARIF/JSON に機密情報を埋め込まない。ファイルパスの正規化を行う |
-| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、aggregate budget `12s`（全解析）/ `2s`（diff mode）を適用する |
+| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、Metrics stage 内数の aggregate budget `3s`（全解析）/ `0.5s`（diff mode）を適用する |
 
 ### 7.3 デプロイ / 配布
 
@@ -431,6 +431,8 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 差分 CPG 抽出 | 4 秒 |
 | 影響範囲メトリクス再計算 | 2 秒 |
 | 診断と出力 | 2 秒 |
+
+plugin aggregate budget（全解析 `3s` / 差分 `0.5s`）は、それぞれ Metrics stage budget の内数として会計する。
 
 #### LLM sidecar 予算
 
@@ -501,7 +503,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 2. `--diff` 実行でベースライン再利用込み 10 秒以内を達成できるか
 3. 同一入力 10 回実行で全出力ハッシュが一致するか
 4. 新言語追加を CPG 抽出境界内の `Extractor Adapter + UnifiedCpg mapper + language profile` だけで実現できるか
-5. 新しい report-only plugin metric を `MetricDefinition` 実装だけで差し込めるか
+5. 新しい report-only plugin metric を `MetricDefinition` 実装と `.kalos.toml` 登録だけで差し込めるか
 
 ## 10. ADR 一覧
 
@@ -517,6 +519,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.3 | 2026-03-19 | plugin aggregate budget を Metrics stage 内数へ調整し、PoC と LLM excerpt one-of 契約を整合 | Codex |
 | 0.2.2 | 2026-03-19 | `WorkspaceRoot` 解決、Go package owner scope、plugin report-only/aggregate budget、LLM representative-file skip 契約を反映 | Codex |
 | 0.2.1 | 2026-03-19 | Tool Cache owner、plugin/config hash、LLM representative file、core/LLM budget 分離、言語拡張境界を明文化 | Codex |
 | 0.2.0 | 2026-03-19 | 差分ベースライン契約、CodeQL managed bundle、LLM 入力契約、Application Pipeline 中心のシーケンス図へ更新 | Codex |

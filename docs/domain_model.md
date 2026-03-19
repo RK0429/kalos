@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.2 |
+| バージョン | 0.2.3 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.2 |
+| 入力 | requirements.md v0.2.3 |
 
 ## 1. サブドメイン分類
 
@@ -292,7 +292,7 @@ classDiagram
 
 - `MetricDefinition` はメトリクス計算のインターフェース。組み込みメトリクスもプラグインメトリクス（REQ-FUNC-012）も同じ `compute(subgraph, config)` を実装する（REQ-NF-006）。v1 では組み込みは `origin = BuiltIn`, `participation = ScoredAndDiagnosable`, `rule_binding = Some(RuleId)`、プラグインは `origin = Plugin`, `participation = ReportOnly`, `rule_binding = None` を取る
 - `MetricConfig` はプラグイン SPI へ渡す正規化済み設定マップ。ホストが設定ファイル由来の値を解決してから渡す
-- `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）
+- `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を省略できる。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）
@@ -496,7 +496,7 @@ classDiagram
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
 - JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
-- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済みの application/report 境界の sidecar 入力である。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` / `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得し、`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合、その診断には `LlmSuggestion` を付与しない
+- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済みの application/report 境界の sidecar 入力である。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` / `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得するが、request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合、その診断には `LlmSuggestion` を付与せず、`LlmEnrichmentRequest` 自体を生成しない
 - `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`location` は抑制対象の代表位置を指し、同一行の診断または直後スコープ宣言に対応する診断へ適用される。`rule_id` が None の場合は対象位置の全診断を抑制する（REQ-FUNC-029）
 - `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` は warning を error 相当の失敗条件として扱う追加ポリシーだが、`Diagnostic.severity` 自体は変更しない（REQ-FUNC-022）
 
@@ -744,7 +744,7 @@ stateDiagram-v2
 |---|---|---|
 | LLM補助提案バンドル (LlmSuggestionBundle) | `DiagnosticId` ごとに report 層で併記される任意の補助提案集合。コア診断は変更しない | DiagnosticId, LlmSuggestion |
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
-| LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決し、根拠を代表ファイルへ還元できない場合は生成しない | Diagnostic, SourceAnalysis |
+| LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決し、`source_excerpt` と `cpg_excerpt` は相互排他的にどちらか一方だけを持つ。根拠を代表ファイルへ還元できない場合は生成しない | Diagnostic, SourceAnalysis |
 | ソース抜粋 (SourceExcerpt) | LLM 送信に使う、代表ファイル上の最小ソース断片。ファイルパス、行範囲、本文テキストを持つ | SourceLocation |
 | CPG抜粋 (CpgSubgraphExcerpt) | LLM 送信に使う、診断に必要な最小部分だけへ正規化した CPG 表現 | ScopeId |
 
@@ -802,6 +802,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.3 | 2026-03-19 | `overflow_ratio` 丸め規則と `LlmEnrichmentRequest` excerpt one-of 契約を明文化 | Codex |
 | 0.2.2 | 2026-03-19 | `WorkspaceRoot`/workspace-relative path、Rust semantic edge、plugin participation 契約、Go package owner scope を反映 | Codex |
 | 0.2.1 | 2026-03-19 | `SourceAnalysis.source_files`、pattern rule 入力、`plugin_manifest` と `config_hash`、`--strict`/LLM representative file 契約を追加 | Codex |
 | 0.2.0 | 2026-03-19 | 差分解析コンテキスト、診断の discriminated union、提案スキーマ統一、MetricConfig、RuleConfig の Option 契約を追加 | Codex |
