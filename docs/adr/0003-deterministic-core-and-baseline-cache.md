@@ -2,7 +2,7 @@
 
 ## ステータス
 
-提案
+承認済み
 
 ## コンテキスト
 
@@ -50,7 +50,8 @@ kalos は同時に以下を満たす必要がある。
 ## 根拠
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
-- ただし決定論性を崩さないため、ベースラインのキーは `workspace_root_hash + source_snapshot_hash + config_hash + rule_catalog_version + plugin_manifest_version + extractor_version + kalos_version` で決定する
+- ただし決定論性を崩さないため、ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + rule_catalog_version + plugin_manifest_version + extractor_version + kalos_version` で決定する
+- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot` と `DependencyIndexManifest` を含む
 - コア評価順序は常にスコープ昇順に固定し、キャッシュヒット時も同じ順序で統合する
 
 ## 帰結
@@ -66,6 +67,7 @@ kalos は同時に以下を満たす必要がある。
 
 - キャッシュ破損や無効化漏れが新たな障害源になる
 - 設定変更やプラグイン差し替えで再計算が増える
+- `base_snapshot_hash` の取得元が曖昧だと再利用判定が壊れるため、`base-ref` tree hash の取得方法を実装で固定する必要がある
 
 ### リスク
 

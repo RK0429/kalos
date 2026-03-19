@@ -4,11 +4,11 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.1.0 |
-| 最終更新日 | 2026-03-18 |
+| バージョン | 0.2.0 |
+| 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
-| レビュー者 | — |
+| レビュー者 | Codex |
 
 ## 1. プロジェクト概要
 
@@ -74,8 +74,8 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | メトリクス | CPGから算出される定量的な評価指標。情報理論（エントロピー等）やグラフ理論（結合度、モジュラリティ等）に基づく |
 | 診断 | メトリクスの閾値違反や構造的パターンの検出結果。ファイルパス・行範囲・ルールID・重大度・メッセージを含む |
 | 改善提案 | 診断に対する具体的な修正方針のテキスト。何が問題か、なぜ問題か、どう改善すべきかを記述する |
-| ルール | 特定のメトリクスと閾値、重大度の組み合わせ。一意のルールID（`KAL-XXXX`）で識別される |
-| 総合スコア | 各階層のメトリクスを正規化（0〜100）し、重み付き集約した単一の評価値 |
+| ルール | 特定のメトリクスまたはパターンと閾値、重大度、提案テンプレートの組み合わせ。一意のルールID（`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式）で識別される |
+| 総合スコア | 各階層の正規化リスク値（0.0〜1.0, 高いほど悪い）を重み付き集約し、`100 * (1 - overall_risk)` で算出する品質スコア |
 | 統一CPG表現 | 4言語のCPGを言語非依存な共通構造と言語固有の拡張ノードで表現する内部データ構造 |
 | CodeQL | GitHub が開発するコード解析エンジン。ソースコードをデータベース化し、クエリ言語でコードプロパティを検索・抽出できる |
 | SARIF | Static Analysis Results Interchange Format。静的解析ツールの結果を表現するJSON形式の標準規格（OASIS標準） |
@@ -178,65 +178,84 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 ### 3.2 メトリクス算出
 
+v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の組で保持する。`normalized_risk` は `0.0〜1.0` の閉区間に正規化されたリスク値であり、`0.0` が最良、`1.0` が最悪を表す。`H` は底 2 の Shannon entropy、`clamp(x, 0, 1)` は 0 未満を 0、1 超を 1 に丸める操作とする。`raw_value`, `normalized_risk`, `scope_risk`, `level_risk`, `overall_risk`, `overflow_ratio` は、それぞれ算出直後に小数第 6 位で round-half-up し、その丸め済み値をキャッシュ・比較・外部出力に用いる。
+
 #### REQ-FUNC-008: 関数レベルメトリクスの算出
 
-- **説明**: CPGの関数ノードに対して、情報理論・グラフ理論に基づくメトリクスを算出する
+- **説明**: CPG の関数サブグラフに対して、v1 で固定した関数レベルメトリクスを算出する
 - **入力**: 統一CPGの関数サブグラフ
-- **処理**: 以下のメトリクス候補を算出する（詳細な定義は設計フェーズでresearcherによる学術調査を経て確定する）
-  - 制御フローグラフのエントロピー（情報理論: 分岐構造の複雑さ）
-  - 変数名の情報量（情報理論: 命名の情報伝達効率）
-  - CFGのサイクロマティック複雑度（グラフ理論: 独立パスの数）
-  - データフローグラフの結合度（グラフ理論: 変数間依存関係の密度）
-  - 関数の凝集度（グラフ理論: 内部データの関連性、LCOM変種）
-- **出力**: メトリクス名と数値のペアの集合（各メトリクスは0〜1に正規化）
+- **処理**: v1 では以下の 4 メトリクスを必ず算出する
+
+  | MetricId | RuleId | 名称 | `raw_value` | `normalized_risk` | デフォルト閾値 |
+  |---|---|---|---|---|---|
+  | `M-F001` | `KAL-F001` | CFG分岐エントロピーリスク | `avg_{b∈B}(log2(out_degree(b)) / log2(4))`。`B` は `out_degree > 1` の分岐ノード集合。`B` が空なら `0` | `clamp(raw_value, 0, 1)` | `0.55` |
+  | `M-F002` | `KAL-F002` | サイクロマティック複雑度リスク | `M = E - N + 2`（関数 CFG の McCabe complexity） | `clamp((M - 1) / 15, 0, 1)` | `0.60` |
+  | `M-F003` | `KAL-F003` | データフロー密度リスク | `|E_dfg| / (|V_var| * (|V_var| - 1))`。`|V_var| < 2` なら `0` | `raw_value` | `0.45` |
+  | `M-F004` | `KAL-F004` | 識別子反復リスク | `1 - H(tokens_multiset) / log2(|U|)`。`tokens_multiset` はローカル変数名と引数名を snake_case / camelCase 分割して重複を保持した多重集合、`U` はその一意トークン集合。`|U| < 2` なら `0` | `clamp(raw_value, 0, 1)` | `0.55` |
+
+- **出力**: 各関数について `metric_id`, `raw_value`, `normalized_risk` を持つメトリクス集合
 - **受け入れ基準**:
-  - Given 有効な関数のCPG, When メトリクス算出を実行, Then 定義されたすべての関数レベルメトリクスが数値として算出される
-  - Given 同一の関数CPG, When メトリクス算出を2回実行, Then 両回の結果がビット単位で一致する
+  - Given 有効な関数のCPG, When メトリクス算出を実行, Then `M-F001`〜`M-F004` のすべてが数値として算出される
+  - Given 同一の関数CPG, When メトリクス算出を2回実行, Then `raw_value` と `normalized_risk` がビット単位で一致する
 - **優先度**: Must
-- **出典**: ユーザー明示
+- **出典**: ユーザー明示 + 2026-03-19 設計判断
 - **関連要件**: REQ-NF-003
 
 #### REQ-FUNC-009: モジュール/ファイルレベルメトリクスの算出
 
-- **説明**: CPGのモジュール/ファイルノードに対して、情報理論・グラフ理論に基づくメトリクスを算出する
+- **説明**: CPG のモジュール/ファイルサブグラフに対して、v1 で固定したモジュールレベルメトリクスを算出する
 - **入力**: 統一CPGのモジュールサブグラフ
-- **処理**: 以下のメトリクス候補を算出する（詳細定義は設計フェーズで確定）
-  - 依存グラフのモジュラリティ（グラフ理論: コミュニティ構造の明確さ）
-  - 結合度: fan-in / fan-out（グラフ理論: モジュール間依存の度合い）
-  - インターフェースの情報エントロピー（情報理論: 公開APIの複雑さ）
-  - 依存グラフの循環検出（グラフ理論: 循環依存の有無と規模）
-- **出力**: メトリクス名と数値のペアの集合（各メトリクスは0〜1に正規化）
+- **処理**: v1 では以下の 3 メトリクスを必ず算出する
+
+  | MetricId | RuleId | 名称 | `raw_value` | `normalized_risk` | デフォルト閾値 |
+  |---|---|---|---|---|---|
+  | `M-M001` | `KAL-M001` | モジュール fan-out リスク | 他モジュールへの一意な依存数 | `clamp(raw_value / 12, 0, 1)` | `0.50` |
+  | `M-M002` | `KAL-M002` | 循環依存参加リスク | 当該モジュールが属する SCC のサイズ `s` に対し、非循環なら `0`、循環なら `(s - 1) / 5` | `clamp(raw_value, 0, 1)` | `0.20` |
+  | `M-M003` | `KAL-M003` | 不安定性リスク | `fan_out / (fan_in + fan_out)`。分母が `0` なら `0` | `raw_value` | `0.75` |
+
+- **出力**: 各モジュールについて `metric_id`, `raw_value`, `normalized_risk` を持つメトリクス集合
 - **受け入れ基準**:
-  - Given 有効なモジュールのCPG, When メトリクス算出を実行, Then 定義されたすべてのモジュールレベルメトリクスが数値として算出される
+  - Given 有効なモジュールのCPG, When メトリクス算出を実行, Then `M-M001`〜`M-M003` のすべてが数値として算出される
 - **優先度**: Must
-- **出典**: ユーザー明示
+- **出典**: ユーザー明示 + 2026-03-19 設計判断
 
 #### REQ-FUNC-010: プロジェクトレベルメトリクスの算出
 
-- **説明**: CPG全体に対して、プロジェクトのアーキテクチャ構造を評価するメトリクスを算出する
+- **説明**: CPG 全体に対して、v1 で固定したプロジェクトレベルメトリクスを算出する
 - **入力**: プロジェクト全体の統一CPG
-- **処理**: 以下のメトリクス候補を算出する（詳細定義は設計フェーズで確定）
-  - 依存グラフの階層性 / DAG度（グラフ理論: レイヤー構造の明確さ）
-  - モジュールサイズのエントロピー（情報理論: サイズ分布の均一性）
-  - グラフの平均経路長（グラフ理論: モジュール間の到達距離）
-  - コネクタハブ依存度（グラフ理論: 特定モジュールへの集中度）
-- **出力**: メトリクス名と数値のペアの集合（各メトリクスは0〜1に正規化）
+- **処理**: v1 では以下の 3 メトリクスを必ず算出する
+
+  | MetricId | RuleId | 名称 | `raw_value` | `normalized_risk` | デフォルト閾値 |
+  |---|---|---|---|---|---|
+  | `M-P001` | `KAL-P001` | 循環結合リスク | モジュール依存グラフのうち、サイズ 2 以上の SCC に属する依存辺数 `cyclic_edges / total_module_edges`。辺がなければ `0` | `raw_value` | `0.15` |
+  | `M-P002` | `KAL-P002` | モジュールサイズエントロピー不均衡 | `1 - H(LOC_share) / log2(n)`。`n` は LOC > 0 のモジュール数。`n < 2` なら `0` | `raw_value` | `0.45` |
+  | `M-P003` | `KAL-P003` | ハブ依存集中リスク | `max_in_degree / total_in_degree`。分母が `0` なら `0` | `raw_value` | `0.35` |
+
+- **出力**: プロジェクト全体について `metric_id`, `raw_value`, `normalized_risk` を持つメトリクス集合
 - **受け入れ基準**:
-  - Given 有効なプロジェクトCPG, When メトリクス算出を実行, Then 定義されたすべてのプロジェクトレベルメトリクスが数値として算出される
+  - Given 有効なプロジェクトCPG, When メトリクス算出を実行, Then `M-P001`〜`M-P003` のすべてが数値として算出される
 - **優先度**: Must
-- **出典**: ユーザー明示
+- **出典**: ユーザー明示 + 2026-03-19 設計判断
 
 #### REQ-FUNC-011: 総合スコアの算出
 
-- **説明**: 関数・モジュール・プロジェクトの各階層メトリクスを正規化・集約し、0〜100の総合スコアを算出する
+- **説明**: 関数・モジュール・プロジェクトの各階層メトリクスを集約し、0〜100 の総合スコアを算出する
 - **入力**: 全階層のメトリクス算出結果
-- **処理**: 各階層のメトリクスを0〜1に正規化 → 階層内で集約 → 階層間で重み付き集約。デフォルトの重みは `function: 0.4, module: 0.35, project: 0.25` とし、設定ファイルでカスタマイズ可能とする。集約方法の詳細は設計フェーズで確定する
-- **出力**: 総合スコア（0〜100の整数）および各階層の部分スコア
+- **処理**:
+  1. 各スコープの `scope_risk` を、そのスコープに属する `normalized_risk` の算術平均として算出する
+  2. 各階層の `level_risk` を、その階層に属する `scope_risk` の算術平均として算出する。プロジェクト階層は単一スコープなので、その `scope_risk` をそのまま用いる
+  3. デフォルト重みは `function: 0.4`, `module: 0.35`, `project: 0.25` とし、設定ファイルで上書き可能とする
+  4. ある階層にスコープが 0 件の場合、その階層の重みは残る階層へ比例再配分する
+  5. `scope_risk`, `level_risk`, `overall_risk` は各段階の算出直後に小数第 6 位で round-half-up し、その値をキャッシュと後続計算に用いる
+  6. `overall_risk = Σ(adjusted_weight[level] * level_risk[level])`
+  7. `function_score`, `module_score`, `project_score`, `overall_score` はそれぞれ `round_half_up(100 * (1 - risk))` で整数化する
+
+- **出力**: 総合スコア（0〜100 の整数）および各階層の部分スコア
 - **受け入れ基準**:
-  - Given 全階層のメトリクス結果, When 総合スコアを算出, Then 0〜100の範囲の総合スコアと各階層の部分スコアが出力される
-  - Given 設定ファイルで重みを変更, When 総合スコアを算出, Then 変更後の重みで集約される
+  - Given 全階層のメトリクス結果, When 総合スコアを算出, Then 同一入力から常に同一の総合スコアと各階層スコアが出力される
+  - Given 設定ファイルで重みを変更, When 総合スコアを算出, Then 変更後の重みと再配分規則で集約される
 - **優先度**: Must
-- **出典**: ユーザー確認済み
+- **出典**: ユーザー確認済み + 2026-03-19 設計判断
 - **関連要件**: REQ-FUNC-008, REQ-FUNC-009, REQ-FUNC-010
 
 #### REQ-FUNC-012: メトリクス定義のプラグイン拡張
@@ -253,10 +272,10 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 #### REQ-FUNC-013: メトリクス閾値違反の診断報告
 
-- **説明**: 各メトリクスの算出値をルールごとの閾値と比較し、違反を診断として報告する
+- **説明**: 各メトリクスの `normalized_risk` をルールごとの閾値と比較し、違反をメトリクス診断として報告する
 - **入力**: メトリクス算出結果、ルールごとの閾値設定
-- **処理**: 各メトリクスの値を閾値と比較し、超過があれば診断オブジェクトを生成する。診断にはファイルパス・行範囲・ルールID・重大度・メトリクス値・閾値を含む
-- **出力**: 診断オブジェクトのリスト
+- **処理**: 各メトリクスの `normalized_risk` を閾値と比較し、超過があれば `kind = "metric"` の診断オブジェクトを生成する
+- **出力**: メトリクス診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` と、`metric` フィールド `{ metric_id, raw_value, normalized_risk, threshold, overflow_ratio }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる
 - **受け入れ基準**:
   - Given 関数のCFGエントロピーが閾値を超過, When 診断実行, Then 当該関数の位置・ルールID・重大度・メトリクス値・閾値を含む診断が報告される
   - Given すべてのメトリクスが閾値内, When 診断実行, Then 診断は0件で正常終了する
@@ -265,49 +284,65 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 #### REQ-FUNC-014: 構造的パターンの検出
 
-- **説明**: CPGからソフトウェア設計上の問題パターン（God class, Feature envy, Circular dependency等）を検出する
+- **説明**: CPG から v1 で固定したソフトウェア設計上の問題パターンを検出する
 - **入力**: 統一CPG
-- **処理**: 定義されたパターンマッチングルールをCPGに適用し、該当するパターンを検出する
+- **処理**: v1 では以下のパターンルールを適用する
+
+  | RuleId | パターン | 対象 | 検出条件 | デフォルト重大度 |
+  |---|---|---|---|---|
+  | `KAL-PAT001` | God Unit | Python/TypeScript は class、Rust/Go は module/file | 対象ユニットが `public_member_count >= 20` かつ `fan_out >= 8` かつ配下関数の `M-F002` 平均 `>= 0.50` | `warning` |
+  | `KAL-PAT002` | Feature Envy | 関数 | 外部オブジェクト/モジュールへの参照数が 5 以上かつ `foreign_accesses / (foreign_accesses + local_accesses) >= 0.70` | `warning` |
+  | `KAL-PAT003` | Circular Dependency | モジュール依存グラフ | SCC のサイズが 2 以上 | `error` |
+
+- **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる
 - **受け入れ基準**:
-  - Given 過度に多くの責務を持つクラス, When 診断実行, Then God classパターンとして検出される
+  - Given 過度に多くの責務を持つ class または module, When 診断実行, Then `KAL-PAT001` として検出される
+  - Given モジュール依存グラフに循環がある, When 診断実行, Then `KAL-PAT003` として検出される
 - **優先度**: Should
-- **出典**: ユーザー確認済み
+- **出典**: ユーザー確認済み + 2026-03-19 設計判断
 
 #### REQ-FUNC-015: 具体的な改善提案テキストの生成
 
 - **説明**: 各診断に対して、何が問題か・なぜ問題か・どう改善すべきかを含む具体的な改善提案テキストを生成する。テンプレートベースの生成を基本とし、オプションでLLM連携による文脈に即した提案生成を提供する
-- **入力**: 診断オブジェクト + CPGの該当部分
+- **入力**: 診断オブジェクトから抽出した allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`
 - **処理**:
   - テンプレートモード（デフォルト）: 違反パターンごとの定型テンプレートにコード文脈を埋め込んで提案文を生成する
-  - LLM連携モード（`--llm` オプション）: CPGと診断をLLMに渡し、文脈に即した自然言語の提案を生成する。テンプレートベースの結果も併記する。LLM非応答時はテンプレート結果にフォールバックする
-- **出力**: 改善提案テキスト
+  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `repo_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答時はテンプレート結果にフォールバックする
+- **出力**: 各診断に対し `template_suggestion`（必須）を生成し、`--llm` 指定時は出力境界で `llm_suggestion`（任意）を併記する
 - **受け入れ基準**:
   - Given CFGエントロピー超過の診断, When テンプレートモードで改善提案を生成, Then 「この関数は分岐が複雑すぎる。条件分岐を抽出関数に分離することで複雑度を低減できます」のような具体的な提案が出力される
   - Given 循環依存の診断, When 改善提案を生成, Then 循環に関与するモジュールの依存方向を示し、依存逆転の具体的な方針を提案する
+  - Given `--llm` 指定, When LLM提案を生成, Then 送信対象は当該診断に必要な最小ソース断片または `CpgSubgraphExcerpt` に限定され、プロジェクト全体は送信されない
+  - Given `--llm` 指定, When 改善提案を出力, Then `template_suggestion` と `llm_suggestion` が区別可能な形で併記される
   - Given LLM連携モードで非応答, When 改善提案を生成, Then テンプレートモードの結果にフォールバックする
 - **優先度**: Must
-- **出典**: ユーザー明示
+- **出典**: ユーザー明示 + 2026-03-19 設計判断
 - **関連要件**: REQ-NF-008
 
 #### REQ-FUNC-016: 診断への重大度付与
 
-- **説明**: 各診断にメトリクス値の閾値超過度合いに応じた重大度を付与する
+- **説明**: 各診断に閾値超過度合いまたはパターン種別に応じた重大度を付与する
 - **入力**: 診断オブジェクト、重大度判定基準（設定ファイルでカスタマイズ可能）
-- **処理**: メトリクス値と閾値の乖離度に応じて、error / warning / info のいずれかを割り当てる
+- **処理**:
+  - メトリクス診断では `overflow_ratio = (normalized_risk - threshold) / max(1 - threshold, 1e-9)` を用いる
+  - `overflow_ratio < 0.25` なら `info`、`0.25 <= overflow_ratio < 0.60` なら `warning`、`0.60 <= overflow_ratio` なら `error`
+  - パターン診断では `KAL-PAT001 = warning`, `KAL-PAT002 = warning`, `KAL-PAT003 = error` をデフォルトとし、設定ファイルで上書き可能とする
 - **重大度定義**:
   - error: プロジェクトの品質基準を明確に逸脱（CI/CDでfailの根拠になる）
   - warning: 改善が強く推奨される
   - info: 改善の余地があるが許容範囲内
 - **受け入れ基準**:
-  - Given メトリクス値が閾値を大幅に超過, When 重大度判定, Then error が付与される
-  - Given メトリクス値が閾値をわずかに超過, When 重大度判定, Then warning が付与される
+  - Given `overflow_ratio >= 0.60`, When 重大度判定, Then `error` が付与される
+  - Given `0.25 <= overflow_ratio < 0.60`, When 重大度判定, Then `warning` が付与される
+  - Given `0 < overflow_ratio < 0.25`, When 重大度判定, Then `info` が付与される
+  - Given `KAL-PAT003`, When 重大度判定, Then デフォルトで `error` が付与される
 - **優先度**: Must
-- **出典**: ユーザー確認済み
+- **出典**: ユーザー確認済み + 2026-03-19 設計判断
 
 #### REQ-FUNC-017: 改善提案へのコード例の付与
 
 - **説明**: 改善提案にリファクタリング後のコードスケッチ（擬似コードまたは実コード断片）を含める
-- **入力**: 診断オブジェクト + CPGの該当部分
+- **入力**: 診断オブジェクト + 当該診断に対応する `CpgSubgraphExcerpt` または最小ソース断片
 - **処理**: 違反パターンに応じたリファクタリングパターンを適用し、改善後のコード概要を生成する
 - **受け入れ基準**:
   - Given 関数分割が推奨される診断, When コード例を生成, Then 分割後の関数シグネチャと呼び出し構造の概要が提示される
@@ -320,12 +355,17 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 - **説明**: `kalos check <path>` で対象パスの解析を実行する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
 - **入力**: 解析対象パス（ファイルまたはディレクトリ）、オプション引数
+- **一覧・summary・exit code の母集団**:
+  - 診断一覧: full mode では全診断、diff mode では `AffectedScopeSet` に属する診断のみ
+  - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
+  - summary と exit code は常に「変更後プロジェクト全体」の診断集合を母集団とする
 - **主要オプション**:
   - `--format <human|json|sarif>`: 出力形式（デフォルト: human）
   - `--level <function|module|project|all>`: 解析階層（デフォルト: all）
   - `--config <path>`: 設定ファイルパス
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度
+  - `--diff <base-ref>`: 変更ファイル再抽出 + ベースライン再利用による差分解析
   - `--llm`: LLM連携による改善提案を有効化
   - `--strict`: warningをerror扱いとする
 - **受け入れ基準**:
@@ -336,46 +376,62 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 #### REQ-FUNC-019: 人間可読な結果表示
 
-- **説明**: 解析結果をファイルパス・行番号・重大度・ルールID・メトリクス値・閾値・改善提案を含む形式で端末に表示する
+- **説明**: 解析結果を共通フィールドと診断種別ごとの詳細フィールドを含む形式で端末に表示する
 - **出力形式例**:
   ```
-  src/parser.rs:42:1  warning[KAL-B001]  関数 `parse_expression` のCFGエントロピーが高い (3.8, 閾値: 3.0)
-    → 条件分岐を match アームごとに抽出関数へ分離することで複雑度を低減できます
+  src/parser.rs:42:1  warning[KAL-F001]  [metric] 関数 `parse_expression` の CFG 分岐エントロピーリスクが閾値を超過
+    metric=M-F001 raw=0.667 normalized=0.667 threshold=0.550 overflow=0.260
+    template → 条件分岐を match アームごとに抽出関数へ分離することで複雑度を低減できます
+    llm      → 分岐条件のグループごとに補助関数へ切り出すとテスト単位も小さくできます
 
-  src/lib.rs:1:1  info[KAL-B010]  モジュール `parser` と `lexer` の結合度が高い (0.72, 閾値: 0.6)
-    → 共有データ型を独立モジュール `ast_types` に抽出することで結合を緩和できます
+  src/lib.rs:1:1  error[KAL-PAT003]  [pattern] モジュール間に循環依存が存在する
+    evidence=parser -> lexer -> parser
+    template → 共有データ型を独立モジュール `ast_types` に抽出し、依存方向を一方向に固定してください
 
   ── Summary ──────────────────────────
   Score: 72/100  (function: 68, module: 75, project: 78)
   3 errors, 5 warnings, 12 info
   ```
 - **受け入れ基準**:
-  - Given 診断結果, When human形式で出力, Then 各診断にファイルパス・行番号・重大度・ルールID・メトリクス値・閾値・改善提案が含まれる
+  - Given メトリクス診断, When human形式で出力, Then 共通フィールドに加えて `metric_id`, `raw_value`, `normalized_risk`, `threshold`, `overflow_ratio`, 改善提案が含まれる
+  - Given パターン診断, When human形式で出力, Then 共通フィールドに加えて `pattern_type`, `evidence_message`, 改善提案が含まれる
+  - Given `--llm` 指定, When human形式で出力, Then `template` と `llm` の提案が別ラベルで表示される
   - Given 端末がカラー対応, When human形式で出力, Then 重大度に応じた色分けが適用される（error: 赤, warning: 黄, info: 青）
-  - Given 解析完了, When human形式で出力, Then 末尾に総合スコアサマリーと重大度別件数が表示される
+  - Given 解析完了, When human形式で出力, Then 末尾に変更後プロジェクト全体の総合スコアサマリーと重大度別件数が表示される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
 #### REQ-FUNC-020: JSON形式での結果出力
 
-- **説明**: 解析結果を機械可読なJSON構造で出力する。全診断・全メトリクス・総合スコアを含む
+- **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では全診断、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
+- **最低限のJSON契約**:
+  - ルートには `schema_version`, `analysis_target`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
+  - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
+  - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
+  - `scores` には `overall`, `function`, `module`, `project` の整数スコアを必須とする
+  - `diagnostics_scope` は `whole_project | affected_only`、`summary_scope` は `whole_project | listed_diagnostics` とする
 - **受け入れ基準**:
-  - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、外部ツールでパース可能である
+  - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
+  - Given `--diff <base-ref>` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` となる
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
 #### REQ-FUNC-021: SARIF形式での結果出力
 
 - **説明**: 解析結果をSARIF（Static Analysis Results Interchange Format）形式で出力し、GitHub Code Scanning等との連携を可能にする
+- **SARIF への写像方針**:
+  - `template_suggestion` は `result.message.text` または `help` へ格納する
+  - `llm_suggestion` が存在する場合は `result.properties.kalos.llm_suggestion` に格納する
 - **受け入れ基準**:
   - Given 解析結果, When `--format sarif` で出力, Then 出力がSARIF 2.1.0スキーマに準拠する
 - **優先度**: Should
 - **出典**: ユーザー確認済み
-- **関連要件**: REQ-FUNC-027
+- **関連要件**: REQ-FUNC-020
 
 #### REQ-FUNC-022: Exit codeによるパイプライン制御
 
 - **説明**: 解析結果に応じたexit codeを返し、CI/CDパイプラインでのpass/fail判定を可能にする
+- **判定母集団**: exit code は常に変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。diff mode でも同様とする
 
   | 状況 | Exit code |
   |---|---|
@@ -402,6 +458,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 #### REQ-FUNC-024: 総合スコアサマリーの表示
 
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
+- **サマリー母集団**: summary は常に変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない
 - **受け入れ基準**:
   - Given 解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
 - **優先度**: Must
@@ -419,12 +476,12 @@ AIエージェントによるコーディングの発達に伴い、生成され
   [general]
   exclude = ["vendor/**", "generated/**"]
 
-  [rules.KAL-B001]
+  [rules.KAL-F001]
   enabled = true
   severity = "warning"
-  threshold = 3.5
+  threshold = 0.60
 
-  [rules.KAL-B010]
+  [rules.KAL-PAT003]
   enabled = false
 
   [score.weights]
@@ -444,7 +501,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 - **説明**: 設定ファイルで個別ルールの `enabled` を `false` に設定することで、当該ルールの診断を無効化できる
 - **受け入れ基準**:
-  - Given ルールKAL-B010を `enabled = false` に設定, When 解析実行, Then KAL-B010の診断は報告されない
+  - Given ルール`KAL-PAT003`を `enabled = false` に設定, When 解析実行, Then `KAL-PAT003` の診断は報告されない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -452,7 +509,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 - **説明**: 設定ファイルでルールごとの閾値を変更できる
 - **受け入れ基準**:
-  - Given ルールKAL-B001の閾値を3.0から3.5に変更, When 解析実行, Then 3.5を閾値として判定される
+  - Given ルール`KAL-F001` の閾値を `0.55` から `0.60` に変更, When 解析実行, Then `0.60` を閾値として判定される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -469,7 +526,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 - **説明**: ソースコード中に `// kalos-ignore` または `# kalos-ignore`（言語に応じた形式）のコメントを記述することで、当該行の診断を抑制する
 - **受け入れ基準**:
-  - Given 関数の直前行に `// kalos-ignore[KAL-B001]`, When 診断実行, Then 当該関数のKAL-B001診断は報告されない
+  - Given 関数の直前行に `// kalos-ignore[KAL-F001]`, When 診断実行, Then 当該関数の `KAL-F001` 診断は報告されない
   - Given `// kalos-ignore`（ルールID指定なし）, When 診断実行, Then 当該行のすべての診断が抑制される
 - **優先度**: Should
 - **出典**: ユーザー確認済み
@@ -492,15 +549,15 @@ AIエージェントによるコーディングの発達に伴い、生成され
   - macOS: x86_64, aarch64
   - Windows: x86_64
 - **受け入れ基準**:
-  - Given 各対応プラットフォーム, When バイナリをダウンロードして実行, Then 追加のランタイムインストールなしで動作する
+  - Given 各対応プラットフォームのクリーン環境, When バイナリをダウンロードして `kalos check .` を実行, Then CodeQL が未配置でも必要な管理対象 bundle が自動取得・検証・キャッシュされ、手動の追加ランタイムインストールなしで動作する
 - **優先度**: Must
-- **出典**: ユーザー確認済み
+- **出典**: ユーザー確認済み + 2026-03-19 ユーザー判断
 
 #### REQ-FUNC-032: GitHub Actions公式Actionの提供
 
 - **説明**: GitHub Actionsワークフローから簡単に利用できる公式Actionを提供する
 - **受け入れ基準**:
-  - Given GitHub Actionsワークフロー, When 公式Actionを使用, Then バイナリのダウンロード・インストール・実行が自動で行われる
+  - Given GitHub Actionsワークフロー, When 公式Actionを使用, Then `kalos` バイナリの取得・管理対象 CodeQL bundle のキャッシュ復元/取得・解析実行が自動で行われる
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -515,13 +572,21 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 #### REQ-FUNC-034: 差分解析モード
 
-- **説明**: git diffベースで変更ファイルのみを解析対象とし、PRごとの実行時間を短縮する
-- **入力**: `--diff <base-ref>` オプション（例: `--diff HEAD~1`, `--diff main`）
-- **処理**: 指定されたbase refからの変更ファイルを特定し、当該ファイルのみを解析対象とする
+- **説明**: git diff ベースで変更ファイルのみを再抽出し、互換なベースライン断片を再利用することで PR ごとの実行時間を短縮する
+- **入力**: `--diff <base-ref>` オプション（例: `--diff HEAD~1`, `--diff main`）と、互換なベースラインキャッシュ（任意）
+- **処理**:
+  - 指定された `base-ref` からの変更ファイルを特定し、当該ファイルのみを再抽出する
+  - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する
+  - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する
+  - ベースラインが存在しない、互換でない、または影響範囲を安全に確定できない場合は全解析へフォールバックする
+  - 差分モードの総合スコアと重大度別件数は常に「変更後のプロジェクト全体」を意味し、個別診断の一覧は `AffectedScopeSet` に属するスコープのみを表示する
+  - 機械可読出力では `diagnostics_scope = "affected_only"`、`summary_scope = "whole_project"` を必須とし、一覧の部分性を明示する
+  - フォールバック通知や bootstrap 通知などの運用メッセージは `stderr` にのみ出力し、`stdout` は要求された形式（human/json/sarif）を保つ
 - **受け入れ基準**:
-  - Given `--diff HEAD~1` 指定, When 解析実行, Then 直前コミットからの変更ファイルのみが解析される
+  - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後のプロジェクト全体値として出力される
+  - Given `--diff HEAD~1` だがベースラインが存在しない, When 解析実行, Then 全解析にフォールバックし、その旨が `stderr` に明示される
 - **優先度**: Should
-- **出典**: ユーザー確認済み
+- **出典**: ユーザー確認済み + 2026-03-19 設計判断
 
 ## 4. 非機能要件
 
@@ -530,14 +595,20 @@ AIエージェントによるコーディングの発達に伴い、生成され
 #### REQ-NF-001: 中規模プロジェクトの全階層解析時間
 
 - **基準**: 1万LOCのプロジェクトに対する全階層解析を60秒以内で完了する
-- **測定条件**: 標準的な開発マシン（4コア以上のCPU、8GB以上のRAM）
+- **測定条件**:
+  - ベンチマークプロファイル `bench-linux-x64`（Linux x86_64, 4 vCPU, 16GB RAM, SSD）
+  - `kalos` 本体と CodeQL 管理対象 bundle は事前に取得済み
+  - ソース checkout は cold、baseline cache は empty（全解析では未使用）
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
 #### REQ-NF-002: 差分解析の実行時間
 
 - **基準**: 10ファイル以下の差分解析を10秒以内で完了する
-- **測定条件**: REQ-NF-001と同一
+- **測定条件**:
+  - `bench-linux-x64` プロファイルを使用
+  - CodeQL 管理対象 bundle は warm、baseline cache は warm
+  - 変更ファイル数は 10 以下、`base-ref` はローカルに解決可能
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -591,19 +662,37 @@ AIエージェントによるコーディングの発達に伴い、生成され
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
-## 5. 未確定事項
+### 4.7 外部通信とオフライン動作
+
+#### REQ-NF-009: 外部通信の明示性と安全性
+
+- **基準**:
+  - ネットワーク通信は (a) CodeQL 管理対象 bundle の初回取得、(b) `--llm` 指定時の LLM 呼び出し、のみに限定する
+  - CodeQL bundle 取得は固定バージョン + SHA-256 検証付きで行う
+  - LLM の API キーは環境変数のみから取得し、設定ファイルへ保存しない
+  - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可する
+  - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
+  - LLM 呼び出しは `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` とする
+- **優先度**: Must
+- **出典**: 2026-03-19 ユーザー判断 + 設計具体化
+
+#### REQ-NF-010: オフライン実行可能性
+
+- **基準**:
+  - CodeQL 管理対象 bundle がキャッシュ済みで `--llm` を使わない場合、ネットワーク未接続でも `kalos check` が成功する
+  - bundle 未取得かつオフラインの場合は、bootstrap が必要であることを示す明確なエラーを出し exit code 2 で終了する
+  - `--llm` 使用時にネットワーク障害またはタイムアウトが発生しても、コア診断・総合スコア・exit code は変化しない
+- **優先度**: Must
+- **出典**: 2026-03-19 ユーザー判断 + 設計具体化
+
+## 5. PoC / 将来拡張で検証する項目
 
 | # | 内容 | 関連要件 | 確認先 | 備考 |
 |---|---|---|---|---|
-| 1 | CPG抽出エンジンの最終選定（CodeQL vs Joern vs Tree-sitter等）。4言語対応・長期安定性・Rustからの呼び出し容易性を比較する | REQ-FUNC-001〜004 | 設計フェーズ（researcher調査） | CodeQLを前提としつつ代替を検討 |
-| 2 | 各メトリクスの厳密な数学的定義と閾値のデフォルト値 | REQ-FUNC-008〜010 | 設計フェーズ（researcher調査） | 学術的に妥当かつ実用的な定義を選定 |
-| 3 | 総合スコアの集約アルゴリズム（重み付き平均、階層的集約、その他） | REQ-FUNC-011 | 設計フェーズ | デフォルトの重み配分を含む |
-| 4 | メトリクスプラグインの仕様（API設計、プラグイン形式） | REQ-FUNC-012 | 設計フェーズ | WASM, FFI, 設定ファイルベース等 |
-| 5 | LLM連携のプロトコル（対応LLM、APIキー管理、プロンプト設計） | REQ-FUNC-015 | 設計フェーズ | コスト・レイテンシも考慮 |
-| 6 | 外部依存解決の実装方式（言語ごとのパッケージマネージャ連携 or 型スタブ） | REQ-FUNC-007 | 設計フェーズ | 4言語×解決方式の組み合わせ |
-| 7 | 構造的パターン（God class, Feature envy等）の検出対象一覧 | REQ-FUNC-014 | 設計フェーズ | 言語による適用可否も含む |
-| 8 | 重大度判定のデフォルト閾値（error/warning/info の境界値） | REQ-FUNC-016 | 設計フェーズ | メトリクス定義確定後に決定 |
-| 9 | NF-001の60秒目標とCodeQL CPG構築時間の両立可能性 | REQ-NF-001 | 設計フェーズ（PoC検証） | CPG構築がボトルネックになる可能性あり |
+| 1 | CodeQL 代替アダプタ比較を継続するか | REQ-FUNC-001〜004, REQ-NF-005 | PoC 完了後の ADR 見直し | v1 は CodeQL 既定 |
+| 2 | WASM プラグイン SDK と manifest 配布形式 | REQ-FUNC-012, REQ-NF-006 | v1.1 設計 | SPI 契約自体は v1 で固定済み |
+| 3 | 各言語の外部シンボル解決アダプタ実装 | REQ-FUNC-007 | 言語別設計ノート | 要件上の契約は固定済み |
+| 4 | NF-001 の 60 秒目標と CodeQL 抽出時間の両立可能性 | REQ-NF-001 | ベンチマーク PoC | 未達なら代替アダプタを比較 |
 
 ## 要件間の関連
 
@@ -616,12 +705,12 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 - REQ-FUNC-008〜010 は REQ-FUNC-001〜004（CPG生成）に依存
 - REQ-FUNC-013 は REQ-FUNC-008〜010（メトリクス算出）に依存
-- REQ-FUNC-015 は REQ-FUNC-013（診断報告）に依存
+- REQ-FUNC-015 は REQ-FUNC-013（診断報告）, REQ-FUNC-001〜004（該当コード断片取得）, REQ-NF-008〜010（LLM連携制約）に依存
 - REQ-FUNC-011 は REQ-FUNC-008〜010 に依存
 - REQ-FUNC-019, 020, 021 は REQ-FUNC-013, 015 に依存
 - REQ-FUNC-022 は REQ-FUNC-016（重大度）に依存
 - REQ-FUNC-033 は REQ-FUNC-021（SARIF出力）に依存
-- REQ-FUNC-034 は REQ-FUNC-005（一括解析）に依存
+- REQ-FUNC-034 は REQ-FUNC-005（一括解析）, REQ-FUNC-031（管理対象 bundle）, REQ-NF-002（性能目標）に依存
 
 ### パイプライン依存チェーン
 
@@ -635,4 +724,5 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.0 | 2026-03-19 | メトリクス数式・総合スコア集約・重大度境界・差分解析契約・CodeQL 自動取得・LLM 入力制約を確定 | Codex |
 | 0.1.0 | 2026-03-18 | 初版作成 | Claude（requirements-definer スキル） |

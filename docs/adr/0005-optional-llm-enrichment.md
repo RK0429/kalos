@@ -2,7 +2,7 @@
 
 ## ステータス
 
-提案
+承認済み
 
 ## コンテキスト
 
@@ -48,6 +48,7 @@
 
 - `REQ-NF-008` の「LLM 非応答でも全体可用性を維持」を満たすには、テンプレート提案を正本とする必要がある
 - `REQ-NF-003` を守るため、スコア・重大度・Exit code はテンプレート側だけで確定させる
+- LLM への入力は application/report 境界で組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する
 - LLM 出力は `DiagnosticId` ごとの `LlmSuggestionBundle` として report 層で併記し、`DiagnosticReport` 自体は変更しない
 
 ## 帰結
@@ -57,6 +58,7 @@
 - LLM 障害が CI 判定やスコアへ影響しない
 - 送信ポリシーとタイムアウト戦略をアダプタ層へ閉じ込められる
 - テンプレート提案を最低保証として維持できる
+- LLM へ送る入力面積を診断単位の最小断片に限定できる
 
 ### ネガティブ
 
