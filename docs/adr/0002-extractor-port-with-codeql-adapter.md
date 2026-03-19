@@ -31,12 +31,12 @@
 
 ### 選択肢 B: `ExtractorPort` を定義し、初期アダプタとして CodeQL を採用する
 
-抽出エンジンはポート背後へ隠蔽し、出力契約を `SourceAnalysis` に固定する。
+抽出エンジンはポート背後へ隠蔽し、`ExtractorPort` の出力契約を `SourceAnalysis`（`UnifiedCpg` + 抑制コメント + 解析警告を束ねる集約ルート）に固定する。
 
 - 利点:
   - CodeQL 前提を守りながら将来差し替え可能
   - 言語ごとの差異をアダプタ層へ閉じ込められる
-  - 下流は `UnifiedCpg` を前提に安定する
+  - 下流コンテキストは `SourceAnalysis` の公開契約のみに依存し、抽出エンジンの詳細を知らない
 - 欠点:
   - 抽象化の実装コストが増える
   - 初期 PoC の対象が増える
@@ -57,8 +57,8 @@ Python/TS/Rust/Go で最適エンジンを変える。
 
 ## 根拠
 
-- CodeQL は初期実装として使うが、コア契約は `SourceAnalysis -> UnifiedCpg` に固定したい
-- CodeQL bundle の取得と検証は managed tool cache に閉じ込め、CLI 利用者へ手動セットアップを要求しない
+- CodeQL は初期実装として使うが、`ExtractorPort` の出力契約は `SourceAnalysis` に固定する。下流コンテキストは `SourceAnalysis` 内の `UnifiedCpg` を公開言語として参照する
+- CodeQL bundle は固定バージョン + SHA-256 検証付きで managed tool cache に閉じ込め、CLI 利用者へ手動セットアップを要求しない（`REQ-FUNC-031`, `REQ-NF-009`）
 - これにより、将来の性能問題や言語追加時の変更を抽出アダプタ層へ閉じ込められる
 - ドメインモデルの `LanguageExtension` と整合し、言語固有概念の差異をコアへ漏らさずに済む
 
@@ -67,7 +67,7 @@ Python/TS/Rust/Go で最適エンジンを変える。
 ### ポジティブ
 
 - 下流コンテキストは CodeQL 非依存で保てる
-- ローカル実行と GitHub Action が同じ bootstrap 経路を共有できる
+- ローカル実行と GitHub Action が同じ bootstrap 経路（managed tool cache）を共有できる
 - 性能 PoC に失敗しても代替エンジンへ移行しやすい
 - 新言語追加時の変更面を限定できる
 
@@ -76,7 +76,12 @@ Python/TS/Rust/Go で最適エンジンを変える。
 - `ExtractorPort` とマッパーの保守が必要
 - CodeQL の表現差異を吸収する正規化ロジックが増える
 
+### 制約
+
+- CodeQL bundle は固定バージョンを managed tool cache へ初回取得し、SHA-256 で検証する。バージョンと checksum は kalos のリリースに紐づく（`REQ-NF-009`）
+- managed bundle がキャッシュ済み（warm）かつ `--llm` 未使用であれば、オフライン環境でも `kalos check` が動作する（`REQ-NF-010`）
+- bundle 未取得かつオフラインの場合は、bootstrap が必要であることを示す明確なエラーメッセージを出力し exit code 2 で終了する（`REQ-NF-010`）
+
 ### リスク
 
 - CodeQL の実行時間が `REQ-NF-001` を満たさない可能性があるため、PoC に失敗した場合の代替案比較を継続する
-- managed bundle 未取得かつオフラインの環境では bootstrap に失敗するため、明示的なエラーメッセージと回復手順が必要

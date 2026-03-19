@@ -141,11 +141,11 @@ graph TB
 
 | コンテキスト | 主要責務 | 入力 | 出力 | 対応要件 |
 |---|---|---|---|---|
-| CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-030` |
-| Configuration | 設定探索・優先順位マージ・デフォルト提供 | CLI、`.kalos.toml`、既定値 | `ProjectConfig` | `REQ-FUNC-025`〜`030`, `REQ-NF-007` |
-| CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、`UnifiedCpg` 変換 | ワークスペース、`ProjectConfig` | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-031` |
+| CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
+| Configuration | 設定探索・優先順位マージ・デフォルト提供 | CLI、`.kalos.toml`、既定値 | `ProjectConfig` | `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
+| CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig` | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
 | Metrics | メトリクス計算、正規化、階層スコア集約 | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
-| Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用 | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `DiagnosticReport` | `REQ-FUNC-013`〜`017`, `REQ-NF-008` |
+| Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用 | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `DiagnosticReport` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
 | Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`LlmSuggestionBundle?` | 標準出力 / ファイル出力 | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
 | Plugin Host | WASM プラグイン検証、SPI 読込、capability 制御 | プラグイン manifest、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群 | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
@@ -187,7 +187,7 @@ CPG Extraction
 - `Reporting` は ACL としてのみ存在し、ドメインへ逆流しない
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す
-- `Application Pipeline` が `Diagnostic` から `rule_id`, `severity`, `language`, `repo_relative_path`, `metric` または `pattern`, `source_excerpt` または `cpg_excerpt` だけを抽出して `LlmEnrichmentRequest` を組み立てる
+- `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `SourceAnalysis` から、`source_excerpt` または `cpg_excerpt` は対象スコープの CPG・ソースから取得し、`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
 - `Plugin Host` は `CpgSubgraph + MetricConfig -> MetricValue` の pure function 契約のみを許容し、乱数・時刻・ネットワーク・ファイル書込を禁止する
@@ -294,11 +294,11 @@ sequenceDiagram
 
 差分解析では、以下を不変条件とする。
 
-- 総合スコアは「変更後のプロジェクト全体」を意味する
+- `--level all`（デフォルト）の総合スコアは「変更後のプロジェクト全体」を意味する。`--level` で階層を限定した場合、総合スコアは `AffectedScopeSet` 内の指定階層診断を母集団とする
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
-- `DiagnosticReport.summary` と exit code は `summary_scope = WholeProject` の母集団を基準に解釈する
-- 機械可読出力は `diagnostics_scope = affected_only`, `summary_scope = whole_project` を明示する
+- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `WholeProject`、`--level` で階層を限定した場合は `ListedDiagnostics` となる
+- 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - ベースライン不在時は全解析へフォールバックする
 
 ### 5.3 差分解析の契約
@@ -306,6 +306,7 @@ sequenceDiagram
 - 影響範囲の owner は `Impact Analysis Service` とし、`UnifiedCpg` から生成したモジュール/関数依存グラフの逆閉包で `AffectedScopeSet` を求める
 - ベースライン断片の保存単位は、丸め済み `scope_risk` を含む `ScopeMetrics(function/module/project)`、`ScopeDiagnosticSnapshot`、丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score` を含む `OverallScore`、`DependencyIndexManifest` とする
 - ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + rule_catalog_version + plugin_manifest_version + extractor_version + kalos_version` とする
+- `workspace_root_hash` はワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree を表し、現在ワークツリーのハッシュは含めない
 - 次の場合は差分再利用を諦めて全解析へフォールバックする
   - ベースラインが存在しない

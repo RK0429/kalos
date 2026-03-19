@@ -438,8 +438,9 @@ classDiagram
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = None` を代表位置として使う
 - `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では `WholeProject`、diff mode では `AffectedOnly` を取り、reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
 - `DiagnosticReport.summary_scope` は summary がどの母集団に対する集計かを表す。diff mode では `diagnostics` が `AffectedScopeSet` のみでも、`summary_scope = WholeProject` により summary は変更後プロジェクト全体値を表現できる
+- `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
-- `LlmEnrichmentRequest` は `Diagnostic` 全体ではなく、allowlist 済み subset `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` を表す report/application 境界の sidecar 契約である
+- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済みの application/report 境界の sidecar 入力である。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `SourceAnalysis` から、`source_excerpt` / `cpg_excerpt` は対象スコープの CPG・ソースから取得する。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
 - `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`rule_id` が None の場合は該当行の全診断を抑制（REQ-FUNC-029）
 - `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` フラグで warning → error 昇格（REQ-FUNC-022）
 
@@ -497,6 +498,7 @@ classDiagram
 **設計意図:**
 
 - `Impact Analysis` が `AffectedScopeSet` と `InvalidationPlan` の導出ロジックの唯一の owner であり、結果値そのものは公開言語として下流コンテキストへ渡す
+- `BaselineFingerprint.workspace_root_hash` はワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュ。異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `BaselineFingerprint.base_snapshot_hash` は「現在のワークスペース」ではなく `base-ref` 側のスナップショットを表す。これにより、同じ基準コミットに対する差分実行でベースラインを再利用できる
 - `ScopeDiagnosticSnapshot` を保持することで、差分モードでもプロジェクト全体の重大度件数を再構成できる。完全な `DiagnosticReport` をキャッシュへ保存する必要はない
 
@@ -643,7 +645,8 @@ stateDiagram-v2
 | 影響範囲集合 (AffectedScopeSet) | 差分再計算が必要な `ScopeId` の集合 | ScopeId |
 | 無効化計画 (InvalidationPlan) | 再計算対象、再利用対象、全解析フォールバック要否を表す値 | AffectedScopeSet |
 | 依存インデックス manifest (DependencyIndexManifest) | `ScopeId` 間の逆依存関係を永続化した値 | ScopeId |
-| ベースライン識別子 (BaselineFingerprint) | 差分ベースラインの互換性判定に使う版情報とハッシュ集合。`base_snapshot_hash` を含む | DiffBaseline |
+| ベースライン識別子 (BaselineFingerprint) | 差分ベースラインの互換性判定に使う版情報とハッシュ集合。`workspace_root_hash` と `base_snapshot_hash` を含む | DiffBaseline |
+| ワークスペースルートハッシュ (workspace_root_hash) | `BaselineFingerprint` の構成要素。ワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュ値。異なるワークスペース間でベースラインキャッシュが衝突しないことを保証する | BaselineFingerprint |
 | スコープ診断断片 (ScopeDiagnosticSnapshot) | ある `ScopeId` に属する既知診断の断片とサマリー | DiagnosticId, DiagnosticSummary |
 
 ### 5.5 用語集: 構成管理コンテキスト
@@ -661,7 +664,7 @@ stateDiagram-v2
 |---|---|---|
 | LLM補助提案バンドル (LlmSuggestionBundle) | `DiagnosticId` ごとに report 層で併記される任意の補助提案集合。コア診断は変更しない | DiagnosticId, LlmSuggestion |
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
-| LLMエンリッチ要求 (LlmEnrichmentRequest) | `Diagnostic` から抽出した allowlist 済み subset `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` を束ねた application/report 境界の sidecar 入力 | Diagnostic |
+| LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `SourceAnalysis` から取得する | Diagnostic, SourceAnalysis |
 | CPG抜粋 (CpgSubgraphExcerpt) | LLM 送信に使う、診断に必要な最小部分だけへ正規化した CPG 表現 | ScopeId |
 
 ## 6. 判断記録

@@ -304,10 +304,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-015: 具体的な改善提案テキストの生成
 
 - **説明**: 各診断に対して、何が問題か・なぜ問題か・どう改善すべきかを含む具体的な改善提案テキストを生成する。テンプレートベースの生成を基本とし、オプションでLLM連携による文脈に即した提案生成を提供する
-- **入力**: 診断オブジェクトから抽出した allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`
+- **入力**: Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `SourceAnalysis` から、`source_excerpt` / `cpg_excerpt` は対象スコープの CPG・ソースから取得する。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
 - **処理**:
   - テンプレートモード（デフォルト）: 違反パターンごとの定型テンプレートにコード文脈を埋め込んで提案文を生成する
-  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `repo_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答時はテンプレート結果にフォールバックする
+  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` と `SourceAnalysis` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `repo_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答時はテンプレート結果にフォールバックする
 - **出力**: 各診断に対し `template_suggestion`（必須）を生成し、`--llm` 指定時は出力境界で `llm_suggestion`（任意）を併記する
 - **受け入れ基準**:
   - Given CFGエントロピー超過の診断, When テンプレートモードで改善提案を生成, Then 「この関数は分岐が複雑すぎる。条件分岐を抽出関数に分離することで複雑度を低減できます」のような具体的な提案が出力される
@@ -358,7 +358,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **一覧・summary・exit code の母集団**:
   - 診断一覧: full mode では全診断、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
-  - summary と exit code は常に「変更後プロジェクト全体」の診断集合を母集団とする
+  - `--level all`（デフォルト）では、summary と exit code は「変更後プロジェクト全体」の診断集合を母集団とする
+  - `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
 - **主要オプション**:
   - `--format <human|json|sarif>`: 出力形式（デフォルト: human）
   - `--level <function|module|project|all>`: 解析階層（デフォルト: all）
@@ -397,7 +398,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given パターン診断, When human形式で出力, Then 共通フィールドに加えて `pattern_type`, `evidence_message`, 改善提案が含まれる
   - Given `--llm` 指定, When human形式で出力, Then `template` と `llm` の提案が別ラベルで表示される
   - Given 端末がカラー対応, When human形式で出力, Then 重大度に応じた色分けが適用される（error: 赤, warning: 黄, info: 青）
-  - Given 解析完了, When human形式で出力, Then 末尾に変更後プロジェクト全体の総合スコアサマリーと重大度別件数が表示される
+  - Given `--level all`（デフォルト）で解析完了, When human形式で出力, Then 末尾に変更後プロジェクト全体の総合スコアサマリーと重大度別件数が表示される
+  - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベル診断のみを母集団とした総合スコアサマリーと重大度別件数が表示される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -412,7 +414,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `diagnostics_scope` は `whole_project | affected_only`、`summary_scope` は `whole_project | listed_diagnostics` とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
-  - Given `--diff <base-ref>` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` となる
+  - Given `--diff <base-ref> --level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` となる
+  - Given `--diff <base-ref> --level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` となる
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -431,7 +434,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-022: Exit codeによるパイプライン制御
 
 - **説明**: 解析結果に応じたexit codeを返し、CI/CDパイプラインでのpass/fail判定を可能にする
-- **判定母集団**: exit code は常に変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。diff mode でも同様とする
+- **判定母集団**: `--level all`（デフォルト）では exit code は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。diff mode でも同様とする
 
   | 状況 | Exit code |
   |---|---|
@@ -449,16 +452,21 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-023: 解析階層の選択
 
-- **説明**: `--level` オプションで解析対象の階層を限定する
+- **説明**: `--level` オプションで解析対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline が指定階層のメトリクス算出・診断生成のみを実行する。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
+- **パイプライン動作**:
+  - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = WholeProject`
+  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = ListedDiagnostics`
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
+  - Given `--level function` かつ `--format json`, When 解析実行, Then `summary_scope = "listed_diagnostics"` となる
 - **優先度**: Should
 - **出典**: ユーザー確認済み
+- **関連要件**: REQ-FUNC-018, REQ-FUNC-020
 
 #### REQ-FUNC-024: 総合スコアサマリーの表示
 
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
-- **サマリー母集団**: summary は常に変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない
+- **サマリー母集団**: `--level all`（デフォルト）では summary は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）
 - **受け入れ基準**:
   - Given 解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
 - **優先度**: Must
@@ -579,11 +587,13 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する
   - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する
   - ベースラインが存在しない、互換でない、または影響範囲を安全に確定できない場合は全解析へフォールバックする
-  - 差分モードの総合スコアと重大度別件数は常に「変更後のプロジェクト全体」を意味し、個別診断の一覧は `AffectedScopeSet` に属するスコープのみを表示する
-  - 機械可読出力では `diagnostics_scope = "affected_only"`、`summary_scope = "whole_project"` を必須とし、一覧の部分性を明示する
+  - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
+  - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は「変更後のプロジェクト全体」を意味し、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
+  - `--level function|module|project` の場合、総合スコアと重大度別件数は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする
   - フォールバック通知や bootstrap 通知などの運用メッセージは `stderr` にのみ出力し、`stdout` は要求された形式（human/json/sarif）を保つ
 - **受け入れ基準**:
   - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後のプロジェクト全体値として出力される
+  - Given `--diff HEAD~1 --level function` と互換なベースライン, When 解析実行, Then 関数レベルの影響範囲診断のみが一覧に含まれ、機械可読出力の `summary_scope` は `"listed_diagnostics"` となる
   - Given `--diff HEAD~1` だがベースラインが存在しない, When 解析実行, Then 全解析にフォールバックし、その旨が `stderr` に明示される
 - **優先度**: Should
 - **出典**: ユーザー確認済み + 2026-03-19 設計判断
