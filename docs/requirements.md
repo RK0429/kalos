@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.3 |
+| バージョン | 0.2.4 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -336,8 +336,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **入力**: 診断オブジェクト、重大度判定基準（設定ファイルでカスタマイズ可能）
 - **処理**:
   - メトリクス診断では `overflow_ratio = (normalized_risk - threshold) / max(1 - threshold, 1e-9)` を用いる
-  - `overflow_ratio < 0.25` なら `info`、`0.25 <= overflow_ratio < 0.60` なら `warning`、`0.60 <= overflow_ratio` なら `error`
-  - パターン診断では `KAL-PAT001 = warning`, `KAL-PAT002 = warning`, `KAL-PAT003 = error` をデフォルトとし、設定ファイルで上書き可能とする
+  - メトリクス診断のデフォルト重大度は `overflow_ratio < 0.25` なら `info`、`0.25 <= overflow_ratio < 0.60` なら `warning`、`0.60 <= overflow_ratio` なら `error` とする
+  - パターン診断のデフォルト重大度は `KAL-PAT001 = warning`, `KAL-PAT002 = warning`, `KAL-PAT003 = error` とする
+  - `rules.<RuleId>.severity` が設定されている場合、そのルールの最終 `Diagnostic.severity` は診断種別に関係なく当該値で上書きする。metric 診断では `overflow_ratio` から導出したデフォルト重大度の後に override を適用し、pattern 診断ではデフォルト重大度の後に override を適用する
 - **重大度定義**:
   - error: プロジェクトの品質基準を明確に逸脱（CI/CDでfailの根拠になる）
   - warning: 改善が強く推奨される
@@ -347,6 +348,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given `0.25 <= overflow_ratio < 0.60`, When 重大度判定, Then `warning` が付与される
   - Given `0 < overflow_ratio < 0.25`, When 重大度判定, Then `info` が付与される
   - Given `KAL-PAT003`, When 重大度判定, Then デフォルトで `error` が付与される
+  - Given `rules.KAL-F001.severity = "warning"` かつ `overflow_ratio >= 0.60`, When `KAL-F001` の重大度判定, Then 最終 `Diagnostic.severity` は `warning` となる
 - **優先度**: Must
 - **出典**: ユーザー確認済み + 2026-03-19 設計判断
 
@@ -364,8 +366,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-018: `kalos check` コマンドによる解析実行
 
-- **説明**: `kalos check <path>` で対象パスの解析を実行する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
-- **入力**: 解析対象パス（ファイルまたはディレクトリ）、オプション引数
+- **説明**: `kalos check <path>...` で 1 個以上の対象パスを解析する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
+- **入力**: 1 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数
 - **一覧・summary・exit code の母集団**:
   - 診断一覧: full mode では全診断、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
@@ -382,6 +384,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
   - Given 有効なプロジェクトディレクトリ, When `kalos check .` を実行, Then 全対応言語ファイルが解析され、診断結果が端末に表示される
+  - Given `kalos check src tests/test_app.py` のように複数 path を指定, When 解析実行, Then 指定された各 path 配下の対応言語ファイルが単一の解析対象集合として統合される
   - Given `--format json` 指定, When 解析実行, Then 結果がJSON形式で出力される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
@@ -418,7 +421,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
 - **最低限のJSON契約**:
-  - ルートには `schema_version`, `analysis_target`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
+  - ルートには `schema_version`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
+  - `analysis_targets` は CLI または API で受け取った解析対象 path 群を `WorkspaceRoot` 基準で正規化した配列とし、入力順を保持する。単一 target の場合も配列で表現する
   - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含めてよいが、v1 のプラグインメトリクスは report-only であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
@@ -733,6 +737,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 | 2 | WASM プラグイン SDK と配布パッケージ形式 | REQ-FUNC-012, REQ-NF-006 | v1.1 設計 | v1 の `plugin_manifest` は `.kalos.toml` 正規化結果で固定済み |
 | 3 | 各言語の外部シンボル解決アダプタ実装 | REQ-FUNC-007 | 言語別設計ノート | 要件上の契約は固定済み |
 | 4 | NF-001 の 60 秒目標と CodeQL 抽出時間の両立可能性 | REQ-NF-001 | ベンチマーク PoC | 未達なら代替アダプタを比較 |
+| 5 | 新しい report-only plugin metric を `MetricDefinition` 実装と `.kalos.toml` 登録だけで差し込めるか | REQ-FUNC-012, REQ-NF-006 | 拡張性 PoC | 既存の CPG 抽出・CLI・設定管理を変更せずに成立することを確認 |
 
 ## 要件間の関連
 
@@ -764,6 +769,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.4 | 2026-03-19 | 複数 target の CLI/JSON 契約、metric severity override、plugin extensibility PoC 項目を明文化 | Codex |
 | 0.2.3 | 2026-03-19 | plugin aggregate budget を Metrics stage 内数へ調整し、LLM excerpt one-of 契約を明文化 | Codex |
 | 0.2.2 | 2026-03-19 | WorkspaceRoot/`workspace_relative_path` 契約、Go owner scope=package、Rust semantic edge、plugin report-only 契約、PAT001 Python 規則を明文化 | Codex |
 | 0.2.1 | 2026-03-19 | PAT001 粒度、`--strict`、`exclude` マージ、plugin manifest、LLM representative file 契約を明文化 | Codex |

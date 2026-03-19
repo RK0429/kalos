@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.3 |
+| バージョン | 0.2.4 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.3, domain_model.md v0.2.3 |
+| 入力 | requirements.md v0.2.4, domain_model.md v0.2.4 |
 
 ## 1. 設計目標
 
@@ -519,6 +519,7 @@ plugin aggregate budget（全解析 `3s` / 差分 `0.5s`）は、それぞれ Me
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.4 | 2026-03-19 | `requirements.md` / `domain_model.md` v0.2.4 への入力参照を同期 | Codex |
 | 0.2.3 | 2026-03-19 | plugin aggregate budget を Metrics stage 内数へ調整し、PoC と LLM excerpt one-of 契約を整合 | Codex |
 | 0.2.2 | 2026-03-19 | `WorkspaceRoot` 解決、Go package owner scope、plugin report-only/aggregate budget、LLM representative-file skip 契約を反映 | Codex |
 | 0.2.1 | 2026-03-19 | Tool Cache owner、plugin/config hash、LLM representative file、core/LLM budget 分離、言語拡張境界を明文化 | Codex |
