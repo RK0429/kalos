@@ -58,8 +58,8 @@ kalos は同時に以下を満たす必要がある。
   - `plugin_manifest_version`: ロード対象プラグイン manifest の版
   - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
   - `kalos_version`: kalos バイナリ自体の版
-- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot` と `DependencyIndexManifest` を含む
-- コア評価順序は常にスコープ昇順に固定し、キャッシュヒット時も同じ順序で統合する
+- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む
+- コア評価順序は常にスコープ昇順 `(<level>, <qualified_name>, <file_path>)` に固定し、キャッシュヒット時も同じ順序で統合する
 
 ## 帰結
 
@@ -75,6 +75,7 @@ kalos は同時に以下を満たす必要がある。
 - キャッシュ破損や無効化漏れが新たな障害源になる
 - 設定変更やプラグイン差し替えで再計算が増える
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree hash であり、取得元が曖昧だと再利用判定が壊れるため、`git rev-parse <base-ref>^{tree}` 相当の取得方法を実装で固定する必要がある
+- checkout path が実行ごとに変わる CI では `workspace_root_hash` によりキャッシュヒット率が下がる。再利用を重視する環境では checkout path を安定化させる運用が必要
 
 ### リスク
 

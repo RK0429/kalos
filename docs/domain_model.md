@@ -194,7 +194,7 @@ classDiagram
         <<Aggregate Root>>
         +List~ScopeMetrics~ function_metrics
         +List~ScopeMetrics~ module_metrics
-        +ScopeMetrics project_metrics
+        +Option~ScopeMetrics~ project_metrics
         +OverallScore overall_score
         +compute_overall_score(weights: ScoreWeights) OverallScore
     }
@@ -226,14 +226,14 @@ classDiagram
     }
     class OverallScore {
         <<ValueObject>>
-        +f64 function_risk
-        +f64 module_risk
-        +f64 project_risk
+        +Option~f64~ function_risk
+        +Option~f64~ module_risk
+        +Option~f64~ project_risk
         +f64 overall_risk
-        +u8 total
-        +u8 function_score
-        +u8 module_score
-        +u8 project_score
+        +u8 overall_score
+        +Option~u8~ function_score
+        +Option~u8~ module_score
+        +Option~u8~ project_score
     }
     class ScopeId {
         <<ValueObject>>
@@ -272,7 +272,8 @@ classDiagram
 - `MetricConfig` はプラグイン SPI へ渡す正規化済み設定マップ。ホストが設定ファイル由来の値を解決してから渡す
 - `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
-- `OverallScore` は ScoreWeights による重み付き集約の結果。`function_risk` / `module_risk` / `project_risk` / `overall_risk` は丸め済みリスク値、`total` と各階層スコアは 0〜100 の整数で保持する。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011）
+- `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を省略できる。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない
+- `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
 ### 3.3 診断コンテキスト
@@ -400,6 +401,17 @@ classDiagram
         FeatureEnvy
         CircularDependency
     }
+    class LlmEnrichmentRequest {
+        <<ValueObject>>
+        +RuleId rule_id
+        +Severity severity
+        +Language language
+        +FilePath repo_relative_path
+        +Option~MetricObservation~ metric
+        +Option~PatternEvidence~ pattern
+        +Option~SourceExcerpt~ source_excerpt
+        +Option~CpgExcerpt~ cpg_excerpt
+    }
     class InlineSuppression {
         <<ValueObject>>
         +FileLocation location
@@ -426,6 +438,11 @@ classDiagram
     PatternRule --> PatternType
     LlmSuggestionBundle *-- LlmSuggestion
     LlmSuggestionBundle ..> DiagnosticId
+    LlmEnrichmentRequest --> RuleId
+    LlmEnrichmentRequest --> Severity
+    LlmEnrichmentRequest --> Language
+    LlmEnrichmentRequest --> MetricObservation
+    LlmEnrichmentRequest --> PatternEvidence
     InlineSuppression --> FileLocation
     InlineSuppression ..> RuleId
 ```
@@ -436,12 +453,13 @@ classDiagram
 - `Diagnostic` は `kind` を discriminant とし、`MetricObservation` または `PatternEvidence` のどちらか一方だけを持つ。これによりメトリクス診断とパターン診断の出力契約を同一 aggregate の中で型安全に表現できる
 - メトリクス診断の重大度は `MetricRule` に固定値を持たせず、`overflow_ratio` と `RuleConfig.severity` オーバーライドから導出する。固定のデフォルト重大度を持つのは `PatternRule` のみ
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = None` を代表位置として使う
-- `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では `WholeProject`、diff mode では `AffectedOnly` を取り、reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
+- `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では「選択された `--level` に関して完全」であることを `WholeProject` で表し、diff mode では `AffectedOnly` を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
 - `DiagnosticReport.summary_scope` は summary がどの母集団に対する集計かを表す。diff mode では `diagnostics` が `AffectedScopeSet` のみでも、`summary_scope = WholeProject` により summary は変更後プロジェクト全体値を表現できる
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
+- JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
 - `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済みの application/report 境界の sidecar 入力である。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `SourceAnalysis` から、`source_excerpt` / `cpg_excerpt` は対象スコープの CPG・ソースから取得する。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
-- `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`rule_id` が None の場合は該当行の全診断を抑制（REQ-FUNC-029）
+- `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`location` は抑制対象の代表位置を指し、同一行の診断または直後スコープ宣言に対応する診断へ適用される。`rule_id` が None の場合は対象位置の全診断を抑制する（REQ-FUNC-029）
 - `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` フラグで warning → error 昇格（REQ-FUNC-022）
 
 ### 3.4 差分解析コンテキスト
@@ -612,8 +630,8 @@ stateDiagram-v2
 | メトリクス設定 (MetricConfig) | `MetricDefinition.compute()` に渡す正規化済み設定マップ。plugin host が SPI 入力として供給する | MetricDefinition |
 | メトリクス値 (MetricValue) | 算出された生値と0〜1の正規化リスク値のペア | MetricDefinition |
 | スコープメトリクス (ScopeMetrics) | 特定のスコープ（関数、モジュール等）に対する全メトリクス値の集合。丸め済み `scope_risk` を保持する | ScopeId, AnalysisLevel |
-| 解析メトリクス (AnalysisMetrics) | 全階層のメトリクス結果と総合スコアを束ねる集約ルート | ScopeMetrics, OverallScore |
-| 総合スコア (OverallScore) | 全階層のメトリクスを重み付き集約した丸め済みリスク値と、0〜100の整数評価値・各階層の整数部分スコア | ScoreWeights |
+| 解析メトリクス (AnalysisMetrics) | 全階層または `--level` 指定で選択された階層のメトリクス結果と総合スコアを束ねる集約ルート | ScopeMetrics, OverallScore |
+| 総合スコア (OverallScore) | 選択された階層群のメトリクスを重み付き集約した丸め済みリスク値と、0〜100の整数評価値。非対象階層の部分スコアは `None` を許容する | ScoreWeights |
 | スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成 | AnalysisLevel |
 | スコア重み (ScoreWeights) | 総合スコア算出時の各階層の重み。デフォルト: function 0.4, module 0.35, project 0.25 | — |
 | 解析階層 (AnalysisLevel) | メトリクス算出の粒度: Function / Module / Project | — |

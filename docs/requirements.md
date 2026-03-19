@@ -152,9 +152,9 @@ AIエージェントによるコーディングの発達に伴い、生成され
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
-#### REQ-FUNC-006: 解析対象の包含/除外パターン指定
+#### REQ-FUNC-006: 解析対象の除外パターン指定
 
-- **説明**: glob パターンにより解析対象ファイルの包含・除外を制御する
+- **説明**: glob パターンにより解析対象ファイルの除外を制御する。v1 では包含側の allowlist（`--include`）は提供しない
 - **入力**: glob パターン（CLI引数 `--exclude` または設定ファイル）
 - **処理**: 指定パターンにマッチするファイルを解析対象から除外する。`.gitignore` が存在する場合、そのパターンをデフォルトで除外対象とする
 - **受け入れ基準**:
@@ -190,7 +190,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   |---|---|---|---|---|---|
   | `M-F001` | `KAL-F001` | CFG分岐エントロピーリスク | `avg_{b∈B}(log2(out_degree(b)) / log2(4))`。`B` は `out_degree > 1` の分岐ノード集合。`B` が空なら `0` | `clamp(raw_value, 0, 1)` | `0.55` |
   | `M-F002` | `KAL-F002` | サイクロマティック複雑度リスク | `M = E - N + 2`（関数 CFG の McCabe complexity） | `clamp((M - 1) / 15, 0, 1)` | `0.60` |
-  | `M-F003` | `KAL-F003` | データフロー密度リスク | `|E_dfg| / (|V_var| * (|V_var| - 1))`。`|V_var| < 2` なら `0` | `raw_value` | `0.45` |
+  | `M-F003` | `KAL-F003` | データフロー密度リスク | `|E_dfg_unique| / (|V_var| * (|V_var| - 1))`。`E_dfg_unique` は変数ノード間の一意な `(source, target)` ペア集合。`|V_var| < 2` なら `0` | `clamp(raw_value, 0, 1)` | `0.45` |
   | `M-F004` | `KAL-F004` | 識別子反復リスク | `1 - H(tokens_multiset) / log2(|U|)`。`tokens_multiset` はローカル変数名と引数名を snake_case / camelCase 分割して重複を保持した多重集合、`U` はその一意トークン集合。`|U| < 2` なら `0` | `clamp(raw_value, 0, 1)` | `0.55` |
 
 - **出力**: 各関数について `metric_id`, `raw_value`, `normalized_risk` を持つメトリクス集合
@@ -249,6 +249,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   5. `scope_risk`, `level_risk`, `overall_risk` は各段階の算出直後に小数第 6 位で round-half-up し、その値をキャッシュと後続計算に用いる
   6. `overall_risk = Σ(adjusted_weight[level] * level_risk[level])`
   7. `function_score`, `module_score`, `project_score`, `overall_score` はそれぞれ `round_half_up(100 * (1 - risk))` で整数化する
+  8. `--level function|module|project` により非対象階層が未計算の場合、対応する `*_risk` / `*_score` は省略可能とし、機械可読出力では `null` に写像する
 
 - **出力**: 総合スコア（0〜100 の整数）および各階層の部分スコア
 - **受け入れ基準**:
@@ -262,9 +263,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
 - **入力**: プラグイン仕様に準拠したメトリクス定義
-- **処理**: プラグインとして登録されたメトリクスを、組み込みメトリクスと同じパイプラインで算出する
+- **処理**: プラグインとして登録されたメトリクスを、組み込みメトリクスと同じパイプラインで算出する。Plugin Host は v1 の既定として invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB` を適用し、ネットワーク・ファイル書込を禁止する
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが組み込みメトリクスと同様に算出・報告される
+  - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
 - **優先度**: Should
 - **出典**: ユーザー確認済み（当初Couldだったが、ユーザーの要望でShouldに昇格）
 
@@ -294,6 +296,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   | `KAL-PAT002` | Feature Envy | 関数 | 外部オブジェクト/モジュールへの参照数が 5 以上かつ `foreign_accesses / (foreign_accesses + local_accesses) >= 0.70` | `warning` |
   | `KAL-PAT003` | Circular Dependency | モジュール依存グラフ | SCC のサイズが 2 以上 | `error` |
 
+- **言語別の計数規則**:
+  - `public_member_count` は Python/TypeScript では対象 class の public メソッド・public フィールド数（constructor, private, protected を除く）、Rust では対象 module/file 直下の `pub` な top-level item 数、Go では対象 package/file の exported top-level declaration 数とする
+  - `foreign_accesses` は「現在の関数が所属する owner（class / module / package）以外」への参照・呼び出し数、`local_accesses` は同一 owner 内への参照・呼び出し数とする。Python/TypeScript の `self` / `this`、Rust の `self` / `Self` / 同一 module 内 item、Go の同一 receiver type または同一 package の識別子参照は local に数え、import 先 package や別 receiver type への selector / call は foreign に数える
 - **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる
 - **受け入れ基準**:
   - Given 過度に多くの責務を持つ class または module, When 診断実行, Then `KAL-PAT001` として検出される
@@ -399,23 +404,25 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given `--llm` 指定, When human形式で出力, Then `template` と `llm` の提案が別ラベルで表示される
   - Given 端末がカラー対応, When human形式で出力, Then 重大度に応じた色分けが適用される（error: 赤, warning: 黄, info: 青）
   - Given `--level all`（デフォルト）で解析完了, When human形式で出力, Then 末尾に変更後プロジェクト全体の総合スコアサマリーと重大度別件数が表示される
-  - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベル診断のみを母集団とした総合スコアサマリーと重大度別件数が表示される
+  - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベル診断のみを母集団とした総合スコアサマリーと重大度別件数が表示され、module/project のスコアは表示されない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
 #### REQ-FUNC-020: JSON形式での結果出力
 
-- **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では全診断、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
+- **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
 - **最低限のJSON契約**:
   - ルートには `schema_version`, `analysis_target`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
-  - `scores` には `overall`, `function`, `module`, `project` の整数スコアを必須とする
+  - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に 0〜100 の整数、`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
   - `diagnostics_scope` は `whole_project | affected_only`、`summary_scope` は `whole_project | listed_diagnostics` とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
+  - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` はすべて整数となる
+  - Given `--level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は整数、`scores.module` と `scores.project` は `null` となる
   - Given `--diff <base-ref> --level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` となる
-  - Given `--diff <base-ref> --level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` となる
+  - Given `--diff <base-ref> --level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は整数、`scores.module` と `scores.project` は `null` となる
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -455,10 +462,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `--level` オプションで解析対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline が指定階層のメトリクス算出・診断生成のみを実行する。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = WholeProject`
-  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = ListedDiagnostics`
+  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。総合スコアは指定階層の `level_risk` から算出する。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする。`summary_scope = ListedDiagnostics`
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
-  - Given `--level function` かつ `--format json`, When 解析実行, Then `summary_scope = "listed_diagnostics"` となる
+  - Given `--level function` かつ `--format json`, When 解析実行, Then `summary_scope = "listed_diagnostics"` となり、`scores.module` と `scores.project` は `null` となる
 - **優先度**: Should
 - **出典**: ユーザー確認済み
 - **関連要件**: REQ-FUNC-018, REQ-FUNC-020
@@ -468,7 +475,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
 - **サマリー母集団**: `--level all`（デフォルト）では summary は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）
 - **受け入れ基準**:
-  - Given 解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
+  - Given `--level all` で解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
+  - Given `--level function` で解析完了, When 結果を出力, Then 総合スコア・関数階層スコア・重大度別診断件数が表示され、module/project のスコアは表示されない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 - **関連要件**: REQ-FUNC-011
@@ -532,10 +540,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-029: インラインコメントによる診断抑制
 
-- **説明**: ソースコード中に `// kalos-ignore` または `# kalos-ignore`（言語に応じた形式）のコメントを記述することで、当該行の診断を抑制する
+- **説明**: ソースコード中に `// kalos-ignore` または `# kalos-ignore`（言語に応じた形式）のコメントを記述することで、代表位置が一致する診断を抑制する。コメントが関数/class/module 宣言の直前行にあり、その間に空行や別コメントがない場合は、その宣言行を代表位置とする診断にも適用する。ルールID指定は exact match のみを許可する
 - **受け入れ基準**:
   - Given 関数の直前行に `// kalos-ignore[KAL-F001]`, When 診断実行, Then 当該関数の `KAL-F001` 診断は報告されない
-  - Given `// kalos-ignore`（ルールID指定なし）, When 診断実行, Then 当該行のすべての診断が抑制される
+  - Given `// kalos-ignore`（ルールID指定なし）, When 診断実行, Then 対象行または直後スコープに結び付くすべての診断が抑制される
 - **優先度**: Should
 - **出典**: ユーザー確認済み
 
@@ -589,7 +597,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - ベースラインが存在しない、互換でない、または影響範囲を安全に確定できない場合は全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
   - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は「変更後のプロジェクト全体」を意味し、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
-  - `--level function|module|project` の場合、総合スコアと重大度別件数は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする
+  - `--level function|module|project` の場合、総合スコアと重大度別件数は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする。`scores.overall` は指定階層の総合スコア、非対象階層の `scores.*` は `null` とする
   - フォールバック通知や bootstrap 通知などの運用メッセージは `stderr` にのみ出力し、`stdout` は要求された形式（human/json/sarif）を保つ
 - **受け入れ基準**:
   - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後のプロジェクト全体値として出力される
