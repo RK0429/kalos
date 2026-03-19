@@ -31,7 +31,7 @@
 
 ### 選択肢 B: `ExtractorPort` を定義し、初期アダプタとして CodeQL を採用する
 
-抽出エンジンはポート背後へ隠蔽し、`ExtractorPort` の出力契約を `SourceAnalysis`（`UnifiedCpg` + 抑制コメント + 解析警告を束ねる集約ルート）に固定する。
+抽出エンジンはポート背後へ隠蔽し、`ExtractorPort` の出力契約を `SourceAnalysis`（`UnifiedCpg` + `source_files` + 抑制コメント + 解析警告を束ねる集約ルート）に固定する。`source_files` は workspace-relative path をキーとする決定論的なソースファイルメタデータ対応表であり、下流コンテキストおよび LLM sidecar の `language` 解決の source of truth となる。
 
 - 利点:
   - CodeQL 前提を守りながら将来差し替え可能
@@ -57,7 +57,7 @@ Python/TS/Rust/Go で最適エンジンを変える。
 
 ## 根拠
 
-- CodeQL は初期実装として使うが、`ExtractorPort` の出力契約は `SourceAnalysis` に固定する。下流コンテキストは `SourceAnalysis` 内の `UnifiedCpg` を公開言語として参照する
+- CodeQL は初期実装として使うが、`ExtractorPort` の出力契約は `SourceAnalysis` に固定する。`SourceAnalysis` は `UnifiedCpg` に加え `source_files`（workspace-relative path をキーとし path 昇順で列挙される決定論的対応表）を含む。下流コンテキストは `SourceAnalysis` 内の `UnifiedCpg` を公開言語として参照し、LLM sidecar の `language` 解決は `source_files` を source of truth とする
 - 外部依存の型情報・シグネチャ解決も extractor 境界内の language-specific resolver adapters へ閉じ込め、依存定義・lockfile・ローカル stub / metadata だけで解決する。解決失敗は `SourceAnalysis.warnings` として下流へ渡す
 - CodeQL bundle は Managed Tool Cache Adapter が固定バージョン + SHA-256 検証付きで bootstrap / verify / cache し、CLI 利用者へ手動セットアップを要求しない（`REQ-FUNC-031`, `REQ-NF-009`）
 - GitHub Action は managed tool cache を prewarm / restore/save する wrapper に留め、bootstrap の正本は kalos CLI 側に置く

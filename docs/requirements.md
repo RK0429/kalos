@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.10 |
+| バージョン | 0.2.11 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -270,7 +270,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
 - **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
-- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
+- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
@@ -287,7 +287,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `participation = ScoredAndDiagnosable` な各メトリクスの `normalized_risk` をルールごとの閾値と比較し、違反をメトリクス診断として報告する
 - **入力**: メトリクス算出結果、ルールごとの閾値設定
 - **処理**: `participation = ScoredAndDiagnosable` な各メトリクスの `normalized_risk` を閾値と比較し、超過があれば `kind = "metric"` の診断オブジェクトを生成する。v1 の plugin metric（`participation = ReportOnly`）はメトリクス診断の対象外とする
-- **出力**: メトリクス診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` と、`metric` フィールド `{ metric_id, raw_value, normalized_risk, threshold, overflow_ratio }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。human 形式ではこの位置を `path:line` と表示し、SARIF では `startColumn` / `endColumn` を出力しない
+- **出力**: メトリクス診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` と、`metric` フィールド `{ metric_id, raw_value, normalized_risk, threshold, overflow_ratio }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は根拠 scope 群のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。human 形式ではこの位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
 - **受け入れ基準**:
   - Given 関数のCFGエントロピーが閾値を超過, When 診断実行, Then 当該関数の位置・ルールID・重大度・メトリクス値・閾値を含む診断が報告される
   - Given すべてのメトリクスが閾値内, When 診断実行, Then 診断は0件で正常終了する
@@ -310,7 +310,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `KAL-PAT001` は `--level all` または `--level module` のときのみ評価し、`PatternEvidence.evidence_scopes` には対象 owner scope を `ScopeId(level = Module)` として格納する
   - `public_member_count` は TypeScript では対象 class の public メソッド・public フィールド数（constructor, private, protected を除く）とし、Python では class body へ直接宣言されたメンバーのうち論理名が `_` で始まらない public method・class attribute・property descriptor 数を数える。Python の public method には `@property` / `@cached_property` / setter / deleter を含めず、property 系は public field 相当として 1 件だけ数える。Python の `__init__` と dunder method は除外し、メソッド本体内で初めて代入される instance attribute は数えない。Rust では対象 module/file root 直下の `pub` な top-level item 数、Go では対象 package 直下の exported top-level declaration 数とする
   - `foreign_accesses` は「現在の関数が所属する owner scope（class / module / package）以外」への参照・呼び出し数、`local_accesses` は同一 owner scope 内への参照・呼び出し数とする。Python/TypeScript の `self` / `this`、Rust の `self` / `Self` / 同一 module 内 item、Go の同一 package 内識別子参照は local に数える
-- **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。PAT001 の `M-F002` 平均は対象 owner scope 配下関数の既算出結果から求める。human 形式では `column = null` を `path:line` と表示し、SARIF では `startColumn` / `endColumn` を出力しない
+- **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。PAT001 の `M-F002` 平均は対象 owner scope 配下関数の既算出結果から求める。human 形式では `column = null` の位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
 - **受け入れ基準**:
   - Given 過度に多くの責務を持つ module owner scope, When `--level module` または `--level all` で診断実行, Then `KAL-PAT001` として検出される
   - Given モジュール依存グラフに循環がある, When 診断実行, Then `KAL-PAT003` として検出される
@@ -374,7 +374,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `kalos check [<path>...]` で対象パスを解析する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
 - **入力**: 0 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数。位置引数を省略した場合はカレントディレクトリ `.` を暗黙の単一対象とする
 - **一覧・summary・exit code の母集団**:
-  - 診断一覧: full mode では全診断、diff mode では `AffectedScopeSet` に属する診断のみ
+  - 診断一覧: full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
   - `--level all`（デフォルト）では、summary と exit code は「変更後プロジェクト全体」の診断集合を母集団とする
   - `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
@@ -429,6 +429,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
 - **最低限のJSON契約**:
   - ルートには `schema_version`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
+  - `schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
   - `analysis_targets` は CLI で受け取った解析対象 path 群を Configuration が `WorkspaceRoot` 基準で正規化・検証した配列とし、入力順を保持する。位置引数省略時のデフォルト `.` も同様に正規化する。単一 target の場合も配列で表現する
   - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含めてよいが、v1 のプラグインメトリクスは report-only であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
@@ -450,7 +451,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **SARIF への写像方針**:
   - **ルール**: 各 `Diagnostic.rule_id` を `run.tool.driver.rules[]` に登録する。`rules[].id` は `rule_id`（例: `KAL-F001`）、`rules[].shortDescription.text` はルール名称、`rules[].defaultConfiguration.level` はデフォルト重大度の SARIF level 写像とする。`result.ruleId` で当該ルールを参照し、`result.ruleIndex` でインデックスを指定する
   - **重大度**: `Diagnostic.severity` を `result.level` へ写像する。`error` → `"error"`、`warning` → `"warning"`、`info` → `"note"` とする
-  - **位置**: `Diagnostic.location` を `result.locations[].physicalLocation` へ写像する。`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` は `location.line`、`region.endLine` は `location.end_line` とする。`location.column` が非 `null` の場合は `region.startColumn` を出力し、`location.column = null` の場合は `startColumn` / `endColumn` を出力しない
+  - **位置**: `Diagnostic.location` を `result.locations[].physicalLocation` へ写像する。`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` は `location.start_line`、`region.endLine` は `location.end_line` とする。`location.column` が非 `null` の場合は `region.startColumn` を出力し、`location.column = null` の場合は `startColumn` / `endColumn` を出力しない
   - **メッセージ**: `Diagnostic.message` は常に `result.message.text` へ格納する
   - **改善提案**: `template_suggestion` は常に `result.properties.kalos.template_suggestion` へ格納する。`llm_suggestion` が存在する場合は `result.properties.kalos.llm_suggestion` に格納する
 - **受け入れ基準**:
@@ -578,7 +579,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-029: インラインコメントによる診断抑制
 
-- **説明**: ソースコード中に `// kalos-ignore` または `# kalos-ignore`（言語に応じた形式）のコメントを記述することで、代表位置が一致する診断を抑制する。コメントが関数/class/module 宣言の直前行にあり、その間に空行や別コメントがない場合は、その宣言行を代表位置とする診断にも適用する。ルールID指定は exact match のみを許可する。cross-scope 診断の synthetic な代表位置（`line = 1`, `column = null`）にはインライン抑制を適用しない
+- **説明**: ソースコード中に `// kalos-ignore` または `# kalos-ignore`（言語に応じた形式）のコメントを記述することで、代表位置が一致する診断を抑制する。コメントが関数/class/module 宣言の直前行にあり、その間に空行や別コメントがない場合は、その宣言行を代表位置とする診断にも適用する。ルールID指定は exact match のみを許可する。cross-scope 診断の synthetic な代表位置（`start_line = 1`, `column = null`）にはインライン抑制を適用しない
 - **受け入れ基準**:
   - Given 関数の直前行に `// kalos-ignore[KAL-F001]`, When 診断実行, Then 当該関数の `KAL-F001` 診断は報告されない
   - Given `// kalos-ignore`（ルールID指定なし）, When 診断実行, Then 対象行または直後スコープに結び付くすべての診断が抑制される
@@ -792,6 +793,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.11 | 2026-03-19 | `Diagnostic.location` のフィールド名を `start_line`/`end_line`/`column` に統一、full mode の診断完全性を「選択された --level に関して完全」へ明確化、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | `kalos check` の位置引数省略時デフォルト `.` を明記、`analysis_targets` の正規化・検証責務を Configuration に一本化、SARIF の rule/severity/location 写像を拡充、stray `API` 表記を除去、メタ情報バージョンを同期 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 正規化基準、diff fallback 条件のトレーサビリティを補強 | Codex |
 | 0.2.8 | 2026-03-19 | `scores.overall` の metrics 起源、summary との責務分離、plugin checksum 構文検証を明文化 | Codex |

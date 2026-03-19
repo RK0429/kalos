@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.10 |
+| バージョン | 0.2.11 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.10, domain_model.md v0.2.10 |
+| 入力 | requirements.md v0.2.11, domain_model.md v0.2.11 |
 
 ## 1. 設計目標
 
@@ -216,11 +216,11 @@ CPG Extraction
 - `ReportViewOptions.minimum_severity` は診断一覧の表示/出力対象だけを絞り込み、`DiagnosticReport.summary` と exit code の計算母集団は変えない
 - `Application Pipeline` は `--strict` を `DiagnosticReport.determine_exit_code(strict)` へ渡すだけで、`Diagnostic.severity` や `DiagnosticReport.summary` を変更しない
 - SARIF writer は `Diagnostic.rule_id` を `run.tool.driver.rules[]` と `result.ruleId` / `result.ruleIndex` へ写像し、`Diagnostic.severity` を `result.level`（`error` → `error`, `warning` → `warning`, `info` → `note`）へ写像する
-- SARIF writer は `Diagnostic.location` を `result.locations[].physicalLocation` へ写像し、`artifactLocation.uri` には `WorkspaceRoot` 相対パス、`region.startLine` / `endLine` には `location.line` / `end_line` を使う。`location.column` が `None` の診断では `startColumn` / `endColumn` を出力しない
+- SARIF writer は `Diagnostic.location` を `result.locations[].physicalLocation` へ写像し、`artifactLocation.uri` には `WorkspaceRoot` 相対パス、`region.startLine` / `endLine` には `location.start_line` / `end_line` を使う。`location.column` が `None` の診断では `startColumn` / `endColumn` を出力しない
 - SARIF writer は `Diagnostic.message` → `result.message.text`、`template_suggestion` → `result.properties.kalos.template_suggestion`、`llm_suggestion`（存在する場合）→ `result.properties.kalos.llm_suggestion` の固定写像を用いる
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
-- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う
+- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。各 plugin metric は `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う
 - `Configuration` は `--config` 指定時の `WorkspaceRoot` 解決、CLI path 引数から `analysis_targets` への正規化（省略時は `["."]`）、`analysis_targets` と plugin `path` の `WorkspaceRoot` 内包性検証、`sha256` 構文検証を行い、違反時は設定/入力エラー（exit code 2）として処理する。`Plugin Host` は解決済み `plugin_manifest` だけを受け取り、ファイル読込失敗・checksum 不一致・SPI 不一致・`metric_id` 衝突・タイムアウト・メモリ超過・aggregate budget 超過を warning + skip として扱う
 - `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
@@ -339,6 +339,7 @@ sequenceDiagram
 - full mode の `diagnostics_scope = whole_project` は「選択された `--level` に関する診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
+- `ReportMetadata.schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
 - `--diff` の最適化が有効な実行では `Impact Analysis Service` が `Project` scope を `recompute_scopes` に必ず含め、project-level metrics と `scores.overall` / `scores.project` を post-change 状態から再構成する
 - `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
 
@@ -561,6 +562,7 @@ plugin aggregate budget（全解析 `3s` / 差分 `0.5s`）は、それぞれ Me
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.11 | 2026-03-19 | `Diagnostic.location` フィールド名を `start_line`/`end_line`/`column` に統一、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | `analysis_targets` 正規化の owner を Configuration へ移動、CLI path 省略時のデフォルト `["."]` を明記、SARIF の rule/severity/location/message 写像規則を同期 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 解決、`analysis_targets` 検証 owner、plugin load order、diff fallback 条件を同期 | Codex |
 | 0.2.8 | 2026-03-19 | `scores.overall` と summary の責務分離、project scope 再計算、subset diff fallback、plugin 検証境界、`schema_version` メタデータを反映 | Codex |

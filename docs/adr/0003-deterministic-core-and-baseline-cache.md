@@ -50,9 +50,9 @@ kalos は同時に以下を満たす必要がある。
 ## 根拠
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
-- `scores.overall` は常にメトリクス集約結果を表し、`WholeProject` / `ListedDiagnostics` は summary と exit code の母集団だけを規定する。`WholeProject` summary は `--level all` のときだけ使い、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
+- `scores.overall` は常にメトリクス集約結果を表し、`WholeProject` / `ListedDiagnostics` は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `WholeProject`、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
-  - `workspace_root_hash`: Configuration が `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
+  - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
   - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
 - `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ
@@ -60,9 +60,10 @@ kalos は同時に以下を満たす必要がある。
 - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
 - `kalos_version`: kalos バイナリ自体の版
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけで、保存範囲は変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
-- `analysis_targets` でサブセットを指定した実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された target 群に対する non-diff 全解析へフォールバックする
+- ベースラインの **永続化対象は全ワークスペース解析に限定** する。`analysis_targets` が全ワークスペースの部分集合である実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
+- `InvalidationPlan.fallback_to_full` は次の場合に `true` となる: `analysis_targets` が全ワークスペースの部分集合で diff 最適化を適用できない、ベースライン不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない
 - コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
 
 ## 帰結
@@ -80,7 +81,7 @@ kalos は同時に以下を満たす必要がある。
 - 設定変更やプラグイン差し替えで再計算が増える
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree hash であり、取得元が曖昧だと再利用判定が壊れるため、`git rev-parse <base-ref>^{tree}` 相当の取得方法を実装で固定する必要がある
 - checkout path が実行ごとに変わる CI では `workspace_root_hash` によりキャッシュヒット率が下がる。再利用は best-effort とし、ヒット率を重視する環境では checkout path を安定化させ、baseline cache を restore/save する運用が必要
-- 保存不変条件により、`--level` 限定実行や `analysis_targets` サブセット実行ではベースラインが生成されない。CI で差分解析のベースラインを蓄積するには、定期的な `--level all` の全ワークスペース解析（nightly ビルド等）が必要となる
+- 保存不変条件により、`analysis_targets` サブセット実行ではベースラインが生成されない。`--level` 限定実行でも全ワークスペース解析であればベースラインは生成できるが、CI で差分解析のベースラインを安定運用するには、定期的な全ワークスペース解析（nightly ビルド等）が必要となる
 
 ### リスク
 

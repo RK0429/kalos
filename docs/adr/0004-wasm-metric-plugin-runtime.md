@@ -52,15 +52,15 @@
 
 - kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
-- ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
+- ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は各 plugin metric を `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
 - Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、`metric_id` のグローバル一意性を検証する。組み込みメトリクスまたは先行ロード済みプラグインと `metric_id` が衝突したモジュールは deterministic なロード失敗として扱い、warning を出してスキップする
-- プラグインファイル読込失敗、checksum 不一致、SPI プロファイル不一致、`metric_id` 衝突、タイムアウト、メモリ超過は warning + skip とし、当該プラグインのみを失敗させる。aggregate budget 超過時は残りプラグインを warning 付きでスキップする。いずれも `stderr` / 構造化ログへ運用警告を出し、v1 の診断・スコア・Exit code 契約は変更しない
+- プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、`metric_id` 衝突、タイムアウト、メモリ超過は warning + skip とし、当該プラグインのみを失敗させる。aggregate budget 超過時は残りプラグインを warning 付きでスキップする。いずれも `stderr` / 構造化ログへ運用警告を出し、v1 の診断・スコア・Exit code 契約は変更しない
 - `REQ-NF-003` を守るため、評価 SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
 - 実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を既定上限として適用する
-- **v1 SPI 互換性契約**: Plugin Host は SPI プロファイル `kalos-metric-spi-v1` を定義する。WASM モジュールは custom section `kalos_spi_version` にプロファイル名（例: `kalos-metric-spi-v1`）を宣言する。ホストはロード時にこの値を検証し、以下の規則で互換性を判定する
-  - プロファイル名が完全一致する場合のみロードを許可する
+- **v1 SPI 互換性契約**: Plugin Host は SPI version `kalos-metric-spi-v1` を定義する。WASM モジュールは custom section `kalos_spi_version` に SPI version 文字列（例: `kalos-metric-spi-v1`）を宣言する。ホストはロード時にこの値を検証し、以下の規則で互換性を判定する
+  - SPI version が完全一致する場合のみロードを許可する
   - custom section が存在しない、または値が不一致の場合はロード失敗として扱い、当該プラグインの評価をスキップする。運用警告を `stderr` / 構造化ログへ出力し、v1 の診断・スコア・Exit code 契約には影響させない
-  - SPI プロファイルの更改（`kalos-metric-spi-v2` 等）はバイナリ互換を保証しない破壊的変更として扱い、新規 ADR で決定する
+  - SPI version の更改（`kalos-metric-spi-v2` 等）はバイナリ互換を保証しない破壊的変更として扱い、新規 ADR で決定する
 - 組み込みメトリクスは引き続きネイティブ実装とし、高頻度パスの性能を守る
 
 ## 帰結
@@ -77,7 +77,7 @@
 
 ### ネガティブ
 
-- SPI プロファイル `kalos-metric-spi-v1` の保守が必要であり、破壊的変更時は新プロファイルと移行計画を ADR で決定する
+- SPI version `kalos-metric-spi-v1` の保守が必要であり、破壊的変更時は新 SPI version と移行計画を ADR で決定する
 - 実行性能の測定が不可欠
 - プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが `WorkspaceRoot` 基準の `plugin_manifest` へ正規化する）
 - タイムアウト、メモリ上限、aggregate budget 超過時のプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る。v1 の診断・スコア・Exit code は既存契約のまま維持する

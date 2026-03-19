@@ -48,9 +48,9 @@
 
 - `REQ-NF-008` の「LLM 非応答でも全体可用性を維持」を満たすには、テンプレート提案を正本とする必要がある
 - `REQ-NF-003` を守るため、スコア・重大度・Exit code はテンプレート側だけで確定させる
-- LLM への入力は application/report 境界で組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する代表ファイルのメタデータから解決し、必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
+- LLM への入力は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` と `cpg_excerpt` は request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
 - LLM 出力は `DiagnosticId` ごとの `LlmSuggestionBundle` として report 層で併記し、`DiagnosticReport` 自体は変更しない
-- LLM は optional sidecar budget（`connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`）で実行し、タイムアウト・非応答・言語解決不能時、または multi-file / multi-language 診断の根拠を代表ファイル断片へ還元できない時は `llm_suggestion` を省略してテンプレート提案のみ返す
+- LLM は optional sidecar budget（`connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`）で実行し、タイムアウト・非応答・`SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合は `LlmEnrichmentRequest` 自体を生成せず、`llm_suggestion` を省略してテンプレート提案のみ返す
 
 ## 帰結
 
