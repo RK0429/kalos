@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.7 |
+| バージョン | 0.2.8 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -256,6 +256,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   6. `overall_risk = Σ(adjusted_weight[level] * level_risk[level])`
   7. `function_score`, `module_score`, `project_score`, `overall_score` はそれぞれ `round_half_up(100 * (1 - risk))` で整数化する
   8. `--level function|module|project` により非対象階層が未計算の場合、対応する `*_risk` / `*_score` は省略可能とし、機械可読出力では `null` に写像する
+  9. `overall_score` と各階層スコアは常に上記メトリクス集約の結果であり、`summary_scope`・診断件数・exit code 判定から逆算しない
 
 - **出力**: 総合スコア（0〜100 の整数）および各階層の部分スコア
 - **受け入れ基準**:
@@ -269,7 +270,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
 - **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
-- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。ロード失敗、checksum 不一致、SPI version 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
+- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
@@ -418,7 +419,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given 端末がカラー対応, When human形式で出力, Then 重大度に応じた色分けが適用される（error: 赤, warning: 黄, info: 青）
   - Given cross-scope 診断で `location.column = null`, When human形式で出力, Then synthetic な列番号は補完せず `path:line` 形式で表示される
   - Given `--level all`（デフォルト）で解析完了, When human形式で出力, Then 末尾に変更後プロジェクト全体の総合スコアサマリーと重大度別件数が表示される
-  - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベル診断のみを母集団とした総合スコアサマリーと重大度別件数が表示され、module/project のスコアは表示されない
+  - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベルメトリクスから算出した総合スコアと、関数レベル診断のみを母集団とした重大度別件数が表示され、module/project のスコアは表示されない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -431,7 +432,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含めてよいが、v1 のプラグインメトリクスは report-only であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
-  - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に 0〜100 の整数、`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
+  - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に REQ-FUNC-011 に従うメトリクス集約済みの 0〜100 の整数であり、`summary` や診断件数から逆算しない。`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
   - `diagnostics_scope` は `whole_project | affected_only`、`summary_scope` は `whole_project | listed_diagnostics` とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
@@ -481,7 +482,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `--level` オプションで解析対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline が指定階層のメトリクス算出・診断生成のみを実行する。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = WholeProject`
-  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）は内部的に算出し、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする。`summary_scope = ListedDiagnostics`
+  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）は内部的に算出し、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = ListedDiagnostics` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
@@ -493,7 +494,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-024: 総合スコアサマリーの表示
 
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
-- **サマリー母集団**: `--level all`（デフォルト）では summary は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）
+- **サマリー母集団**: `--level all`（デフォルト）では summary は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。表示される総合スコア自体は REQ-FUNC-011 のメトリクス集約結果を用いる
 - **受け入れ基準**:
   - Given `--level all` で解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
   - Given `--level function` で解析完了, When 結果を出力, Then 総合スコア・関数階層スコア・重大度別診断件数が表示され、module/project のスコアは表示されない
@@ -529,7 +530,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   path = ".kalos/plugins/halstead.wasm"
   sha256 = "4f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d2f9d"
   ```
-- **設定値の検証**: `score.weights.*` は `> 0.0` かつ有限、`rules.<RuleId>.threshold` は `[0.0, 1.0]` の閉区間、`rules.<RuleId>.severity` は `error | warning | info` のいずれかでなければならない。検証失敗時は設定エラーとして exit code 2 で終了する
+- **設定値の検証**: `score.weights.*` は `> 0.0` かつ有限、`rules.<RuleId>.threshold` は `[0.0, 1.0]` の閉区間、`rules.<RuleId>.severity` は `error | warning | info` のいずれか、`plugins[*].sha256` は 64 文字の16進文字列でなければならない。検証失敗時は設定エラーとして exit code 2 で終了する
 - **受け入れ基準**:
   - Given `.kalos.toml` が存在, When 解析実行, Then 設定ファイルの内容がルール・閾値に反映される
   - Given 親ディレクトリに `.kalos.toml` が存在, When 解析実行, Then その親ディレクトリが `WorkspaceRoot` として採用され、内部パスはすべてそこからの相対パスに正規化される
@@ -626,19 +627,20 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **入力**: `--diff <base-ref>` オプション（例: `--diff HEAD~1`, `--diff main`）と、互換なベースラインキャッシュ（任意）
 - **処理**:
   - 指定された `base-ref` からの変更ファイルを特定し、当該ファイルのみを再抽出する
-  - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する
+  - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する。diff 最適化が有効な実行では `Project` scope を常に再計算対象へ含め、project-level metrics と `scores.overall` / `scores.project` を stale な baseline 断片からそのまま流用してはならない
   - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する。ベースラインの互換性は `BaselineFingerprint`（`workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash`、`rule_catalog_version`、`extractor_version`、`kalos_version`）の完全一致で判定する
   - ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。これにより、異なる `--level` での実行間でもベースラインを再利用できる
-  - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も互換とはみなさない
-  - ベースラインが存在しない、互換でない、または影響範囲を安全に確定できない場合は全解析へフォールバックする
+  - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff の全解析へフォールバックする
+  - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff の全解析へフォールバックする
   - baseline cache の再利用は best-effort とし、checkout path が変わる CI や cache 未復元環境では correctness を優先して全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
   - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は「変更後のプロジェクト全体」を意味し、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
-  - `--level function|module|project` の場合、総合スコアと重大度別件数は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする。`scores.overall` は指定階層の総合スコア、非対象階層の `scores.*` は `null` とする
+  - `--level function|module|project` の場合、重大度別件数と exit code は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする。`scores.overall` は post-change 状態の指定階層メトリクスから算出した総合スコア、非対象階層の `scores.*` は `null` とする
   - フォールバック通知や bootstrap 通知などの運用メッセージは `stderr` にのみ出力し、`stdout` は要求された形式（human/json/sarif）を保つ
 - **受け入れ基準**:
   - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後のプロジェクト全体値として出力される
   - Given `--diff HEAD~1 --level function` と互換なベースライン, When 解析実行, Then 関数レベルの影響範囲診断のみが一覧に含まれ、機械可読出力の `summary_scope` は `"listed_diagnostics"` となる
+  - Given `--diff HEAD~1 src/foo.rs` のように `analysis_targets` が部分集合, When 解析実行, Then baseline は read/write されず、要求された target 群に対する non-diff 全解析へフォールバックする
   - Given `--diff HEAD~1` だがベースラインが存在しない, When 解析実行, Then 全解析にフォールバックし、その旨が `stderr` に明示される
 - **優先度**: Should
 - **出典**: ユーザー確認済み + 2026-03-19 設計判断
@@ -783,6 +785,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.8 | 2026-03-19 | `scores.overall` の metrics 起源、summary との責務分離、plugin checksum 構文検証を明文化 | Codex |
 | 0.2.7 | 2026-03-19 | plugin `metric_id` 衝突契約、cross-scope 診断の表示/抑制規則、SARIF 写像の固定を明文化 | Codex |
 | 0.2.6 | 2026-03-19 | score.weights/threshold の検証規則、KAL-PAT001 の --level module 動作、ベースライン互換性（analysis_targets_hash・全階層保存）を明文化 | Claude |
 | 0.2.5 | 2026-03-19 | 外部シンボル解決のローカル入力契約、managed bundle manifest の正本、配布契約を明文化 | Codex |

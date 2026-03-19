@@ -50,7 +50,7 @@ kalos は同時に以下を満たす必要がある。
 ## 根拠
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
-- `WholeProject` summary は `--level all` のときだけ使い、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
+- `scores.overall` は常にメトリクス集約結果を表し、`WholeProject` / `ListedDiagnostics` は summary と exit code の母集団だけを規定する。`WholeProject` summary は `--level all` のときだけ使い、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
   - `workspace_root_hash`: Configuration が `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
@@ -60,8 +60,9 @@ kalos は同時に以下を満たす必要がある。
 - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
 - `kalos_version`: kalos バイナリ自体の版
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけで、保存範囲は変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
-- `analysis_targets` でサブセットを指定した実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない
+- `analysis_targets` でサブセットを指定した実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された target 群に対する non-diff 全解析へフォールバックする
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む
+- diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
 - コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
 
 ## 帰結
