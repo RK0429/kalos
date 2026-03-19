@@ -6,7 +6,7 @@
 
 ## コンテキスト
 
-要件では、ユーザーが独自メトリクスを追加できる拡張機構が求められている。v1 ではユーザー入力面は `.kalos.toml` の `[[plugins]] { path, sha256 }` とし、そこから解決した内部表現 `plugin_manifest` を Plugin Host の正本とする。外部の配布パッケージ形式は将来拡張へ残す。
+要件では、ユーザーが独自メトリクスを追加できる拡張機構が求められている。v1 ではユーザー入力面は `.kalos.toml` の `[[plugins]] { path, sha256 }` とし、`path` は解決済み `WorkspaceRoot` 基準で解釈する。そこから解決した内部表現 `plugin_manifest` を Plugin Host の正本とする。外部の配布パッケージ形式は将来拡張へ残す。
 
 - `REQ-FUNC-012`
 - `REQ-NF-006`
@@ -50,9 +50,10 @@
 
 ## 根拠
 
-- kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
-- ホストが渡すのは `CpgSubgraph` の安定ビューと `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB` を既定上限として適用する
-- `REQ-NF-003` を守るため、プラグイン SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
+- kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
+- ホストが渡すのは additive-only な `CpgSubgraph` の安定ビューと `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
+- `REQ-NF-003` を守るため、評価 SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
+- 実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では `aggregate_wall_time_budget = 12s`（全解析）/ `2s`（diff mode）を既定上限として適用する
 - 組み込みメトリクスは引き続きネイティブ実装とし、高頻度パスの性能を守る
 
 ## 帰結
@@ -65,13 +66,14 @@
 - 決定論的な評価経路に外部プラグインを載せても、純粋関数契約で再現性を維持できる
 - kalos 本体の単一バイナリ配布（ADR-0001）を崩さずにプラグイン拡張を提供できる
 - 時間・メモリ上限を契約化することで `REQ-NF-001/002` との整合を説明しやすい
+- v1 は report-only metric に限定することで、RuleId / score / exit code 契約を増やさずに拡張点を提供できる
 
 ### ネガティブ
 
 - プラグイン ABI/SPI の設計と保守が必要
 - 実行性能の測定が不可欠
-- プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが内部の `plugin_manifest` へ正規化する）
-- タイムアウトやメモリ上限を超えたプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価のみを打ち切る。診断・スコア・Exit code は既存契約のまま維持する
+- プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが `WorkspaceRoot` 基準の `plugin_manifest` へ正規化する）
+- タイムアウト、メモリ上限、aggregate budget 超過時のプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る。v1 の診断・スコア・Exit code は既存契約のまま維持する
 
 ### リスク
 

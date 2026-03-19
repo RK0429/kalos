@@ -48,9 +48,9 @@
 
 - `REQ-NF-008` の「LLM 非応答でも全体可用性を維持」を満たすには、テンプレート提案を正本とする必要がある
 - `REQ-NF-003` を守るため、スコア・重大度・Exit code はテンプレート側だけで確定させる
-- LLM への入力は application/report 境界で組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する代表ファイルのメタデータから解決する
+- LLM への入力は application/report 境界で組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する代表ファイルのメタデータから解決し、必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
 - LLM 出力は `DiagnosticId` ごとの `LlmSuggestionBundle` として report 層で併記し、`DiagnosticReport` 自体は変更しない
-- LLM は optional sidecar budget（`connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`）で実行し、タイムアウト・非応答・言語解決不能時は `llm_suggestion` を省略してテンプレート提案のみ返す
+- LLM は optional sidecar budget（`connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`）で実行し、タイムアウト・非応答・言語解決不能時、または multi-file / multi-language 診断の根拠を代表ファイル断片へ還元できない時は `llm_suggestion` を省略してテンプレート提案のみ返す
 
 ## 帰結
 

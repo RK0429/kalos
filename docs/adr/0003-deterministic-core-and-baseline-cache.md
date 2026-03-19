@@ -52,7 +52,7 @@ kalos は同時に以下を満たす必要がある。
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
 - `WholeProject` summary は `--level all` のときだけ使い、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 6 要素で決定する
-  - `workspace_root_hash`: ワークスペースルートディレクトリの正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
+  - `workspace_root_hash`: Configuration が `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
   - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
   - `rule_catalog_version`: 組み込みルールカタログの版

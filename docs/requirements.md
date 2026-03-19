@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.1 |
+| バージョン | 0.2.2 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -76,6 +76,8 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | 改善提案 | 診断に対する具体的な修正方針のテキスト。何が問題か、なぜ問題か、どう改善すべきかを記述する |
 | ルール | 特定のメトリクスまたはパターンと閾値、重大度、提案テンプレートの組み合わせ。一意のルールID（`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式）で識別される |
 | 総合スコア | 各階層の正規化リスク値（0.0〜1.0, 高いほど悪い）を重み付き集約し、`100 * (1 - overall_risk)` で算出する品質スコア |
+| ワークスペースルート | kalos が解析の基準ディレクトリとして解決するルート。カレントディレクトリから親方向に探索して最初に見つかった `.kalos.toml` の親ディレクトリを優先し、見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらもなければ実行時カレントディレクトリを採用する |
+| ワークスペース相対パス | ワークスペースルート基準で正規化されたパス。内部 `FilePath`、`plugin_manifest` のプラグイン参照、LLM sidecar の `workspace_relative_path` はこの形式を用いる |
 | 統一CPG表現 | 4言語のCPGを言語非依存な共通構造と言語固有の拡張ノードで表現する内部データ構造 |
 | CodeQL | GitHub が開発するコード解析エンジン。ソースコードをデータベース化し、クエリ言語でコードプロパティを検索・抽出できる |
 | SARIF | Static Analysis Results Interchange Format。静的解析ツールの結果を表現するJSON形式の標準規格（OASIS標準） |
@@ -114,9 +116,9 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 #### REQ-FUNC-003: Rust ソースからのCPG生成
 
-- **説明**: Rust ソースファイルを解析し、統一CPG表現に変換する。所有権・借用・ライフタイム等のRust固有概念を拡張ノードとして保持する
+- **説明**: Rust ソースファイルを解析し、統一CPG表現に変換する。所有権・借用・ライフタイム等のRust固有概念を拡張ノードおよび semantic edge metadata として保持する
 - **入力**: Rust ソースファイル（`.rs`）
-- **処理**: REQ-FUNC-001 と同様の処理フロー。Rust固有の所有権モデルを拡張ノードとして保持する
+- **処理**: REQ-FUNC-001 と同様の処理フロー。Rust固有の所有権モデルを拡張ノードおよび semantic edge metadata として保持する
 - **出力**: 統一CPGデータ構造
 - **前提条件**: ソースが構文的に有効であること
 - **例外**: REQ-FUNC-001 と同様
@@ -202,10 +204,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **出典**: ユーザー明示 + 2026-03-19 設計判断
 - **関連要件**: REQ-NF-003
 
-#### REQ-FUNC-009: モジュール/ファイルレベルメトリクスの算出
+#### REQ-FUNC-009: モジュールレベルメトリクスの算出
 
-- **説明**: CPG のモジュール/ファイルサブグラフに対して、v1 で固定したモジュールレベルメトリクスを算出する
-- **入力**: 統一CPGのモジュールサブグラフ
+- **説明**: CPG のモジュール owner scope サブグラフに対して、v1 で固定したモジュールレベルメトリクスを算出する
+- **入力**: 統一CPGのモジュール owner scope サブグラフ（Python/TypeScript は class、Rust は named module / file root module、Go は package）
 - **処理**: v1 では以下の 3 メトリクスを必ず算出する
 
   | MetricId | RuleId | 名称 | `raw_value` | `normalized_risk` | デフォルト閾値 |
@@ -243,7 +245,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: 関数・モジュール・プロジェクトの各階層メトリクスを集約し、0〜100 の総合スコアを算出する
 - **入力**: 全階層のメトリクス算出結果
 - **処理**:
-  1. 各スコープの `scope_risk` を、そのスコープに属する `normalized_risk` の算術平均として算出する
+  1. 各スコープの `scope_risk` を、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均として算出する
   2. 各階層の `level_risk` を、その階層に属する `scope_risk` の算術平均として算出する。プロジェクト階層は単一スコープなので、その `scope_risk` をそのまま用いる
   3. デフォルト重みは `function: 0.4`, `module: 0.35`, `project: 0.25` とし、設定ファイルで上書き可能とする
   4. ある階層にスコープが 0 件の場合、その階層の重みは残る階層へ比例再配分する
@@ -263,12 +265,13 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-012: メトリクス定義のプラグイン拡張
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
-- **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（`path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
-- **処理**: Configuration は `.kalos.toml` のプラグイン登録を正規化し、repo-relative path と checksum から決定論的な `plugin_manifest` を解決する。Plugin Host は登録済みプラグインを組み込みメトリクスと同じパイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB` を適用し、ネットワーク・ファイル書込を禁止する。ロード失敗、checksum 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、`stderr` と構造化ログへ運用警告を出す。失敗したプラグインはその実行で `MetricValue` を返さず、診断・総合スコア・exit code には影響させない
+- **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
+- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。Plugin Host はロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では `aggregate_wall_time_budget = 12s`（全解析）/ `2s`（diff mode）を適用し、ネットワーク・ファイル書込を禁止する。ロード失敗、checksum 不一致、タイムアウト、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない
 - **受け入れ基準**:
-  - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが組み込みメトリクスと同様に算出・報告される
+  - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
   - Given プラグインのロードまたは検証に失敗, When 解析実行, Then 当該失敗は運用警告として記録されるだけで、既存の診断・総合スコア・exit code の契約は変わらない
+  - Given aggregate plugin budget を使い切った, When 解析実行, Then 残りのプラグイン評価は warning 付きでスキップされ、コア評価は継続する
 - **優先度**: Should
 - **出典**: ユーザー確認済み（当初Couldだったが、ユーザーの要望でShouldに昇格）
 
@@ -276,9 +279,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-013: メトリクス閾値違反の診断報告
 
-- **説明**: 各メトリクスの `normalized_risk` をルールごとの閾値と比較し、違反をメトリクス診断として報告する
+- **説明**: `participation = ScoredAndDiagnosable` な各メトリクスの `normalized_risk` をルールごとの閾値と比較し、違反をメトリクス診断として報告する
 - **入力**: メトリクス算出結果、ルールごとの閾値設定
-- **処理**: 各メトリクスの `normalized_risk` を閾値と比較し、超過があれば `kind = "metric"` の診断オブジェクトを生成する
+- **処理**: `participation = ScoredAndDiagnosable` な各メトリクスの `normalized_risk` を閾値と比較し、超過があれば `kind = "metric"` の診断オブジェクトを生成する。v1 の plugin metric（`participation = ReportOnly`）はメトリクス診断の対象外とする
 - **出力**: メトリクス診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` と、`metric` フィールド `{ metric_id, raw_value, normalized_risk, threshold, overflow_ratio }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる
 - **受け入れ基準**:
   - Given 関数のCFGエントロピーが閾値を超過, When 診断実行, Then 当該関数の位置・ルールID・重大度・メトリクス値・閾値を含む診断が報告される
@@ -294,14 +297,14 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
   | RuleId | パターン | 対象 | 検出条件 | デフォルト重大度 |
   |---|---|---|---|---|
-  | `KAL-PAT001` | God Unit | `AnalysisLevel.Module` の owner scope（Python/TypeScript は class、Rust は named module または file root module、Go は file） | 対象 owner scope が `public_member_count >= 20` かつ `fan_out >= 8` かつ配下関数の `M-F002` 平均 `>= 0.50` | `warning` |
+  | `KAL-PAT001` | God Unit | `AnalysisLevel.Module` の owner scope（Python/TypeScript は class、Rust は named module または file root module、Go は package） | 対象 owner scope が `public_member_count >= 20` かつ `fan_out >= 8` かつ配下関数の `M-F002` 平均 `>= 0.50` | `warning` |
   | `KAL-PAT002` | Feature Envy | 関数 | 外部オブジェクト/モジュールへの参照数が 5 以上かつ `foreign_accesses / (foreign_accesses + local_accesses) >= 0.70` | `warning` |
   | `KAL-PAT003` | Circular Dependency | モジュール依存グラフ | SCC のサイズが 2 以上 | `error` |
 
 - **言語別の計数規則**:
   - `KAL-PAT001` は `--level all` または `--level module` のときのみ評価し、`PatternEvidence.evidence_scopes` には対象 owner scope を `ScopeId(level = Module)` として格納する
-  - `public_member_count` は Python/TypeScript では対象 class の public メソッド・public フィールド数（constructor, private, protected を除く）、Rust では対象 module/file root 直下の `pub` な top-level item 数、Go では対象 file 直下の exported top-level declaration 数とする
-  - `foreign_accesses` は「現在の関数が所属する owner scope（class / module / file）以外」への参照・呼び出し数、`local_accesses` は同一 owner scope 内への参照・呼び出し数とする。Python/TypeScript の `self` / `this`、Rust の `self` / `Self` / 同一 module 内 item、Go の同一 file 内識別子参照は local に数える
+  - `public_member_count` は TypeScript では対象 class の public メソッド・public フィールド数（constructor, private, protected を除く）とし、Python では class body へ直接宣言されたメンバーのうち論理名が `_` で始まらない public method・class attribute・property descriptor 数を数える。Python の public method には `@property` / `@cached_property` / setter / deleter を含めず、property 系は public field 相当として 1 件だけ数える。Python の `__init__` と dunder method は除外し、メソッド本体内で初めて代入される instance attribute は数えない。Rust では対象 module/file root 直下の `pub` な top-level item 数、Go では対象 package 直下の exported top-level declaration 数とする
+  - `foreign_accesses` は「現在の関数が所属する owner scope（class / module / package）以外」への参照・呼び出し数、`local_accesses` は同一 owner scope 内への参照・呼び出し数とする。Python/TypeScript の `self` / `this`、Rust の `self` / `Self` / 同一 module 内 item、Go の同一 package 内識別子参照は local に数える
 - **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。PAT001 の `M-F002` 平均は対象 owner scope 配下関数の既算出結果から求める
 - **受け入れ基準**:
   - Given 過度に多くの責務を持つ module owner scope, When `--level module` または `--level all` で診断実行, Then `KAL-PAT001` として検出される
@@ -312,10 +315,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-015: 具体的な改善提案テキストの生成
 
 - **説明**: 各診断に対して、何が問題か・なぜ問題か・どう改善すべきかを含む具体的な改善提案テキストを生成する。テンプレートベースの生成を基本とし、オプションでLLM連携による文脈に即した提案生成を提供する
-- **入力**: Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から取得し、`language` は `Diagnostic.location.file_path` に対応する代表ファイルの `SourceAnalysis.source_files` メタデータから解決する。`source_excerpt` / `cpg_excerpt` は対象スコープの CPG・ソースから取得し、`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
+- **入力**: Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てた allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から取得し、`language` は代表ファイル（`Diagnostic.location.file_path`）に対応する `SourceAnalysis.source_files` メタデータから解決する。`source_excerpt` / `cpg_excerpt` は代表ファイルに還元できる対象スコープの CPG・ソースから取得し、`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
 - **処理**:
   - テンプレートモード（デフォルト）: 違反パターンごとの定型テンプレートにコード文脈を埋め込んで提案文を生成する
-  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` と `SourceAnalysis` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `repo_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答、タイムアウト、または代表ファイルの言語を一意に解決できない場合は `llm_suggestion` を付与せず、テンプレート結果だけを返す
+  - LLM連携モード（`--llm` オプション）: Application Pipeline は `Diagnostic` と `SourceAnalysis` から allowlist 済み `LlmEnrichmentRequest` を組み立てて LLM に渡す。許可するのは `rule_id`, `severity`, `language`, `workspace_relative_path`, `metric` または `pattern`, `source_excerpt` または正規化済み `cpg_excerpt` のみとし、それ以外の診断内部情報は送信しない。テンプレートベースの結果も併記する。LLM非応答、タイムアウト、代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合は `llm_suggestion` を付与せず、テンプレート結果だけを返す
 - **出力**: 各診断に対し `template_suggestion`（必須）を生成し、`--llm` 指定時は出力境界で `llm_suggestion`（任意）を併記する
 - **受け入れ基準**:
   - Given CFGエントロピー超過の診断, When テンプレートモードで改善提案を生成, Then 「この関数は分岐が複雑すぎる。条件分岐を抽出関数に分離することで複雑度を低減できます」のような具体的な提案が出力される
@@ -416,6 +419,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
 - **最低限のJSON契約**:
   - ルートには `schema_version`, `analysis_target`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
+  - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含めてよいが、v1 のプラグインメトリクスは report-only であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
   - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に 0〜100 の整数、`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
@@ -467,7 +471,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = WholeProject`
   - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。総合スコアは指定階層の `level_risk` から算出する。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする。`summary_scope = ListedDiagnostics`
-  - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の file を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
+  - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
   - Given `--level function` かつ `--format json`, When 解析実行, Then `summary_scope = "listed_diagnostics"` となり、`scores.module` と `scores.project` は `null` となる
@@ -490,8 +494,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-025: プロジェクト設定ファイルの読み込み
 
-- **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。カレントディレクトリから親方向に設定ファイルを探索する（monorepo対応）
-- **設定の優先順位**: スカラー値は CLI引数 > プロジェクト設定ファイル > デフォルト値。`exclude` は `.gitignore` 既定値 + 設定ファイル + CLI の加算マージとし、プラグイン登録は repo-relative path と checksum を含む `plugin_manifest` へ正規化して保持する
+- **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。Configuration はカレントディレクトリから親方向に設定ファイルを探索し、最初に見つかった `.kalos.toml` の親ディレクトリを `WorkspaceRoot` とする。`.kalos.toml` が見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらも見つからない場合は実行時カレントディレクトリを `WorkspaceRoot` とする。内部 `FilePath`、`workspace_relative_path`、`plugin_manifest` はこの `WorkspaceRoot` 基準で正規化する。canonicalize 後に `WorkspaceRoot` 配下に入らない解析対象やプラグイン `path` は設定/入力エラーとして扱う（monorepo対応）
+- **設定の優先順位**: スカラー値は CLI引数 > プロジェクト設定ファイル > デフォルト値。`exclude` は `.gitignore` 既定値 + 設定ファイル + CLI の加算マージとし、プラグイン登録は `workspace_relative_path` と checksum を含む `plugin_manifest` へ正規化して保持する
 - **設定ファイル形式例**:
   ```toml
   [general]
@@ -516,8 +520,11 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   ```
 - **受け入れ基準**:
   - Given `.kalos.toml` が存在, When 解析実行, Then 設定ファイルの内容がルール・閾値に反映される
+  - Given 親ディレクトリに `.kalos.toml` が存在, When 解析実行, Then その親ディレクトリが `WorkspaceRoot` として採用され、内部パスはすべてそこからの相対パスに正規化される
   - Given CLI引数と設定ファイルが競合, When 解析実行, Then CLI引数が優先される
   - Given `.kalos.toml` にプラグイン登録がある, When 解析実行, Then path と checksum から決定論的な `plugin_manifest` が解決される
+  - Given `.kalos.toml` がなく親方向に `.git` がある, When 解析実行, Then `.git` の親ディレクトリが `WorkspaceRoot` として採用される
+  - Given canonicalize 後に `WorkspaceRoot` 配下へ入らない target path または plugin path, When 解析実行, Then エラーメッセージを表示し exit code 2で終了する
   - Given 設定ファイルに構文エラー, When 解析実行, Then エラーメッセージと該当箇所を表示し exit code 2で終了する
   - Given 設定ファイルなし, When 解析実行, Then デフォルト値で動作する
 - **優先度**: Must
@@ -675,7 +682,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-NF-006: メトリクス定義の追加
 
-- **基準**: 新しいメトリクスの追加時、メトリクス算出ロジックの実装のみで対応可能な設計とする。CPG抽出・CLI・設定管理等の既存コンポーネントへの変更を最小限に抑える
+- **基準**: v1 の report-only plugin metric を追加する際、`MetricDefinition` と算出ロジックの実装・登録だけで対応可能な設計とする。CPG抽出・CLI・設定管理等の既存コンポーネントへの変更を最小限に抑える。組み込みの scored metric を追加する場合の RuleId/診断契約拡張は v1.1 以降の設計対象とする
 - **優先度**: Must
 - **出典**: エージェント推測→ユーザー確認済み
 
@@ -691,7 +698,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-NF-008: LLMフォールバック
 
-- **基準**: LLM連携モード使用時にLLMが応答しない、タイムアウトする、または代表ファイルの言語を一意に解決できない場合、テンプレートベースの改善提案にフォールバックする。kalos全体の動作がLLMの可用性に依存しない
+- **基準**: LLM連携モード使用時にLLMが応答しない、タイムアウトする、代表ファイルの言語を一意に解決できない、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合、テンプレートベースの改善提案にフォールバックする。kalos全体の動作がLLMの可用性に依存しない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -703,7 +710,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - ネットワーク通信は (a) kalos CLI が行う CodeQL 管理対象 bundle の bootstrap、(b) `--llm` 指定時の LLM 呼び出し、のみに限定する
   - CodeQL bundle 取得は固定バージョン + SHA-256 検証付きで行う
   - LLM の API キーは環境変数のみから取得し、設定ファイルへ保存しない
-  - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決できた場合に限る
+  - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - LLM 呼び出しは `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` とする
 - **優先度**: Must
@@ -757,6 +764,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.2 | 2026-03-19 | WorkspaceRoot/`workspace_relative_path` 契約、Go owner scope=package、Rust semantic edge、plugin report-only 契約、PAT001 Python 規則を明文化 | Codex |
 | 0.2.1 | 2026-03-19 | PAT001 粒度、`--strict`、`exclude` マージ、plugin manifest、LLM representative file 契約を明文化 | Codex |
 | 0.2.0 | 2026-03-19 | メトリクス数式・総合スコア集約・重大度境界・差分解析契約・CodeQL 自動取得・LLM 入力制約を確定 | Codex |
 | 0.1.0 | 2026-03-18 | 初版作成 | Claude（requirements-definer スキル） |
