@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.0 |
+| バージョン | 0.2.1 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.0, domain_model.md v0.2.0 |
+| 入力 | requirements.md v0.2.1, domain_model.md v0.2.1 |
 
 ## 1. 設計目標
 
@@ -20,7 +20,7 @@ kalos は、ソースコードからコードプロパティグラフ（CPG）�
 - 全体は **単一 Rust バイナリのモジュラーモノリス** とする
 - 解析フローは **決定論的な同期パイプライン** とする
 - ドメイン境界は `CPG抽出 / 差分解析 / メトリクス算出 / 診断 / 構成管理 / レポート` に一致させる
-- 外部通信/外部プロセス依存は **CPG抽出エンジン** と **任意の LLM** に限定し、どちらもポート経由で隔離する
+- 外部通信/外部プロセス依存は **managed CodeQL bundle の bootstrap**、**CPG抽出エンジン**、**任意の LLM** に限定し、いずれもポート経由で隔離する
 - 差分解析と拡張性は、コアを崩さずに後付け可能な形で内蔵する
 
 ### 1.3 設計ドライバー
@@ -40,8 +40,8 @@ kalos は、ソースコードからコードプロパティグラフ（CPG）�
 |---|---|---|---|---|---|---|
 | QA-01 | 決定論性 | 同一ソース・同一設定で `kalos check .` を繰り返し実行する | Linux/macOS/Windows の対応環境 | CPG 正規化順、メトリクス集約順、診断出力順を固定し、同一結果を返す | メトリクス値・診断・総合スコア・JSON/SARIF のハッシュが一致 | `REQ-NF-003` |
 | QA-02 | 性能 | 1万 LOC 規模のプロジェクトを全階層解析する | `bench-linux-x64`（4 vCPU / 16GB / SSD、managed CodeQL bundle warm、baseline cache empty） | パイプライン各段階を時間予算内で完了する | 全解析 60 秒以内 | `REQ-NF-001` |
-| QA-03 | 性能 | 10 ファイル以下の変更を PR で評価する | `bench-linux-x64` + baseline cache warm | 変更影響範囲のみ再計算し、既存ベースラインを再利用する | 差分解析 10 秒以内 | `REQ-NF-002`, `REQ-FUNC-034` |
-| QA-04 | 拡張性 | 新言語を 1 つ追加する | 既存コアを維持したまま機能拡張する | 言語アダプタと `UnifiedCpg` 変換だけで対応する | CLI・診断・レポート層の変更不要 | `REQ-NF-005` |
+| QA-03 | 性能 | 10 ファイル以下の変更を PR で評価する | `bench-linux-x64` + baseline cache warm + stable checkout path | 変更影響範囲のみ再計算し、既存ベースラインを再利用する | 差分解析 10 秒以内 | `REQ-NF-002`, `REQ-FUNC-034` |
+| QA-04 | 拡張性 | 新言語を 1 つ追加する | 既存コアを維持したまま機能拡張する | CPG 抽出境界内の parser / normalizer / language profile 追加で対応する | Metrics・Scoring・Reporting・CLI 層の変更不要 | `REQ-NF-005` |
 | QA-05 | 拡張性 | 新しいメトリクスを追加する | 既存ルール群が動作中 | メトリクス実装と登録だけでパイプラインに統合される | 既存の CPG 抽出・CLI・設定への変更最小 | `REQ-NF-006`, `REQ-FUNC-012` |
 | QA-06 | 可用性 | `--llm` 使用中に LLM がタイムアウトする | ネットワーク遅延または外部障害 | テンプレート提案へフォールバックし、コア評価を継続する | 診断集合・重大度・Exit code が変わらない | `REQ-NF-008`, `REQ-FUNC-015` |
 
@@ -79,12 +79,14 @@ graph TB
     Kalos[kalos CLI<br>Rust 製のコード品質評価ツール]
 
     Repo[ソースリポジトリ<br>Python / TypeScript / Rust / Go]
+    BundleSource[CodeQL bundle 配布元<br>固定版を取得]
     CodeQL[CPG 抽出エンジン<br>CodeQL CLI / DB]
     LLM[外部 LLM API<br>改善提案の補助生成]
 
     Dev -->|kalos check / init| Kalos
     CI -->|check, SARIF, exit code| Kalos
     Kalos -->|ソース読み取り| Repo
+    Kalos -->|初回 bootstrap / checksum 検証| BundleSource
     Kalos -->|CPG 抽出要求| CodeQL
     Kalos -->|任意の改善提案要求| LLM
     Kalos -->|JSON / SARIF / exit code| CI
@@ -95,6 +97,7 @@ graph TB
 ```mermaid
 graph TB
     User[開発者 / CI<br>CLI を実行]
+    BundleSource[CodeQL bundle 配布元<br>固定版の取得元]
     CodeQL[CodeQL Engine<br>外部プロセス]
     LLM[LLM API<br>任意の外部サービス]
     FS[ワークスペース / Git / ベースラインキャッシュ / 管理対象ツールキャッシュ<br>ファイルシステム]
@@ -105,12 +108,14 @@ graph TB
         App[Application Pipeline<br>同期オーケストレーション]
         Config[Configuration Context<br>CLI > .kalos.toml > default]
         Cpg[CPG Extraction Context<br>Extractor Port + Normalizer]
+        ToolCache[Managed Tool Cache Adapter<br>bundle bootstrap + verify]
         Metrics[Metrics Context<br>Metric Registry + Scoring]
         Diagnostics[Diagnostics Context<br>Rule Engine + Suggestions]
         Report[Reporting Context<br>Human / JSON / SARIF ACL]
         PluginHost[Plugin Host<br>WASM Loader + Capability Gate]
         Impact[Impact Analysis Service<br>影響範囲閉包と無効化判定]
         Cache[Baseline Cache Adapter<br>差分解析と再計算支援]
+        LlmAdapter[Optional LLM Adapter<br>HTTP + timeout]
         Obs[Observability Adapter<br>logs / metrics / spans]
     end
 
@@ -123,10 +128,14 @@ graph TB
     App --> Report
     App --> Impact
     App --> Cache
+    App --> LlmAdapter
     CLI --> Obs
     Metrics --> PluginHost
+    Cpg --> ToolCache
     Cpg -->|同期サブプロセス呼出| CodeQL
-    App -->|任意・タイムボックス付き| LLM
+    ToolCache -->|bundle resolve / verify| FS
+    ToolCache -->|初回 bootstrap| BundleSource
+    LlmAdapter -->|任意・タイムボックス付き| LLM
     PluginHost --> PluginPkg
     Cpg --> FS
     Config --> FS
@@ -144,10 +153,11 @@ graph TB
 | CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
 | Configuration | 設定探索・優先順位マージ・デフォルト提供 | CLI、`.kalos.toml`、既定値 | `ProjectConfig` | `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
 | CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig` | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
+| Managed Tool Cache Adapter | CodeQL bundle の bootstrap、checksum 検証、ローカル cache 解決 | 固定版 manifest、cache directory | 解決済み extractor bundle | `REQ-FUNC-031`, `REQ-FUNC-032`, `REQ-NF-009`, `REQ-NF-010` |
 | Metrics | メトリクス計算、正規化、階層スコア集約 | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用 | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `DiagnosticReport` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
 | Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`--level` に応じた nullable score 射影、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`LlmSuggestionBundle?` | 標準出力 / ファイル出力 | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
-| Plugin Host | WASM プラグイン検証、SPI 読込、capability 制御 | プラグイン manifest、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群 | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
+| Plugin Host | WASM プラグイン検証、SPI 読込、capability 制御 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群 | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
 | Observability Adapter | 構造化ログ、スパン、性能メトリクス | 実行イベント | ログ、内部計測 | `REQ-NF-001`, `REQ-NF-002` |
@@ -171,6 +181,10 @@ Application Pipeline
   -> LLM Enrichment Port
       -> Optional LLM Adapter
 
+CPG Extraction
+  -> Tool Cache Port
+      -> Managed Tool Cache Adapter
+
 Metrics
   -> Plugin Host
       -> WASM Metric Modules
@@ -187,11 +201,11 @@ CPG Extraction
 - `Reporting` は ACL としてのみ存在し、ドメインへ逆流しない
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す
-- `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `SourceAnalysis` から、`source_excerpt` または `cpg_excerpt` は対象スコープの CPG・ソースから取得し、`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する
+- `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得し、`source_excerpt` または `cpg_excerpt` は対象スコープの CPG・ソースから取得し、`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
 - `Plugin Host` は `CpgSubgraph + MetricConfig -> MetricValue` の pure function 契約のみを許容し、乱数・時刻・ネットワーク・ファイル書込を禁止する
-- `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB` の既定上限を適用し、超過時は当該プラグイン評価を失敗として打ち切る
+- `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB` の既定上限を適用し、超過時は当該プラグイン評価を失敗として打ち切る。失敗は運用警告として `stderr` / 構造化ログへ出し、診断・スコア・Exit code 契約には影響させない
 
 ### 4.3 推奨コード構成
 
@@ -308,14 +322,15 @@ sequenceDiagram
 
 - 影響範囲の owner は `Impact Analysis Service` とし、`UnifiedCpg` から生成したモジュール/関数依存グラフの逆閉包で `AffectedScopeSet` を求める
 - ベースライン断片の保存単位は、丸め済み `scope_risk` を含む `ScopeMetrics(function/module/project)`、`ScopeDiagnosticSnapshot`、丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score` を含む `OverallScore`、`DependencyIndexManifest` とする
-- ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + rule_catalog_version + plugin_manifest_version + extractor_version + kalos_version` とする
+- ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + rule_catalog_version + extractor_version + kalos_version` とする
 - `workspace_root_hash` はワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree を表し、現在ワークツリーのハッシュは含めない
 - 次の場合は差分再利用を諦めて全解析へフォールバックする
   - ベースラインが存在しない
-  - `base_snapshot_hash` または版情報が一致しない
+  - `workspace_root_hash`、`base_snapshot_hash`、`config_hash` のいずれかが一致しない
+  - 版情報が一致しない
   - 逆依存閉包が未解決で `AffectedScopeSet` を安全に確定できない
-  - 抽出エンジン、プラグイン manifest、ルールカタログの版が変わっている
+  - 抽出エンジンまたはルールカタログの版が変わっている
 
 ## 6. 技術選定
 
@@ -338,8 +353,8 @@ sequenceDiagram
 これにより:
 
 - 要件の「CodeQL 前提」を満たす
-- CodeQL bundle が未配置でも、固定バージョン + checksum 検証付きの managed tool cache へ初回取得できる
-- `REQ-NF-005` に従い、新言語追加時はアダプタ層と変換層で閉じる
+- CodeQL bundle が未配置でも、Managed Tool Cache Adapter が固定バージョン + checksum 検証付きで初回取得できる
+- `REQ-NF-005` に従い、新言語追加時の変更面は CPG 抽出境界内の parser / normalizer / language profile へ閉じる
 - 性能 PoC の結果次第で代替エンジンへ置換できる
 
 ### 6.2 決定論性の実装規約
@@ -366,7 +381,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 構造化ログ | `stage`, `duration_ms`, `file_count`, `diagnostic_count`, `cache_hit_ratio` を出す |
 | トレース | `check` 実行全体と各ステージに span を付与する |
 | ベンチマーク | 10k LOC コーパスと差分コーパスを CI で定期測定する |
-| 失敗分類 | config error / extractor error / analysis warning / llm timeout を区別して記録する |
+| 失敗分類 | config error / bootstrap warning / extractor error / plugin warning / analysis warning / llm timeout を区別して記録する |
 
 ### 7.2 セキュリティ設計
 
@@ -387,11 +402,13 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 |---|---|
 | 配布単位 | 各 OS/arch 向けプリビルド単一バイナリ |
 | リリース経路 | GitHub Releases に成果物を配置し、公式 Action から取得 |
-| 付随資産 | CodeQL bundle は管理対象ツールとして初回取得・checksum 検証・キャッシュする |
-| CI 統合 | GitHub Action は `check` 実行と SARIF upload をラップする |
+| 付随資産 | CodeQL bundle は Managed Tool Cache Adapter が初回取得・checksum 検証・キャッシュする |
+| CI 統合 | GitHub Action は `check` 実行、managed bundle / baseline cache の prewarm・restore/save、SARIF upload をラップする。bootstrap と検証の正本は kalos CLI 側に置く |
 | ロールバック | 以前のバイナリへバージョンダウンするだけで復旧可能 |
 
 ### 7.4 性能予算
+
+以下の予算は `--llm` 無効のコア評価経路に適用する。LLM は別の optional sidecar budget として扱い、コアの `REQ-NF-001/002` には含めない。
 
 #### 全解析 60 秒予算
 
@@ -413,6 +430,15 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 差分 CPG 抽出 | 4 秒 |
 | 影響範囲メトリクス再計算 | 2 秒 |
 | 診断と出力 | 2 秒 |
+
+#### LLM sidecar 予算
+
+| 項目 | 予算 |
+|---|---|
+| connect timeout | 3 秒 |
+| overall timeout | 30 秒 |
+| retry | 0 |
+| 失敗時の挙動 | `llm_suggestion` を省略し、コア診断・スコア・Exit code は不変 |
 
 ## 8. 適合度関数
 
@@ -440,7 +466,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 ## 適合度関数: 言語追加の変更面
 
 - **計測対象**: 新言語追加時に変更されたモジュール群
-- **閾値**: `domains/cpg` と `adapters/extractor` 配下に限定
+- **閾値**: `domains/cpg`、`adapters/extractor`、および extractor 境界の language profile 定義に限定
 - **計測方法**: サンプル言語追加のアーキテクチャテスト
 - **違反時のアクション**: `UnifiedCpg` 契約か責務分割を見直す
 
@@ -473,7 +499,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 1. CodeQL Adapter で 10k LOC / 4 言語混在コーパスを 60 秒以内に処理できるか
 2. `--diff` 実行でベースライン再利用込み 10 秒以内を達成できるか
 3. 同一入力 10 回実行で全出力ハッシュが一致するか
-4. 新言語追加を `Extractor Adapter + UnifiedCpg mapper` のみで実現できるか
+4. 新言語追加を CPG 抽出境界内の `Extractor Adapter + UnifiedCpg mapper + language profile` だけで実現できるか
 5. 新メトリクス追加を `MetricDefinition` 実装だけで差し込めるか
 
 ## 10. ADR 一覧
@@ -490,6 +516,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.1 | 2026-03-19 | Tool Cache owner、plugin/config hash、LLM representative file、core/LLM budget 分離、言語拡張境界を明文化 | Codex |
 | 0.2.0 | 2026-03-19 | 差分ベースライン契約、CodeQL managed bundle、LLM 入力契約、Application Pipeline 中心のシーケンス図へ更新 | Codex |
 | 0.1.1 | 2026-03-18 | LLM sidecar 契約と差分解析契約、plugin host の可視化を反映 | Codex (`architecture-designer` スキル) |
 | 0.1.0 | 2026-03-18 | 初版作成 | Codex (`architecture-designer` スキル) |

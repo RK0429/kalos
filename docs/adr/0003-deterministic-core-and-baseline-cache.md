@@ -50,12 +50,12 @@ kalos は同時に以下を満たす必要がある。
 ## 根拠
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
-- ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
+- `WholeProject` summary は `--level all` のときだけ使い、`--level function|module|project` では `ListedDiagnostics` を使う。差分モードでもこの契約は変えない
+- ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 6 要素で決定する
   - `workspace_root_hash`: ワークスペースルートディレクトリの正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
-  - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ
+  - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
   - `rule_catalog_version`: 組み込みルールカタログの版
-  - `plugin_manifest_version`: ロード対象プラグイン manifest の版
   - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
   - `kalos_version`: kalos バイナリ自体の版
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む
@@ -67,7 +67,7 @@ kalos は同時に以下を満たす必要がある。
 
 - 差分解析性能の目標に現実味が出る
 - 総合スコアの意味を維持しやすい
-- CI でもローカルでも同じ戦略を使える
+- CI でもローカルでも同じ correctness 戦略を使える
 - キャッシュヒット/ミスの判定基準をドキュメントで一意に定義できる
 
 ### ネガティブ
@@ -75,7 +75,7 @@ kalos は同時に以下を満たす必要がある。
 - キャッシュ破損や無効化漏れが新たな障害源になる
 - 設定変更やプラグイン差し替えで再計算が増える
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree hash であり、取得元が曖昧だと再利用判定が壊れるため、`git rev-parse <base-ref>^{tree}` 相当の取得方法を実装で固定する必要がある
-- checkout path が実行ごとに変わる CI では `workspace_root_hash` によりキャッシュヒット率が下がる。再利用を重視する環境では checkout path を安定化させる運用が必要
+- checkout path が実行ごとに変わる CI では `workspace_root_hash` によりキャッシュヒット率が下がる。再利用は best-effort とし、ヒット率を重視する環境では checkout path を安定化させ、baseline cache を restore/save する運用が必要
 
 ### リスク
 

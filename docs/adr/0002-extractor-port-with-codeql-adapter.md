@@ -6,7 +6,7 @@
 
 ## コンテキスト
 
-要件では CPG 抽出エンジンとして CodeQL を前提としつつ、代替エンジンの比較検討余地も残している。さらに、新言語追加時は言語パーサーと `UnifiedCpg` 変換だけで対応できること、およびクリーン環境でも手動インストールなしで初回実行できることが要求される。
+要件では CPG 抽出エンジンとして CodeQL を前提としつつ、代替エンジンの比較検討余地も残している。さらに、新言語追加時は CPG 抽出境界内の parser / normalizer / language profile 追加で対応できること、およびクリーン環境でも手動インストールなしで初回実行できることが要求される。
 
 - `REQ-FUNC-001`〜`REQ-FUNC-007`
 - `REQ-FUNC-031`
@@ -58,8 +58,9 @@ Python/TS/Rust/Go で最適エンジンを変える。
 ## 根拠
 
 - CodeQL は初期実装として使うが、`ExtractorPort` の出力契約は `SourceAnalysis` に固定する。下流コンテキストは `SourceAnalysis` 内の `UnifiedCpg` を公開言語として参照する
-- CodeQL bundle は固定バージョン + SHA-256 検証付きで managed tool cache に閉じ込め、CLI 利用者へ手動セットアップを要求しない（`REQ-FUNC-031`, `REQ-NF-009`）
-- これにより、将来の性能問題や言語追加時の変更を抽出アダプタ層へ閉じ込められる
+- CodeQL bundle は Managed Tool Cache Adapter が固定バージョン + SHA-256 検証付きで bootstrap / verify / cache し、CLI 利用者へ手動セットアップを要求しない（`REQ-FUNC-031`, `REQ-NF-009`）
+- GitHub Action は managed tool cache を prewarm / restore/save する wrapper に留め、bootstrap の正本は kalos CLI 側に置く
+- これにより、将来の性能問題や言語追加時の変更を抽出境界内へ閉じ込められる
 - ドメインモデルの `LanguageExtension` と整合し、言語固有概念の差異をコアへ漏らさずに済む
 
 ## 帰結

@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.0 |
+| バージョン | 0.2.1 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.0 |
+| 入力 | requirements.md v0.2.1 |
 
 ## 1. サブドメイン分類
 
@@ -87,6 +87,7 @@ classDiagram
     class SourceAnalysis {
         <<Aggregate Root>>
         +UnifiedCpg cpg
+        +List~SourceFile~ source_files
         +List~SuppressionComment~ suppressions
         +List~AnalysisWarning~ warnings
     }
@@ -165,6 +166,7 @@ classDiagram
     }
 
     SourceAnalysis *-- UnifiedCpg
+    SourceAnalysis *-- SourceFile
     SourceAnalysis *-- SuppressionComment
     SourceAnalysis *-- AnalysisWarning
     UnifiedCpg *-- CpgNode
@@ -180,9 +182,10 @@ classDiagram
 
 **設計意図:**
 
-- `SourceAnalysis` が集約ルート。CPG抽出の完全な出力を束ね、CPG・抑制情報・警告を一体で下流に渡す
+- `SourceAnalysis` が集約ルート。CPG抽出の完全な出力を束ね、CPG・ソースファイルメタデータ・抑制情報・警告を一体で下流に渡す
+- `SourceAnalysis.source_files` は repo-relative path と言語の決定論的な対応表。LLM sidecar の `language` 解決や representative file の照合はここを source of truth とする
 - `UnifiedCpg` は言語非依存なグラフ構造に専念し、メタ情報（抑制コメント・警告）を含まない
-- `LanguageExtension` で言語固有概念（Rust の所有権、Go の goroutine 等）を保持。共通構造を汚さずに拡張可能（REQ-NF-005）
+- `LanguageExtension` で言語固有概念（Rust の所有権、Go の goroutine、owner/public semantics を決める language profile 等）を保持。共通構造を汚さずに拡張可能（REQ-NF-005）
 - `ExternalSymbol`（NodeKind）で外部依存の解決済みシンボルを表現（REQ-FUNC-007）
 - `SuppressionComment` はソース解析時に `kalos-ignore` コメントから抽出され、診断コンテキストの `InlineSuppression` に変換される。ルール指定は exact `RuleId` のみを許可する（REQ-FUNC-029）
 
@@ -274,6 +277,7 @@ classDiagram
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を省略できる。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）
+- プラグインのロード失敗、checksum 不一致、タイムアウト、メモリ超過は `MetricValue` を生成しない非致命の運用イベントとして扱う。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
 ### 3.3 診断コンテキスト
@@ -317,7 +321,7 @@ classDiagram
         +Severity default_severity
         +String description
         +String suggestion_template
-        +detect(cpg: CpgSubgraph) List~Diagnostic~
+        +detect(cpg: CpgSubgraph, metrics: AnalysisMetrics) List~Diagnostic~
     }
     class DiagnosticId {
         <<ValueObject>>
@@ -449,7 +453,8 @@ classDiagram
 
 **設計意図:**
 
-- ルールを `MetricRule`（メトリクス値→閾値比較）と `PatternRule`（CPG→パターンマッチ）に分離。入力データと評価ロジックが根本的に異なるため、単一 Rule では閾値・メトリクス値フィールドが PatternRule に対して無意味になり不変条件が弱まる
+- ルールを `MetricRule`（メトリクス値→閾値比較）と `PatternRule`（構造情報中心のパターン検出）に分離。入力データと評価ロジックが根本的に異なるため、単一 Rule では閾値・メトリクス値フィールドが PatternRule に対して無意味になり不変条件が弱まる
+- `PatternRule` は構造情報を主入力とするが、`KAL-PAT001` のように対象 scope に集約済みメトリクスが必要な場合は `AnalysisMetrics` の既算出結果を参照できる
 - `Diagnostic` は `kind` を discriminant とし、`MetricObservation` または `PatternEvidence` のどちらか一方だけを持つ。これによりメトリクス診断とパターン診断の出力契約を同一 aggregate の中で型安全に表現できる
 - メトリクス診断の重大度は `MetricRule` に固定値を持たせず、`overflow_ratio` と `RuleConfig.severity` オーバーライドから導出する。固定のデフォルト重大度を持つのは `PatternRule` のみ
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = None` を代表位置として使う
@@ -458,9 +463,9 @@ classDiagram
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
 - JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
-- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済みの application/report 境界の sidecar 入力である。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `SourceAnalysis` から、`source_excerpt` / `cpg_excerpt` は対象スコープの CPG・ソースから取得する。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される
+- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済みの application/report 境界の sidecar 入力である。`rule_id`, `severity`, `repo_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` / `cpg_excerpt` は対象スコープの CPG・ソースから取得し、`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。代表ファイルの言語を一意に解決できない場合、その診断には `LlmSuggestion` を付与しない
 - `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`location` は抑制対象の代表位置を指し、同一行の診断または直後スコープ宣言に対応する診断へ適用される。`rule_id` が None の場合は対象位置の全診断を抑制する（REQ-FUNC-029）
-- `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` フラグで warning → error 昇格（REQ-FUNC-022）
+- `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` は warning を error 相当の失敗条件として扱う追加ポリシーだが、`Diagnostic.severity` 自体は変更しない（REQ-FUNC-022）
 
 ### 3.4 差分解析コンテキスト
 
@@ -500,7 +505,6 @@ classDiagram
         +String base_snapshot_hash
         +String config_hash
         +String rule_catalog_version
-        +String plugin_manifest_version
         +String extractor_version
         +String kalos_version
     }
@@ -518,6 +522,7 @@ classDiagram
 - `Impact Analysis` が `AffectedScopeSet` と `InvalidationPlan` の導出ロジックの唯一の owner であり、結果値そのものは公開言語として下流コンテキストへ渡す
 - `BaselineFingerprint.workspace_root_hash` はワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュ。異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `BaselineFingerprint.base_snapshot_hash` は「現在のワークスペース」ではなく `base-ref` 側のスナップショットを表す。これにより、同じ基準コミットに対する差分実行でベースラインを再利用できる
+- `BaselineFingerprint.config_hash` は、除外パターンの和集合と正規化済み `plugin_manifest` を含む `ProjectConfig` 全体のハッシュ。プラグイン差し替えや設定変更はこの値で再利用可否に反映される
 - `ScopeDiagnosticSnapshot` を保持することで、差分モードでもプロジェクト全体の重大度件数を再構成できる。完全な `DiagnosticReport` をキャッシュへ保存する必要はない
 
 ### 3.5 構成管理コンテキスト
@@ -529,6 +534,7 @@ classDiagram
         +Map~RuleId_RuleConfig~ rules
         +List~GlobPattern~ exclude_patterns
         +ScoreWeights score_weights
+        +ResolvedPluginManifest plugin_manifest
         +resolve(cli: CliArgs, file: Option~ConfigFile~, defaults: Defaults) ProjectConfig
     }
     class RuleConfig {
@@ -547,16 +553,29 @@ classDiagram
         +FilePath path
         +ConfigContent content
     }
+    class ResolvedPluginManifest {
+        <<ValueObject>>
+        +List~PluginModuleRef~ modules
+    }
+    class PluginModuleRef {
+        <<ValueObject>>
+        +FilePath repo_relative_path
+        +String sha256
+    }
 
     ProjectConfig *-- RuleConfig
     ProjectConfig *-- GlobPattern
     ProjectConfig --> ScoreWeights
+    ProjectConfig --> ResolvedPluginManifest
+    ResolvedPluginManifest *-- PluginModuleRef
     ProjectConfig ..> ConfigFile : parsed from
 ```
 
 **設計意図:**
 
 - `ProjectConfig.resolve()` が設定の優先順位（CLI > ファイル > デフォルト）をカプセル化（REQ-FUNC-025）
+- `exclude_patterns` は `.gitignore` の既定除外、設定ファイル `exclude`、CLI `--exclude` の正規化済み和集合。v1 では negation による除外解除を許可しない
+- `plugin_manifest` は `.kalos.toml` のプラグイン登録を repo-relative path と checksum の組へ正規化した決定論的な正本。Plugin Host と差分キャッシュはこの解決済み manifest を参照する
 - `RuleConfig` の各フィールドは `Option` 型。None は「デフォルト値を使用」を意味し、マージロジックがシンプルになる
 - ルールの「定義」（MetricRule/PatternRule）は診断コンテキスト、「設定」（RuleConfig）は構成管理コンテキストに分離。「何を評価するか」はドメイン知識、「閾値をいくつにするか」はプロジェクト固有の設定
 
@@ -610,7 +629,7 @@ stateDiagram-v2
 
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
-| ソース解析結果 (SourceAnalysis) | CPG抽出の完全な出力を束ねる集約ルート。統一CPG・抑制コメント・解析警告を含む | UnifiedCpg, SuppressionComment, AnalysisWarning |
+| ソース解析結果 (SourceAnalysis) | CPG抽出の完全な出力を束ねる集約ルート。統一CPG・ソースファイルメタデータ・抑制コメント・解析警告を含む | UnifiedCpg, SourceFile, SuppressionComment, AnalysisWarning |
 | 統一CPG (UnifiedCpg) | 4言語のソースコードを言語非依存な共通構造で表現したコードプロパティグラフ | CpgNode, CpgEdge |
 | CPGノード (CpgNode) | CPG内の構成要素。関数、クラス、モジュール、変数等を表す | NodeKind, SourceLocation |
 | CPGエッジ (CpgEdge) | ノード間の関係。呼び出し、データフロー、制御フロー等 | EdgeKind |
@@ -632,7 +651,7 @@ stateDiagram-v2
 | スコープメトリクス (ScopeMetrics) | 特定のスコープ（関数、モジュール等）に対する全メトリクス値の集合。丸め済み `scope_risk` を保持する | ScopeId, AnalysisLevel |
 | 解析メトリクス (AnalysisMetrics) | 全階層または `--level` 指定で選択された階層のメトリクス結果と総合スコアを束ねる集約ルート | ScopeMetrics, OverallScore |
 | 総合スコア (OverallScore) | 選択された階層群のメトリクスを重み付き集約した丸め済みリスク値と、0〜100の整数評価値。非対象階層の部分スコアは `None` を許容する | ScoreWeights |
-| スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成 | AnalysisLevel |
+| スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成し、`AnalysisLevel.Module` では言語ごとの owner scope（Python/TypeScript の class、Rust の module/file root module、Go の file）を表す | AnalysisLevel |
 | スコア重み (ScoreWeights) | 総合スコア算出時の各階層の重み。デフォルト: function 0.4, module 0.35, project 0.25 | — |
 | 解析階層 (AnalysisLevel) | メトリクス算出の粒度: Function / Module / Project | — |
 
@@ -643,7 +662,7 @@ stateDiagram-v2
 | 診断 (Diagnostic) | 閾値違反または構造的パターン検出の結果。`kind` に応じて `MetricObservation` または `PatternEvidence` を持つ | MetricRule, PatternRule |
 | 診断レポート (DiagnosticReport) | 診断一覧、一覧の完全性、summary、summary の母集団、Exit code を束ねる集約ルート | Diagnostic, DiagnosticSummary, DiagnosticsScope, SummaryScope |
 | メトリクスルール (MetricRule) | メトリクス値を閾値と比較して診断を生成するルール。`KAL-Fxxx` / `KAL-Mxxx` / `KAL-Pxxx` 形式の RuleId で識別し、重大度は `overflow_ratio` と設定オーバーライドから導出する | RuleId |
-| パターンルール (PatternRule) | CPGから構造的パターンを直接検出するルール。`KAL-PATxxx` 形式の RuleId で識別 | PatternType |
+| パターンルール (PatternRule) | CPG を主入力とし、必要に応じて既算出メトリクスを参照して構造的パターンを検出するルール。`KAL-PATxxx` 形式の RuleId で識別 | PatternType, AnalysisMetrics |
 | 診断ID (DiagnosticId) | 診断を一意に識別する値。LLM 補助提案との関連付けに使う | Diagnostic |
 | メトリクス観測値 (MetricObservation) | メトリクス診断の詳細。`metric_id`, `raw_value`, `normalized_risk`, `threshold`, `overflow_ratio` を含む | MetricId |
 | パターン根拠 (PatternEvidence) | パターン診断の詳細。`pattern_type`, `evidence_scopes`, `evidence_message` を含む | PatternType |
@@ -663,7 +682,7 @@ stateDiagram-v2
 | 影響範囲集合 (AffectedScopeSet) | 差分再計算が必要な `ScopeId` の集合 | ScopeId |
 | 無効化計画 (InvalidationPlan) | 再計算対象、再利用対象、全解析フォールバック要否を表す値 | AffectedScopeSet |
 | 依存インデックス manifest (DependencyIndexManifest) | `ScopeId` 間の逆依存関係を永続化した値 | ScopeId |
-| ベースライン識別子 (BaselineFingerprint) | 差分ベースラインの互換性判定に使う版情報とハッシュ集合。`workspace_root_hash` と `base_snapshot_hash` を含む | DiffBaseline |
+| ベースライン識別子 (BaselineFingerprint) | 差分ベースラインの互換性判定に使う版情報とハッシュ集合。`workspace_root_hash`、`base_snapshot_hash`、正規化済み `ProjectConfig` を反映した `config_hash` を含む | DiffBaseline |
 | ワークスペースルートハッシュ (workspace_root_hash) | `BaselineFingerprint` の構成要素。ワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュ値。異なるワークスペース間でベースラインキャッシュが衝突しないことを保証する | BaselineFingerprint |
 | スコープ診断断片 (ScopeDiagnosticSnapshot) | ある `ScopeId` に属する既知診断の断片とサマリー | DiagnosticId, DiagnosticSummary |
 
@@ -671,9 +690,11 @@ stateDiagram-v2
 
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
-| プロジェクト設定 (ProjectConfig) | ルール設定・除外パターン・スコア重みをマージした最終的な設定。優先順位: CLI > ファイル > デフォルト | RuleConfig, GlobPattern |
+| プロジェクト設定 (ProjectConfig) | ルール設定・除外パターン・スコア重み・解決済み `plugin_manifest` をマージした最終的な設定。スカラー値は CLI > ファイル > デフォルト、`exclude` は和集合で解決する | RuleConfig, GlobPattern, ResolvedPluginManifest |
 | ルール設定 (RuleConfig) | 個別ルールの有効/無効・閾値・重大度のオーバーライド。各フィールドは Option で、None は「デフォルト値を使用」 | RuleId |
 | 除外パターン (GlobPattern) | 解析対象から除外するファイル/ディレクトリのglobパターン | — |
+| 解決済みプラグイン manifest (ResolvedPluginManifest) | `.kalos.toml` のプラグイン登録を repo-relative path と checksum の組へ正規化した決定論的な正本 | PluginModuleRef |
+| プラグインモジュール参照 (PluginModuleRef) | 1 つの WASM プラグインを識別する repo-relative path と checksum の組 | ResolvedPluginManifest |
 | 設定ファイル (ConfigFile) | `.kalos.toml` ファイル。カレントから親方向に探索される（monorepo対応） | ProjectConfig |
 
 ### 5.6 用語集: レポートコンテキスト
@@ -682,7 +703,7 @@ stateDiagram-v2
 |---|---|---|
 | LLM補助提案バンドル (LlmSuggestionBundle) | `DiagnosticId` ごとに report 層で併記される任意の補助提案集合。コア診断は変更しない | DiagnosticId, LlmSuggestion |
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
-| LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `SourceAnalysis` から取得する | Diagnostic, SourceAnalysis |
+| LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, repo_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決する | Diagnostic, SourceAnalysis |
 | CPG抜粋 (CpgSubgraphExcerpt) | LLM 送信に使う、診断に必要な最小部分だけへ正規化した CPG 表現 | ScopeId |
 
 ## 6. 判断記録
@@ -739,6 +760,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.1 | 2026-03-19 | `SourceAnalysis.source_files`、pattern rule 入力、`plugin_manifest` と `config_hash`、`--strict`/LLM representative file 契約を追加 | Codex |
 | 0.2.0 | 2026-03-19 | 差分解析コンテキスト、診断の discriminated union、提案スキーマ統一、MetricConfig、RuleConfig の Option 契約を追加 | Codex |
 | 0.1.1 | 2026-03-18 | LLM 補助提案を report 境界の sidecar に分離し、用語集とレポート入力を更新 | Codex (`architecture-designer` スキル) |
 | 0.1.0 | 2026-03-18 | 初版作成 | Claude（domain-modeler スキル） |
