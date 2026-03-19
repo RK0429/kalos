@@ -151,7 +151,7 @@ graph TB
 | コンテキスト | 主要責務 | 入力 | 出力 | 対応要件 |
 |---|---|---|---|---|
 | CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
-| Configuration | 設定探索・`WorkspaceRoot` 解決・優先順位マージ・デフォルト提供 | CLI、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot` を含む） | `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
+| Configuration | 明示/探索ベースの設定解決、`WorkspaceRoot` 解決、優先順位マージ、デフォルト提供 | CLI（`--config` を含む）、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot` を含む） | `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
 | Git Diff Adapter | `base-ref` 解決、変更ファイル列挙、`base_snapshot_hash` 取得 | `WorkspaceRoot`、`analysis_targets`、`base-ref` | 変更対象 path 群、`base_snapshot_hash` | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、依存定義/lockfile からの外部シンボル解決、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig`、依存定義/lockfile、ローカル stub / metadata cache | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
 | Managed Tool Cache Adapter | CodeQL bundle の bootstrap、checksum 検証、ローカル cache 解決 | kalos release と一体で versioning された固定版 manifest、cache directory | 解決済み extractor bundle | `REQ-FUNC-031`, `REQ-FUNC-032`, `REQ-NF-009`, `REQ-NF-010` |
@@ -208,7 +208,7 @@ CPG Extraction
 
 - ドメインコンテキスト同士は公開契約でのみ接続する
 - `Reporting` は ACL としてのみ存在し、ドメインへ逆流しない
-- `CLI Shell` が受け取った path 群を `WorkspaceRoot` 基準の `analysis_targets` へ正規化し、入力順を保持したまま `ReportMetadata` として下流へ渡す
+- `Configuration` が `--config` を含む CLI 入力から `WorkspaceRoot` を一意に確定した後、`CLI Shell` が受け取った path 群をその `WorkspaceRoot` 基準の `analysis_targets` へ正規化し、入力順を保持したまま `ReportMetadata` として下流へ渡す
 - `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す
@@ -217,8 +217,8 @@ CPG Extraction
 - `Application Pipeline` は `--strict` を `DiagnosticReport.determine_exit_code(strict)` へ渡すだけで、`Diagnostic.severity` や `DiagnosticReport.summary` を変更しない
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
-- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う
-- `Configuration` は plugin `path` の `WorkspaceRoot` 内包性と `sha256` 構文を検証し、違反時は設定エラー（exit code 2）として処理する。`Plugin Host` は解決済み `plugin_manifest` だけを受け取り、ファイル読込失敗・checksum 不一致・SPI 不一致・`metric_id` 衝突・タイムアウト・メモリ超過・aggregate budget 超過を warning + skip として扱う
+- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う
+- `Configuration` は `--config` 指定時の `WorkspaceRoot` 解決、`analysis_targets` と plugin `path` の `WorkspaceRoot` 内包性、`sha256` 構文を検証し、違反時は設定/入力エラー（exit code 2）として処理する。`Plugin Host` は解決済み `plugin_manifest` だけを受け取り、ファイル読込失敗・checksum 不一致・SPI 不一致・`metric_id` 衝突・タイムアウト・メモリ超過・aggregate budget 超過を warning + skip として扱う
 - `Plugin Host` は WASM プラグイン invocation ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_wall_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
 ### 4.3 推奨コード構成
@@ -337,14 +337,14 @@ sequenceDiagram
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
 - `--diff` の最適化が有効な実行では `Impact Analysis Service` が `Project` scope を `recompute_scopes` に必ず含め、project-level metrics と `scores.overall` / `scores.project` を post-change 状態から再構成する
-- `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、または安全な再計算不能時は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
+- `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
 
 ### 5.3 差分解析の契約
 
 - 影響範囲の owner は `Impact Analysis Service` とし、`UnifiedCpg` から生成したモジュール/関数依存グラフの逆閉包で `AffectedScopeSet` を求める
 - `InvalidationPlan.recompute_scopes` は diff 最適化が有効な限り `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` を必ず含む。project-level metrics と `OverallScore` は merged post-change snapshot から再計算し、baseline の project 断片をそのまま最終結果へ流用しない
 - ベースライン断片の保存単位は、丸め済み `scope_risk` を含む `ScopeMetrics(function/module/project)`、`ScopeDiagnosticSnapshot`、丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score` を含む `OverallScore`、`DependencyIndexManifest` とする
-- `WorkspaceRoot` は Configuration が `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で一意に解決し、内部 `FilePath` / `workspace_relative_path` / `plugin_manifest` はすべてこの基準から導出する
+- `WorkspaceRoot` は Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で一意に解決し、内部 `FilePath` / `workspace_relative_path` / `plugin_manifest` / `analysis_targets` はすべてこの基準から導出する
 - ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + analysis_targets_hash + rule_catalog_version + extractor_version + kalos_version` とする
 - `workspace_root_hash` は `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュであり、解析対象パスが変わった場合にベースラインの不正な再利用を防ぐ
@@ -358,6 +358,7 @@ sequenceDiagram
   - `workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash` のいずれかが一致しない
   - 版情報が一致しない
   - 逆依存閉包が未解決で `AffectedScopeSet` を安全に確定できない
+  - project scope を安全に再計算できない
   - 抽出エンジンまたはルールカタログの版が変わっている
 
 ## 6. 技術選定
@@ -557,6 +558,7 @@ plugin aggregate budget（全解析 `3s` / 差分 `0.5s`）は、それぞれ Me
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 解決、`analysis_targets` 検証 owner、plugin load order、diff fallback 条件を同期 | Codex |
 | 0.2.8 | 2026-03-19 | `scores.overall` と summary の責務分離、project scope 再計算、subset diff fallback、plugin 検証境界、`schema_version` メタデータを反映 | Codex |
 | 0.2.7 | 2026-03-19 | Git Diff Adapter の責務、plugin `metric_id` 衝突契約、diff フローの責務分離を反映 | Codex |
 | 0.2.6 | 2026-03-19 | ベースライン識別子に analysis_targets_hash 追加、パターンルール入力の内部算出契約、全階層ベースライン保存を明文化 | Claude |

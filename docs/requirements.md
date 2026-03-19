@@ -76,7 +76,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | 改善提案 | 診断に対する具体的な修正方針のテキスト。何が問題か、なぜ問題か、どう改善すべきかを記述する |
 | ルール | 特定のメトリクスまたはパターンに対する診断生成規則。一意のルールID（`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式）で識別され、閾値・重大度・提案テンプレートなどの詳細契約は rule 種別ごとに決まる |
 | 総合スコア | 各階層の正規化リスク値（0.0〜1.0, 高いほど悪い）を重み付き集約し、`100 * (1 - overall_risk)` で算出する品質スコア |
-| ワークスペースルート | kalos が解析の基準ディレクトリとして解決するルート。カレントディレクトリから親方向に探索して最初に見つかった `.kalos.toml` の親ディレクトリを優先し、見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらもなければ実行時カレントディレクトリを採用する |
+| ワークスペースルート | kalos が解析の基準ディレクトリとして解決するルート。`--config <path>` 指定時はその `.kalos.toml` の親ディレクトリを採用し、未指定時はカレントディレクトリから親方向に探索して最初に見つかった `.kalos.toml` の親ディレクトリを優先し、見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらもなければ実行時カレントディレクトリを採用する |
 | ワークスペース相対パス | ワークスペースルート基準で正規化されたパス。内部 `FilePath`、`plugin_manifest` のプラグイン参照、LLM sidecar の `workspace_relative_path` はこの形式を用いる |
 | 統一CPG表現 | 4言語のCPGを言語非依存な共通構造と言語固有の拡張ノードで表現する内部データ構造 |
 | CodeQL | GitHub が開発するコード解析エンジン。ソースコードをデータベース化し、クエリ言語でコードプロパティを検索・抽出できる |
@@ -381,7 +381,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **主要オプション**:
   - `--format <human|json|sarif>`: 出力形式（デフォルト: human）
   - `--level <function|module|project|all>`: 解析階層（デフォルト: all）
-  - `--config <path>`: 設定ファイルパス
+  - `--config <path>`: 明示的に使用する `.kalos.toml` のパス。この親ディレクトリを `WorkspaceRoot` とする
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度
   - `--diff <base-ref>`: 変更ファイル再抽出 + ベースライン再利用による差分解析
@@ -506,7 +506,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-025: プロジェクト設定ファイルの読み込み
 
-- **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。Configuration はカレントディレクトリから親方向に設定ファイルを探索し、最初に見つかった `.kalos.toml` の親ディレクトリを `WorkspaceRoot` とする。`.kalos.toml` が見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらも見つからない場合は実行時カレントディレクトリを `WorkspaceRoot` とする。内部 `FilePath`、`workspace_relative_path`、`plugin_manifest` はこの `WorkspaceRoot` 基準で正規化する。canonicalize 後に `WorkspaceRoot` 配下に入らない解析対象やプラグイン `path` は設定/入力エラーとして扱う（monorepo対応）
+- **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。Configuration は `--config <path>` 指定時はその `.kalos.toml` を明示的に読み込み、その親ディレクトリを `WorkspaceRoot` とする。`--config` 未指定時はカレントディレクトリから親方向に設定ファイルを探索し、最初に見つかった `.kalos.toml` の親ディレクトリを `WorkspaceRoot` とする。`.kalos.toml` が見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらも見つからない場合は実行時カレントディレクトリを `WorkspaceRoot` とする。内部 `FilePath`、`workspace_relative_path`、`plugin_manifest`、`analysis_targets` はこの `WorkspaceRoot` 基準で正規化する。canonicalize 後に `WorkspaceRoot` 配下に入らない解析対象やプラグイン `path` は設定/入力エラーとして扱う（monorepo対応）
 - **設定の優先順位**: スカラー値は CLI引数 > プロジェクト設定ファイル > デフォルト値。`exclude` は `.gitignore` 既定値 + 設定ファイル + CLI の加算マージとし、プラグイン登録は `workspace_relative_path` と checksum を含む `plugin_manifest` へ正規化して保持する
 - **設定ファイル形式例**:
   ```toml
@@ -533,6 +533,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **設定値の検証**: `score.weights.*` は `> 0.0` かつ有限、`rules.<RuleId>.threshold` は `[0.0, 1.0]` の閉区間、`rules.<RuleId>.severity` は `error | warning | info` のいずれか、`plugins[*].sha256` は 64 文字の16進文字列でなければならない。検証失敗時は設定エラーとして exit code 2 で終了する
 - **受け入れ基準**:
   - Given `.kalos.toml` が存在, When 解析実行, Then 設定ファイルの内容がルール・閾値に反映される
+  - Given `--config services/api/.kalos.toml` を指定, When 解析実行, Then そのファイルが読み込まれ、`services/api` が `WorkspaceRoot` として採用される
   - Given 親ディレクトリに `.kalos.toml` が存在, When 解析実行, Then その親ディレクトリが `WorkspaceRoot` として採用され、内部パスはすべてそこからの相対パスに正規化される
   - Given CLI引数と設定ファイルが競合, When 解析実行, Then CLI引数が優先される
   - Given `.kalos.toml` にプラグイン登録がある, When 解析実行, Then path と checksum から決定論的な `plugin_manifest` が解決される
@@ -785,6 +786,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 正規化基準、diff fallback 条件のトレーサビリティを補強 | Codex |
 | 0.2.8 | 2026-03-19 | `scores.overall` の metrics 起源、summary との責務分離、plugin checksum 構文検証を明文化 | Codex |
 | 0.2.7 | 2026-03-19 | plugin `metric_id` 衝突契約、cross-scope 診断の表示/抑制規則、SARIF 写像の固定を明文化 | Codex |
 | 0.2.6 | 2026-03-19 | score.weights/threshold の検証規則、KAL-PAT001 の --level module 動作、ベースライン互換性（analysis_targets_hash・全階層保存）を明文化 | Claude |

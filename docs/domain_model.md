@@ -539,6 +539,7 @@ classDiagram
 **設計意図:**
 
 - `Impact Analysis` が `AffectedScopeSet` と `InvalidationPlan` の導出ロジックの唯一の owner であり、結果値そのものは公開言語として下流コンテキストへ渡す
+- `InvalidationPlan.fallback_to_full` は、`analysis_targets` が全 target 群の部分集合で diff 最適化を適用できない、baseline 不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない場合に `true` となる
 - `BaselineFingerprint.workspace_root_hash` はワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュ。異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `BaselineFingerprint.base_snapshot_hash` は「現在のワークスペース」ではなく `base-ref` 側のスナップショットを表す。これにより、同じ基準コミットに対する差分実行でベースラインを再利用できる
 - `BaselineFingerprint.config_hash` は、除外パターンの和集合と正規化済み `plugin_manifest` を含む `ProjectConfig` 全体のハッシュ。プラグイン差し替えや設定変更はこの値で再利用可否に反映される
@@ -602,10 +603,10 @@ classDiagram
 
 **設計意図:**
 
-- `ProjectConfig.resolve()` が設定の優先順位（CLI > ファイル > デフォルト）をカプセル化し、`WorkspaceRoot`（最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory）を解決する（REQ-FUNC-025）
+- `ProjectConfig.resolve()` が設定の優先順位（CLI > ファイル > デフォルト）をカプセル化し、`WorkspaceRoot`（`--config <path>` 指定時はその `.kalos.toml` の親、未指定時は最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory）を解決する（REQ-FUNC-025）
 - ドメイン内の `FilePath` はすべて `WorkspaceRoot` 相対の正規化パスであり、絶対パスを保持するのは `WorkspaceRoot.abs_path` だけ
 - `exclude_patterns` は `.gitignore` の既定除外、設定ファイル `exclude`、CLI `--exclude` の正規化済み和集合。v1 では negation による除外解除を許可しない
-- `plugin_manifest` は `.kalos.toml` のプラグイン登録を workspace-relative path と checksum の組へ正規化した決定論的な正本。`WorkspaceRoot` 外 path や不正な `sha256` は `ProjectConfig.resolve()` の段階で設定エラーにする。Plugin Host と差分キャッシュは、この検証を通過した解決済み manifest だけを参照する
+- `plugin_manifest` は `.kalos.toml` のプラグイン登録を workspace-relative path と checksum の組へ正規化した決定論的な正本。`WorkspaceRoot` 外 path、不正な `sha256`、または `analysis_targets` の `WorkspaceRoot` 外参照は `ProjectConfig.resolve()` の段階で設定/入力エラーにする。Plugin Host と差分キャッシュは、この検証を通過した解決済み manifest だけを参照する
 - `RuleConfig` の各フィールドは `Option` 型。None は「デフォルト値を使用」を意味し、マージロジックがシンプルになる。`threshold` の有効範囲は `[0.0, 1.0]`。`ScoreWeights` の各値は `> 0.0` かつ有限でなければならない。`ProjectConfig.resolve()` は検証に失敗した場合、設定エラーとして扱う（exit code 2）
 - ルールの「定義」（MetricRule/PatternRule）は診断コンテキスト、「設定」（RuleConfig）は構成管理コンテキストに分離。「何を評価するか」はドメイン知識、「閾値をいくつにするか」はプロジェクト固有の設定
 
@@ -726,12 +727,12 @@ stateDiagram-v2
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
 | プロジェクト設定 (ProjectConfig) | `WorkspaceRoot`、ルール設定・除外パターン・スコア重み・解決済み `plugin_manifest` をマージした最終的な設定。スカラー値は CLI > ファイル > デフォルト、`exclude` は和集合で解決する | WorkspaceRoot, RuleConfig, GlobPattern, ResolvedPluginManifest |
-| ワークスペースルート (WorkspaceRoot) | Configuration が解決した絶対パスの基準ディレクトリ。最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory | ProjectConfig |
+| ワークスペースルート (WorkspaceRoot) | Configuration が解決した絶対パスの基準ディレクトリ。`--config <path>` 指定時はその `.kalos.toml` の親、未指定時は最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory | ProjectConfig |
 | ルール設定 (RuleConfig) | 個別ルールの有効/無効・閾値・重大度のオーバーライド。各フィールドは Option で、None は「デフォルト値を使用」 | RuleId |
 | 除外パターン (GlobPattern) | 解析対象から除外するファイル/ディレクトリのglobパターン | — |
 | 解決済みプラグイン manifest (ResolvedPluginManifest) | `.kalos.toml` のプラグイン登録を workspace-relative path と checksum の組へ正規化した決定論的な正本 | PluginModuleRef |
 | プラグインモジュール参照 (PluginModuleRef) | 1 つの WASM プラグインを識別する workspace-relative path と checksum の組 | ResolvedPluginManifest |
-| 設定ファイル (ConfigFile) | `.kalos.toml` ファイル。カレントから親方向に探索される（monorepo対応） | ProjectConfig |
+| 設定ファイル (ConfigFile) | `.kalos.toml` ファイル。CLI で明示指定されるか、未指定時はカレントから親方向に探索される（monorepo対応） | ProjectConfig |
 
 ### 5.6 用語集: レポートコンテキスト
 
@@ -800,6 +801,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 検証境界、`InvalidationPlan.fallback_to_full` の主トリガを反映 | Codex |
 | 0.2.8 | 2026-03-19 | `source_files` / `ScopeId` 正規形、`ScopeMetrics` の重複解消、score-summary 分離、subset diff fallback、plugin 検証境界を反映 | Codex |
 | 0.2.7 | 2026-03-19 | plugin `MetricId` 一意性、cross-scope 診断の表示/抑制規則、SARIF 写像の固定を反映 | Codex |
 | 0.2.6 | 2026-03-19 | score.weights/threshold 検証不変条件、パターンルール入力の内部算出契約、BaselineFingerprint に analysis_targets_hash 追加、全階層ベースライン保存を明文化 | Claude |
