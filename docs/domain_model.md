@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.4 |
+| バージョン | 0.2.5 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.4 |
+| 入力 | requirements.md v0.2.5 |
 
 ## 1. サブドメイン分類
 
@@ -188,6 +188,7 @@ classDiagram
 - `SourceAnalysis` が集約ルート。CPG抽出の完全な出力を束ね、CPG・ソースファイルメタデータ・抑制情報・警告を一体で下流に渡す
 - `SourceAnalysis.source_files` はワークスペースルート相対 path と言語の決定論的な対応表。LLM sidecar の `language` 解決や representative file の照合はここを source of truth とする
 - `UnifiedCpg` は言語非依存なグラフ構造に専念し、メタ情報（抑制コメント・警告）を含まない
+- managed CodeQL bundle の bootstrap / verify / cache やオフライン成功条件は `Managed Tool Cache Adapter` の責務であり、CPG 抽出ドメインモデルには持ち込まない。抽出ドメインが扱うのは解決済み bundle を使って生成された `SourceAnalysis` だけである
 - `LanguageExtension` はノードと semantic edge の両方に付与でき、言語固有概念（Rust の ownership / borrow / lifetime relation、Go の goroutine、owner/public semantics を決める language profile 等）を保持する。共通構造を汚さずに拡張可能（REQ-NF-005）
 - `ExternalSymbol`（NodeKind）で外部依存の解決済みシンボルを表現（REQ-FUNC-007）
 - `SuppressionComment` はソース解析時に `kalos-ignore` コメントから抽出され、診断コンテキストの `InlineSuppression` に変換される。ルール指定は exact `RuleId` のみを許可する（REQ-FUNC-029）
@@ -296,6 +297,7 @@ classDiagram
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を省略できる。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）
+- `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
 - プラグインのロード失敗、checksum 不一致、タイムアウト、メモリ超過、aggregate budget 超過は `MetricValue` を生成しない非致命の運用イベントとして扱う。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
@@ -340,7 +342,7 @@ classDiagram
         +Severity default_severity
         +String description
         +String suggestion_template
-        +detect(cpg: CpgSubgraph, metrics: AnalysisMetrics) List~Diagnostic~
+        +detect(cpg: CpgSubgraph, metrics: AnalysisMetrics, config: RuleConfig) List~Diagnostic~
     }
     class DiagnosticId {
         <<ValueObject>>
@@ -490,6 +492,7 @@ classDiagram
 - `PatternRule` は構造情報を主入力とするが、`KAL-PAT001` のように対象 scope に集約済みメトリクスが必要な場合は `AnalysisMetrics` の既算出結果を参照できる
 - `Diagnostic` は `kind` を discriminant とし、`MetricObservation` または `PatternEvidence` のどちらか一方だけを持つ。これによりメトリクス診断とパターン診断の出力契約を同一 aggregate の中で型安全に表現できる
 - メトリクス診断の重大度は `MetricRule` に固定値を持たせず、`overflow_ratio` と `RuleConfig.severity` オーバーライドから導出する。固定のデフォルト重大度を持つのは `PatternRule` のみ
+- `PatternRule.detect(..., config)` は解決済み `RuleConfig` を値として受け取る。`config.enabled = Some(false)` の場合は空リストを返し、診断生成後は `config.severity` を最終 `Diagnostic.severity` に上書きできる
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `line = 1`, `end_line = 1`, `column = None` を代表位置として使う
 - `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では「選択された `--level` に関して完全」であることを `WholeProject` で表し、diff mode では `AffectedOnly` を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
 - `DiagnosticReport.summary_scope` は summary がどの母集団に対する集計かを表す。diff mode では `diagnostics` が `AffectedScopeSet` のみでも、`summary_scope = WholeProject` により summary は変更後プロジェクト全体値を表現できる
@@ -621,13 +624,17 @@ classDiagram
 
 ### 3.6 レポートコンテキスト
 
-レポートコンテキストは ACL として機能し、ドメインオブジェクトを外部形式に変換する薄い層である。固有のエンティティや集約は持たず、以下の変換を担う。`--llm` 指定時は application/report 境界で組み立てられた `LlmEnrichmentRequest` の結果として `LlmSuggestionBundle` を受け取り、出力へ併記する。
+レポートコンテキストは ACL として機能し、ドメインオブジェクトを外部形式に変換する薄い層である。固有のエンティティや集約は持たず、`ReportMetadata` と `ReportViewOptions` という value object を受け取って以下の変換を担う。`--llm` 指定時は application/report 境界で組み立てられた `LlmEnrichmentRequest` の結果として `LlmSuggestionBundle` を受け取り、出力へ併記する。
 
 | 入力（ドメイン） | 出力形式 | 関連要件 |
 |---|---|---|
-| DiagnosticReport + AnalysisMetrics + Option~LlmSuggestionBundle~ | human（端末表示） | REQ-FUNC-019 |
+| DiagnosticReport + AnalysisMetrics + ReportMetadata + ReportViewOptions + Option~LlmSuggestionBundle~ | human（端末表示） | REQ-FUNC-019 |
 | 同上 | JSON | REQ-FUNC-020 |
 | 同上 | SARIF 2.1.0 | REQ-FUNC-021 |
+
+- `ReportMetadata` は、`analysis_targets`（`WorkspaceRoot` 基準の正規化済み path 群で入力順を保持）、`tool_version`、`schema_version` を保持する。JSON/SARIF のルートメタデータはここを source of truth とする
+- `ReportViewOptions` は `requested_level` と `minimum_severity` を保持する。`minimum_severity` は一覧の投影だけに影響し、`DiagnosticReport.summary` と `ExitCode` の母集団は常に `DiagnosticReport.summary_scope` に従う
+- レポートコンテキストは managed bundle の状態や bootstrap 成否を保持しない。運用メッセージは application/infrastructure 側で `stderr` / 構造化ログへ出し、外部出力の `stdout` 契約とは分離する
 
 ## 4. 状態遷移図
 
@@ -744,6 +751,9 @@ stateDiagram-v2
 |---|---|---|
 | LLM補助提案バンドル (LlmSuggestionBundle) | `DiagnosticId` ごとに report 層で併記される任意の補助提案集合。コア診断は変更しない | DiagnosticId, LlmSuggestion |
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
+| レポートメタデータ (ReportMetadata) | `analysis_targets`、`tool_version`、`schema_version` を束ねる値。`analysis_targets` は `WorkspaceRoot` 基準の正規化済み path 群で入力順を保持する | AnalysisTarget |
+| 解析対象 (AnalysisTarget) | レポート出力に載せる 1 つの解析対象 path。`WorkspaceRoot` 相対の正規化済み `FilePath` で表す | ReportMetadata |
+| レポート表示オプション (ReportViewOptions) | `requested_level` と `minimum_severity` を表す値。診断一覧の投影だけを制御し、summary/exit code は変更しない | DiagnosticReport |
 | LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決し、`source_excerpt` と `cpg_excerpt` は相互排他的にどちらか一方だけを持つ。根拠を代表ファイルへ還元できない場合は生成しない | Diagnostic, SourceAnalysis |
 | ソース抜粋 (SourceExcerpt) | LLM 送信に使う、代表ファイル上の最小ソース断片。ファイルパス、行範囲、本文テキストを持つ | SourceLocation |
 | CPG抜粋 (CpgSubgraphExcerpt) | LLM 送信に使う、診断に必要な最小部分だけへ正規化した CPG 表現 | ScopeId |
@@ -802,6 +812,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.5 | 2026-03-19 | PatternRule への RuleConfig 入力、ReportMetadata/ReportViewOptions、ScopeId 順序規則、managed bundle 境界を反映 | Codex |
 | 0.2.4 | 2026-03-19 | `requirements.md` v0.2.4 の契約整理に合わせて入力バージョン参照を同期 | Codex |
 | 0.2.3 | 2026-03-19 | `overflow_ratio` 丸め規則と `LlmEnrichmentRequest` excerpt one-of 契約を明文化 | Codex |
 | 0.2.2 | 2026-03-19 | `WorkspaceRoot`/workspace-relative path、Rust semantic edge、plugin participation 契約、Go package owner scope を反映 | Codex |

@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.4 |
+| バージョン | 0.2.5 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -74,7 +74,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | メトリクス | CPGから算出される定量的な評価指標。情報理論（エントロピー等）やグラフ理論（結合度、モジュラリティ等）に基づく |
 | 診断 | メトリクスの閾値違反や構造的パターンの検出結果。ファイルパス・行範囲・ルールID・重大度・メッセージを含む |
 | 改善提案 | 診断に対する具体的な修正方針のテキスト。何が問題か、なぜ問題か、どう改善すべきかを記述する |
-| ルール | 特定のメトリクスまたはパターンと閾値、重大度、提案テンプレートの組み合わせ。一意のルールID（`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式）で識別される |
+| ルール | 特定のメトリクスまたはパターンに対する診断生成規則。一意のルールID（`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式）で識別され、閾値・重大度・提案テンプレートなどの詳細契約は rule 種別ごとに決まる |
 | 総合スコア | 各階層の正規化リスク値（0.0〜1.0, 高いほど悪い）を重み付き集約し、`100 * (1 - overall_risk)` で算出する品質スコア |
 | ワークスペースルート | kalos が解析の基準ディレクトリとして解決するルート。カレントディレクトリから親方向に探索して最初に見つかった `.kalos.toml` の親ディレクトリを優先し、見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらもなければ実行時カレントディレクトリを採用する |
 | ワークスペース相対パス | ワークスペースルート基準で正規化されたパス。内部 `FilePath`、`plugin_manifest` のプラグイン参照、LLM sidecar の `workspace_relative_path` はこの形式を用いる |
@@ -169,12 +169,15 @@ AIエージェントによるコーディングの発達に伴い、生成され
 #### REQ-FUNC-007: 外部依存の型情報・シグネチャ解決
 
 - **説明**: 外部ライブラリの型情報・関数シグネチャを解決し、CPGのモジュール間エッジの精度を確保する
-- **入力**: プロジェクトの依存関係定義（`requirements.txt`, `package.json`, `Cargo.toml`, `go.mod` 等）
-- **処理**: 各言語のパッケージマネージャまたは型スタブを利用し、外部依存の公開API（関数シグネチャ、型定義）を取得する。取得した情報をCPGの外部ノードとして統合する
+- **入力**: プロジェクトの依存関係定義（`requirements.txt`, `package.json`, `Cargo.toml`, `go.mod` 等）、対応する lockfile、およびローカルに利用可能な型スタブ/メタデータ cache
+- **処理**:
+  - 各言語の dependency symbol resolver adapter が、依存関係定義・lockfile・ローカルに利用可能な型スタブ/メタデータ cache を利用して外部依存の公開API（関数シグネチャ、型定義）を取得する
+  - 解析実行中の追加ネットワーク通信は行わず、取得した情報をCPGの `ExternalSymbol` ノードとして統合する
 - **例外**: 型情報が取得できない依存については、解決失敗として警告を出力する。メトリクス算出時には解決済みの依存のみで精度の範囲内の評価を行う
 - **受け入れ基準**:
   - Given `Cargo.toml` に記載された外部クレート, When CPG生成を実行, Then 当該クレートの公開関数シグネチャがCPGの外部ノードとして含まれる
   - Given 型情報が取得できない依存, When CPG生成を実行, Then 解決失敗の警告を出力する
+  - Given ネットワーク未接続かつ依存定義・lockfile・必要なローカル metadata が存在, When CPG生成を実行, Then 追加の外部通信なしで外部シンボル解決が試行される
 - **優先度**: Should
 - **出典**: ユーザー明示（「unknownは投げやりなので、きちんと解決すること」）
 - **関連要件**: REQ-FUNC-001〜004
@@ -585,8 +588,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Linux: x86_64, aarch64
   - macOS: x86_64, aarch64
   - Windows: x86_64
+- **配布契約**: CodeQL 管理対象 bundle の version/checksum を定義する managed bundle manifest は、kalos リリースの一部としてバイナリと一体で versioning される
 - **受け入れ基準**:
   - Given 各対応プラットフォームのクリーン環境, When バイナリをダウンロードして `kalos check .` を実行, Then kalos CLI 自身が CodeQL 管理対象 bundle の bootstrap / 検証 / キャッシュを行い、手動の追加ランタイムインストールなしで動作する
+  - Given 同一 kalos リリースのバイナリ, When CodeQL bundle を bootstrap する, Then 利用する bundle の version/checksum はそのリリース同梱の managed bundle manifest によって一意に決まる
 - **優先度**: Must
 - **出典**: ユーザー確認済み + 2026-03-19 ユーザー判断
 
@@ -712,7 +717,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **基準**:
   - ネットワーク通信は (a) kalos CLI が行う CodeQL 管理対象 bundle の bootstrap、(b) `--llm` 指定時の LLM 呼び出し、のみに限定する
-  - CodeQL bundle 取得は固定バージョン + SHA-256 検証付きで行う
+  - CodeQL bundle 取得は固定バージョン + SHA-256 検証付きで行い、その正本は kalos リリースに同梱される managed bundle manifest とする
   - LLM の API キーは環境変数のみから取得し、設定ファイルへ保存しない
   - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る。request ごとに `source_excerpt` と `cpg_excerpt` は相互排他的とする
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
@@ -735,7 +740,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 |---|---|---|---|---|
 | 1 | CodeQL 代替アダプタ比較を継続するか | REQ-FUNC-001〜004, REQ-NF-005 | PoC 完了後の ADR 見直し | v1 は CodeQL 既定 |
 | 2 | WASM プラグイン SDK と配布パッケージ形式 | REQ-FUNC-012, REQ-NF-006 | v1.1 設計 | v1 の `plugin_manifest` は `.kalos.toml` 正規化結果で固定済み |
-| 3 | 各言語の外部シンボル解決アダプタ実装 | REQ-FUNC-007 | 言語別設計ノート | 要件上の契約は固定済み |
+| 3 | 各言語の外部シンボル解決アダプタ実装 | REQ-FUNC-007 | 言語別設計ノート | lockfile / stub / local metadata を使ったローカル解決で、解析時ネットワーク不要を満たすこと |
 | 4 | NF-001 の 60 秒目標と CodeQL 抽出時間の両立可能性 | REQ-NF-001 | ベンチマーク PoC | 未達なら代替アダプタを比較 |
 | 5 | 新しい report-only plugin metric を `MetricDefinition` 実装と `.kalos.toml` 登録だけで差し込めるか | REQ-FUNC-012, REQ-NF-006 | 拡張性 PoC | 既存の CPG 抽出・CLI・設定管理を変更せずに成立することを確認 |
 
@@ -769,6 +774,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.5 | 2026-03-19 | 外部シンボル解決のローカル入力契約、managed bundle manifest の正本、配布契約を明文化 | Codex |
 | 0.2.4 | 2026-03-19 | 複数 target の CLI/JSON 契約、metric severity override、plugin extensibility PoC 項目を明文化 | Codex |
 | 0.2.3 | 2026-03-19 | plugin aggregate budget を Metrics stage 内数へ調整し、LLM excerpt one-of 契約を明文化 | Codex |
 | 0.2.2 | 2026-03-19 | WorkspaceRoot/`workspace_relative_path` 契約、Go owner scope=package、Rust semantic edge、plugin report-only 契約、PAT001 Python 規則を明文化 | Codex |

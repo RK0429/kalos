@@ -59,7 +59,7 @@ kalos は同時に以下を満たす必要がある。
   - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
   - `kalos_version`: kalos バイナリ自体の版
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む
-- コア評価順序は常にスコープ昇順 `(<level>, <qualified_name>, <file_path>)` に固定し、キャッシュヒット時も同じ順序で統合する
+- コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
 
 ## 帰結
 

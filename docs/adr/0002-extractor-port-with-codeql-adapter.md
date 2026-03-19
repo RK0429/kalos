@@ -14,7 +14,7 @@
 - `REQ-NF-007`
 - 要件書 5章「PoC / 将来拡張で検証する項目」
 
-ドメインモデル上も、`SourceAnalysis` と `UnifiedCpg` が下流公開契約として定義されている。
+ドメインモデル上も、`ExtractorPort` の外部公開契約は `SourceAnalysis` として定義され、`UnifiedCpg` はその内部公開言語として位置付けられている。
 
 ## 検討した選択肢
 
@@ -58,6 +58,7 @@ Python/TS/Rust/Go で最適エンジンを変える。
 ## 根拠
 
 - CodeQL は初期実装として使うが、`ExtractorPort` の出力契約は `SourceAnalysis` に固定する。下流コンテキストは `SourceAnalysis` 内の `UnifiedCpg` を公開言語として参照する
+- 外部依存の型情報・シグネチャ解決も extractor 境界内の language-specific resolver adapters へ閉じ込め、依存定義・lockfile・ローカル stub / metadata だけで解決する。解決失敗は `SourceAnalysis.warnings` として下流へ渡す
 - CodeQL bundle は Managed Tool Cache Adapter が固定バージョン + SHA-256 検証付きで bootstrap / verify / cache し、CLI 利用者へ手動セットアップを要求しない（`REQ-FUNC-031`, `REQ-NF-009`）
 - GitHub Action は managed tool cache を prewarm / restore/save する wrapper に留め、bootstrap の正本は kalos CLI 側に置く
 - これにより、将来の性能問題や言語追加時の変更を抽出境界内へ閉じ込められる
@@ -79,9 +80,10 @@ Python/TS/Rust/Go で最適エンジンを変える。
 
 ### 制約
 
-- CodeQL bundle は固定バージョンを managed tool cache へ初回取得し、SHA-256 で検証する。バージョンと checksum は kalos のリリースに紐づく（`REQ-NF-009`）
+- CodeQL bundle は固定バージョンを managed tool cache へ初回取得し、SHA-256 で検証する。バージョンと checksum の正本は kalos リリースに同梱される managed bundle manifest とする（`REQ-NF-009`）
 - managed bundle がキャッシュ済み（warm）かつ `--llm` 未使用であれば、オフライン環境でも `kalos check` が動作する（`REQ-NF-010`）
 - bundle 未取得かつオフラインの場合は、bootstrap が必要であることを示す明確なエラーメッセージを出力し exit code 2 で終了する（`REQ-NF-010`）
+- 外部シンボル解決は解析時に追加ネットワーク通信を行わず、依存定義・lockfile・ローカル stub / metadata だけを参照する（`REQ-FUNC-007`, `REQ-NF-009`）
 
 ### リスク
 
