@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.8 |
+| バージョン | 0.2.10 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -371,8 +371,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-018: `kalos check` コマンドによる解析実行
 
-- **説明**: `kalos check <path>...` で 1 個以上の対象パスを解析する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
-- **入力**: 1 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数
+- **説明**: `kalos check [<path>...]` で対象パスを解析する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
+- **入力**: 0 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数。位置引数を省略した場合はカレントディレクトリ `.` を暗黙の単一対象とする
 - **一覧・summary・exit code の母集団**:
   - 診断一覧: full mode では全診断、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
@@ -389,6 +389,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
   - Given 有効なプロジェクトディレクトリ, When `kalos check .` を実行, Then 全対応言語ファイルが解析され、診断結果が端末に表示される
+  - Given 位置引数なしで `kalos check` を実行, When カレントディレクトリ配下に対応言語ファイルが存在, Then `.` をデフォルト対象として全対応言語ファイルが解析される
   - Given `kalos check src tests/test_app.py` のように複数 path を指定, When 解析実行, Then 指定された各 path 配下の対応言語ファイルが単一の解析対象集合として統合される
   - Given `--format json` 指定, When 解析実行, Then 結果がJSON形式で出力される
 - **優先度**: Must
@@ -428,7 +429,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: 解析結果を機械可読なJSON構造で出力する。全メトリクス・総合スコア・summary を含み、`diagnostics` は full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。`schema_version` を持つ
 - **最低限のJSON契約**:
   - ルートには `schema_version`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
-  - `analysis_targets` は CLI または API で受け取った解析対象 path 群を `WorkspaceRoot` 基準で正規化した配列とし、入力順を保持する。単一 target の場合も配列で表現する
+  - `analysis_targets` は CLI で受け取った解析対象 path 群を Configuration が `WorkspaceRoot` 基準で正規化・検証した配列とし、入力順を保持する。位置引数省略時のデフォルト `.` も同様に正規化する。単一 target の場合も配列で表現する
   - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含めてよいが、v1 のプラグインメトリクスは report-only であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
@@ -447,12 +448,17 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: 解析結果をSARIF（Static Analysis Results Interchange Format）形式で出力し、GitHub Code Scanning等との連携を可能にする
 - **SARIF への写像方針**:
-  - `Diagnostic.message` は常に `result.message.text` へ格納する
-  - `template_suggestion` は常に `result.properties.kalos.template_suggestion` へ格納する
-  - `llm_suggestion` が存在する場合は `result.properties.kalos.llm_suggestion` に格納する
-  - `location.column = null` の診断では `startColumn` / `endColumn` を出力しない
+  - **ルール**: 各 `Diagnostic.rule_id` を `run.tool.driver.rules[]` に登録する。`rules[].id` は `rule_id`（例: `KAL-F001`）、`rules[].shortDescription.text` はルール名称、`rules[].defaultConfiguration.level` はデフォルト重大度の SARIF level 写像とする。`result.ruleId` で当該ルールを参照し、`result.ruleIndex` でインデックスを指定する
+  - **重大度**: `Diagnostic.severity` を `result.level` へ写像する。`error` → `"error"`、`warning` → `"warning"`、`info` → `"note"` とする
+  - **位置**: `Diagnostic.location` を `result.locations[].physicalLocation` へ写像する。`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` は `location.line`、`region.endLine` は `location.end_line` とする。`location.column` が非 `null` の場合は `region.startColumn` を出力し、`location.column = null` の場合は `startColumn` / `endColumn` を出力しない
+  - **メッセージ**: `Diagnostic.message` は常に `result.message.text` へ格納する
+  - **改善提案**: `template_suggestion` は常に `result.properties.kalos.template_suggestion` へ格納する。`llm_suggestion` が存在する場合は `result.properties.kalos.llm_suggestion` に格納する
 - **受け入れ基準**:
   - Given 解析結果, When `--format sarif` で出力, Then 出力がSARIF 2.1.0スキーマに準拠する
+  - Given メトリクス閾値違反の診断, When `--format sarif` で出力, Then `run.tool.driver.rules[]` に当該 `rule_id` が登録され、`result.ruleId` が一致し、`result.level` が重大度の SARIF 写像と一致する
+  - Given `location.column` が非 `null` の診断, When `--format sarif` で出力, Then `result.locations[].physicalLocation.region` に `startLine`, `endLine`, `startColumn` が含まれる
+  - Given `location.column = null` の cross-scope 診断, When `--format sarif` で出力, Then `result.locations[].physicalLocation.region` に `startLine` と `endLine` は含まれるが `startColumn` / `endColumn` は含まれない
+  - Given GitHub Code Scanning に SARIF をアップロード, When PR 上で結果を表示, Then 各診断がルール ID・重大度・ソース位置付きのアノテーションとして表示される
 - **優先度**: Should
 - **出典**: ユーザー確認済み
 - **関連要件**: REQ-FUNC-020
@@ -506,7 +512,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-025: プロジェクト設定ファイルの読み込み
 
-- **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。Configuration は `--config <path>` 指定時はその `.kalos.toml` を明示的に読み込み、その親ディレクトリを `WorkspaceRoot` とする。`--config` 未指定時はカレントディレクトリから親方向に設定ファイルを探索し、最初に見つかった `.kalos.toml` の親ディレクトリを `WorkspaceRoot` とする。`.kalos.toml` が見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらも見つからない場合は実行時カレントディレクトリを `WorkspaceRoot` とする。内部 `FilePath`、`workspace_relative_path`、`plugin_manifest`、`analysis_targets` はこの `WorkspaceRoot` 基準で正規化する。canonicalize 後に `WorkspaceRoot` 配下に入らない解析対象やプラグイン `path` は設定/入力エラーとして扱う（monorepo対応）
+- **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。Configuration は `--config <path>` 指定時はその `.kalos.toml` を明示的に読み込み、その親ディレクトリを `WorkspaceRoot` とする。`--config` 未指定時はカレントディレクトリから親方向に設定ファイルを探索し、最初に見つかった `.kalos.toml` の親ディレクトリを `WorkspaceRoot` とする。`.kalos.toml` が見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらも見つからない場合は実行時カレントディレクトリを `WorkspaceRoot` とする。Configuration は内部 `FilePath`、`workspace_relative_path`、`plugin_manifest`、`analysis_targets` をこの `WorkspaceRoot` 基準で正規化する。`analysis_targets` については CLI Shell から受け取った生パス（位置引数省略時のデフォルト `.` を含む）を `WorkspaceRoot` 相対パスへ正規化し、canonicalize 後に `WorkspaceRoot` 配下に入らないパスは入力エラーとして拒否する（monorepo対応）。プラグイン `path` も同様に `WorkspaceRoot` 配下に限定する
 - **設定の優先順位**: スカラー値は CLI引数 > プロジェクト設定ファイル > デフォルト値。`exclude` は `.gitignore` 既定値 + 設定ファイル + CLI の加算マージとし、プラグイン登録は `workspace_relative_path` と checksum を含む `plugin_manifest` へ正規化して保持する
 - **設定ファイル形式例**:
   ```toml
@@ -786,6 +792,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.10 | 2026-03-19 | `kalos check` の位置引数省略時デフォルト `.` を明記、`analysis_targets` の正規化・検証責務を Configuration に一本化、SARIF の rule/severity/location 写像を拡充、stray `API` 表記を除去、メタ情報バージョンを同期 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 正規化基準、diff fallback 条件のトレーサビリティを補強 | Codex |
 | 0.2.8 | 2026-03-19 | `scores.overall` の metrics 起源、summary との責務分離、plugin checksum 構文検証を明文化 | Codex |
 | 0.2.7 | 2026-03-19 | plugin `metric_id` 衝突契約、cross-scope 診断の表示/抑制規則、SARIF 写像の固定を明文化 | Codex |

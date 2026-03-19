@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.8 |
+| バージョン | 0.2.10 |
 | 最終更新日 | 2026-03-19 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.2.8 |
+| 入力 | requirements.md v0.2.10 |
 
 ## 1. サブドメイン分類
 
@@ -605,6 +605,7 @@ classDiagram
 
 - `ProjectConfig.resolve()` が設定の優先順位（CLI > ファイル > デフォルト）をカプセル化し、`WorkspaceRoot`（`--config <path>` 指定時はその `.kalos.toml` の親、未指定時は最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory）を解決する（REQ-FUNC-025）
 - ドメイン内の `FilePath` はすべて `WorkspaceRoot` 相対の正規化パスであり、絶対パスを保持するのは `WorkspaceRoot.abs_path` だけ
+- `Configuration` は CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化し、`WorkspaceRoot` 内包性を検証する。正規化済み `analysis_targets` は `ReportMetadata` の一部として下流に渡す
 - `exclude_patterns` は `.gitignore` の既定除外、設定ファイル `exclude`、CLI `--exclude` の正規化済み和集合。v1 では negation による除外解除を許可しない
 - `plugin_manifest` は `.kalos.toml` のプラグイン登録を workspace-relative path と checksum の組へ正規化した決定論的な正本。`WorkspaceRoot` 外 path、不正な `sha256`、または `analysis_targets` の `WorkspaceRoot` 外参照は `ProjectConfig.resolve()` の段階で設定/入力エラーにする。Plugin Host と差分キャッシュは、この検証を通過した解決済み manifest だけを参照する
 - `RuleConfig` の各フィールドは `Option` 型。None は「デフォルト値を使用」を意味し、マージロジックがシンプルになる。`threshold` の有効範囲は `[0.0, 1.0]`。`ScoreWeights` の各値は `> 0.0` かつ有限でなければならない。`ProjectConfig.resolve()` は検証に失敗した場合、設定エラーとして扱う（exit code 2）
@@ -623,7 +624,8 @@ classDiagram
 - `ReportMetadata` は、`analysis_targets`（`WorkspaceRoot` 基準の正規化済み path 群で入力順を保持）、`tool_version`、`schema_version` を保持する。JSON/SARIF のルートメタデータはここを source of truth とする
 - `ReportViewOptions` は `requested_level` と `minimum_severity` を保持する。`minimum_severity` は一覧の投影だけに影響し、`DiagnosticReport.summary` と `ExitCode` の母集団は常に `DiagnosticReport.summary_scope` に従う
 - レポートコンテキストは managed bundle の状態や bootstrap 成否を保持しない。運用メッセージは application/infrastructure 側で `stderr` / 構造化ログへ出し、外部出力の `stdout` 契約とは分離する
-- SARIF writer は `Diagnostic.message -> result.message.text`、`template_suggestion -> result.properties.kalos.template_suggestion`、`llm_suggestion -> result.properties.kalos.llm_suggestion` の固定写像を用いる
+- SARIF writer は以下の固定写像を用いる: `Diagnostic.rule_id` → `run.tool.driver.rules[].id` と `result.ruleId` / `result.ruleIndex`、`Diagnostic.severity` → `result.level`（`error` / `warning` / `note`）、`Diagnostic.location` → `result.locations[].physicalLocation`（`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` / `endLine` は `location.line` / `end_line`）。`location.column` が `None` の診断では `startColumn` / `endColumn` を出力しない
+- `Diagnostic.message` は `result.message.text`、`template_suggestion` は `result.properties.kalos.template_suggestion`、`llm_suggestion`（存在する場合）は `result.properties.kalos.llm_suggestion` へ写像する
 
 ## 4. 状態遷移図
 
@@ -631,10 +633,12 @@ classDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initialized: kalos check path
+    [*] --> Initialized: kalos check [<path>...] (default: .)
     Initialized --> CollectingFiles: start()
     CollectingFiles --> ExtractingCpg: files collected
-    ExtractingCpg --> ComputingMetrics: CPG extracted
+    ExtractingCpg --> ResolvingDiffImpact: CPG extracted [diff mode]
+    ExtractingCpg --> ComputingMetrics: CPG extracted [full mode]
+    ResolvingDiffImpact --> ComputingMetrics: affected scopes resolved
     ComputingMetrics --> GeneratingDiagnostics: metrics computed
     GeneratingDiagnostics --> Completed: report generated
 
@@ -801,6 +805,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.2.10 | 2026-03-19 | パイプライン状態図に diff/impact ステージを復元、SARIF の rule/severity/location/message 写像を同期、`analysis_targets` 正規化の owner を Configuration に明記、CLI path 省略時のデフォルト `["."]` を明記 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 検証境界、`InvalidationPlan.fallback_to_full` の主トリガを反映 | Codex |
 | 0.2.8 | 2026-03-19 | `source_files` / `ScopeId` 正規形、`ScopeMetrics` の重複解消、score-summary 分離、subset diff fallback、plugin 検証境界を反映 | Codex |
 | 0.2.7 | 2026-03-19 | plugin `MetricId` 一意性、cross-scope 診断の表示/抑制規則、SARIF 写像の固定を反映 | Codex |
