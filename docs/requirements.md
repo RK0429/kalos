@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.0 |
+| バージョン | 0.4.1 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -731,6 +731,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-NF-005: 言語サポートの追加
 
 - **基準**: 新しい言語のサポートを追加する際、CPG抽出境界の内部にある言語パーサー、`UnifiedCpg` への変換、owner/public semantics を正規化する language profile の追加で対応可能な設計とする。メトリクス算出・スコア集約・レポート・CLI 等のコアコンポーネントへの変更を不要とする
+- **完了条件の注記**: 本要件は CPG 抽出境界内の拡張性保証（parser / normalizer / language profile）を定める。新言語の完全なサポートには、これに加えて外部依存の型情報・シグネチャ解決のための language-specific resolver adapter（`REQ-FUNC-007`、`Dependency Symbol Resolver Port`）が必要となる。resolver adapter の各言語実装は 5 章 #3 の PoC 項目として別途追跡する（ADR-0002 §新言語追加時のスコープに関する注記 参照）
 - **優先度**: Must
 - **出典**: エージェント推測→ユーザー確認済み
 
@@ -824,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.1 | 2026-03-22 | レビュー指摘解決: `REQ-NF-005` に resolver adapter（`REQ-FUNC-007`）との関係を完了条件注記として追加 | Claude |
 | 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |
 | 0.3.1 | 2026-03-22 | REQ-NF-009 に ADR-0005 の LLM runtime policy（aggregate sidecar budget 120s、preflight failure、URL 秘匿化契約）を伝播 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: `enabled = false` セマンティクスの明文化（REQ-FUNC-026 拡充、REQ-FUNC-011 scope_risk 除外注記）、KAL-PAT002 受け入れ基準追加、summary_scope 表記を snake_case に統一、デフォルト閾値の校正注記追加、subset analysis_targets フォールバックの明確化、用語集にアーキテクチャコンポーネント定義を追加 | Claude |

@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.0 |
+| バージョン | 0.4.1 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.0, domain_model.md v0.4.0 |
+| 入力 | requirements.md v0.4.1, domain_model.md v0.4.0 |
 
 ## 1. 設計目標
 
@@ -215,7 +215,7 @@ CPG Extraction
 - `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `Diagnostics` は canonical `primary_scope_id` を持つ `Diagnostic` の一覧だけを返し、diff 表示判定や `ScopeDiagnosticSnapshot` の所有単位はその `primary_scope_id` を基準にする。metric 診断では評価対象 `ScopeId`、pattern 診断では主対象 scope、単一の主対象を持たない cross-scope 診断では辞書順最小 `ScopeId` を使う
-- `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す
+- `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を読み取り、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す。プロバイダ選択は環境変数 `KALOS_LLM_PROVIDER` で行い（v1 の許容値: `openai`、デフォルト: `openai`）、選択されたプロバイダがリクエスト形式とデフォルトエンドポイント URL を決定する（`REQ-NF-009`, ADR-0005 参照）。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で上書き可能であり、未設定時はプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）
 - `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`SourceAnalysis.source_files` は workspace-relative path 一意かつ path 昇順の決定論的対応表である。`source_excerpt` または `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得し、request を生成する場合は相互排他的に一方のみを設定する。`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する。multi-file / multi-language 診断で必須根拠を代表ファイル断片へ還元できない場合は LLM sidecar を起動しない
 - `Application Pipeline` は `List<Diagnostic>` と `summary_scope` から `DiagnosticReport` を assemble する。`summary_scope = listed_diagnostics` では現在の診断一覧から、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から summary を materialize する
 - `ReportViewOptions.minimum_severity` は診断一覧の表示/出力対象だけを絞り込み、`DiagnosticReport.summary` と exit code の計算母集団は変えない
@@ -404,7 +404,7 @@ sequenceDiagram
 | CPG 抽出 | Extractor Port + 初期実装は CodeQL Adapter | 要件の前提を守りつつ、将来の代替エンジン差し替えを可能にする | ADR-0002 |
 | 差分キャッシュ | ファイルシステムベースの Baseline Cache | ローカル実行・CI キャッシュの両方で利用しやすい | ADR-0003 |
 | プラグイン | WASM ホスト + 安定 SPI | ユーザー定義メトリクスをクロスプラットフォームに配布しやすい | ADR-0004 |
-| LLM 連携 | HTTP Adapter、API キーは環境変数 | コアと切り離しやすく、障害時フォールバックを実装しやすい | ADR-0005 |
+| LLM 連携 | HTTP Adapter、API キーは環境変数。プロバイダ選択（`KALOS_LLM_PROVIDER`）がリクエスト形式とデフォルトエンドポイント URL を決定する | コアと切り離しやすく、障害時フォールバックを実装しやすい | ADR-0005 |
 
 ### 6.1 CPG 抽出エンジンの扱い
 
@@ -415,7 +415,7 @@ sequenceDiagram
 - 要件の「CodeQL 前提」を満たす
 - CodeQL bundle が未配置でも、Managed Tool Cache Adapter が固定バージョン + checksum 検証付きで初回取得できる
 - 外部シンボル解決も extractor 境界内の language-specific resolver adapters へ閉じ込め、解析時ネットワーク不要の契約を守れる
-- `REQ-NF-005` に従い、新言語追加時の変更面は CPG 抽出境界内の parser / normalizer / language profile へ閉じる
+- `REQ-NF-005` に従い、新言語追加時のコア拡張変更面は CPG 抽出境界内の parser / normalizer / language profile へ閉じる。完全な言語サポートにはさらに `Dependency Symbol Resolver Port` の language-specific resolver adapter（`REQ-FUNC-007`）が必要であり、これは PoC 項目 #6 で別途追跡する（ADR-0002 §新言語追加時のスコープに関する注記 参照）
 - 性能 PoC の結果次第で代替エンジンへ置換できる
 
 ### 6.2 決定論性の実装規約
@@ -453,7 +453,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | シークレット管理 | API キーは環境変数のみ。設定ファイルへ保存しない |
 | 外部ツール取得 | CodeQL bundle は kalos release 同梱の managed bundle manifest で version/checksum を固定し、managed cache へ初回取得して SHA-256 を検証する |
 | 外部プロセス呼出 | CodeQL 呼出は引数配列で実行し、シェル展開しない |
-| LLM 送信データ | `--llm` 明示時のみ送信し、対象コード断片または `CpgSubgraphExcerpt` を最小化する。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` 環境変数で設定する（REQ-NF-009 参照） |
+| LLM 送信データ | `--llm` 明示時のみ送信し、対象コード断片または `CpgSubgraphExcerpt` を最小化する。プロバイダは `KALOS_LLM_PROVIDER` で選択し（v1: `openai`、デフォルト: `openai`）、プロバイダがリクエスト形式を決定する。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で設定し、未設定時はプロバイダ固有のデフォルト URL を使用する（`REQ-NF-009`, ADR-0005 参照） |
 | LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、または `KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合は設定エラー（exit code 2）とする（ADR-0005 参照） |
 | LLM タイムボックス | per-request: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。aggregate sidecar budget: `120s`（暫定値）— 上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。暫定値は PoC で確定予定（ADR-0005 参照） |
 | LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
@@ -539,6 +539,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 - **閾値**: `domains/cpg`、`adapters/extractor`、および extractor 境界の language profile 定義に限定
 - **計測方法**: サンプル言語追加のアーキテクチャテスト
 - **違反時のアクション**: `UnifiedCpg` 契約か責務分割を見直す
+- **スコープ注記**: 本適合度関数は `REQ-NF-005` のコア拡張性保証（CPG 抽出境界内の変更面限定）を計測する。`Dependency Symbol Resolver Port` の language-specific resolver adapter（`REQ-FUNC-007`）は `adapters/dependency_resolver/` への追加であり、コア拡張性の閾値外だが、完全な言語サポートには必要である（PoC 項目 #6、ADR-0002 §新言語追加時のスコープに関する注記 参照）
 
 ### 適合度関数: メトリクス追加の変更面
 
@@ -595,6 +596,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.1 | 2026-03-22 | レビュー指摘解決: 新言語追加完了条件に resolver adapter（`REQ-FUNC-007`）との関係を明文化（QA-04 適合度関数・§6.1）、LLM provider 契約（`KALOS_LLM_PROVIDER`・プロバイダによるリクエスト形式/デフォルトエンドポイント決定）を §4.2 ルール・§6 技術選定・§7.2 セキュリティ設計に伝播 | Claude |
 | 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、入力参照更新、project scope 正規形を 3-field 表記に統一、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |
 | 0.3.1 | 2026-03-22 | ADR-0005 の LLM runtime policy（aggregate sidecar budget 120s、preflight failure、URL 秘匿化契約）をセキュリティ設計・性能予算セクションへ伝播 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: 版メタ同期、`enabled = false` のスコア集約除外セマンティクス追記、merged dependency graph 生成契約追加、Application Pipeline 責務表追加、C4 レベル3 名称修正 + Git Diff Adapter 追加、ベースライン write-back ライフサイクル追加、subset fallback 文言明確化、`summary_scope` 表記統一 | Claude |
