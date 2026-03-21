@@ -291,7 +291,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
   - Given プラグインのロードまたは検証に失敗, When 解析実行, Then 当該失敗は運用警告として記録されるだけで、既存の診断・総合スコア・exit code の契約は変わらない
   - Given aggregate plugin budget を使い切った, When 解析実行, Then 残りのプラグイン評価は warning 付きでスキップされ、コア評価は継続する
-  - Given プラグインの `metric_id` が組み込みまたは先行ロード済みプラグインと衝突, When 解析実行, Then 当該プラグインは warning 付きでスキップされ、同じ `plugin_manifest` から常に同じ結果になる
+  - Given プラグインの `metric_id` が組み込みまたは先行ロード済みプラグインと衝突, When 解析実行, Then 当該モジュールは初期化中に登録した全 `MetricDefinition` をロールバックされ warning 付きでスキップされる（登録の原子性）。同じ `plugin_manifest` から常に同じ結果になる
 - **優先度**: Should
 - **出典**: ユーザー確認済み（当初Couldだったが、ユーザーの要望でShouldに昇格）
 
@@ -662,8 +662,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `analysis_targets_hash` の正規化規則: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化し、ソート済み重複排除リストからハッシュを算出する（ADR-0003 参照）
   - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。ロード失敗・fuel budget 超過・スキップされたプラグインの `MetricValue` は baseline 断片から除外する
   - ベースラインキャッシュは `--level` に関わらず以下の全構成要素を保存する（永続化ペイロード）: (1) 全階層の `ScopeMetrics`（丸め済み `scope_risk` を含む function / module / project）、(2) `ScopeDiagnosticSnapshot`（`primary_scope_id` ごとの診断断片）、(3) `OverallScore`（丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score`）、(4) `DependencyIndexManifest`（全スコープ間の依存辺）。`--level` は報告対象の制限であり、保存範囲には影響しない。これにより、異なる `--level` での実行間でもベースラインを再利用できる
-  - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全解析へフォールバックする（全ワークスペースへの拡張は行わない）。`--level` は指定通り保持する
-  - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
+  - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全スコープ解析へフォールバックする（全ワークスペースへの拡張は行わない）。`--level` は指定通り保持する
+  - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全スコープ解析へフォールバックする
   - baseline cache の保存場所は環境変数 `$KALOS_CACHE_DIR` で指定する。未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`（ADR-0003 参照）
   - baseline cache の再利用は best-effort とし、checkout path が変わる CI や cache 未復元環境では correctness を優先して全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
@@ -673,7 +673,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **受け入れ基準**:
   - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後のプロジェクト全体値として出力される
   - Given `--diff HEAD~1 --level function` と互換なベースライン, When 解析実行, Then 関数レベルの影響範囲診断のみが一覧に含まれ、機械可読出力の `summary_scope` は `"listed_diagnostics"` となる
-  - Given `--diff HEAD~1 src/foo.rs` のように `analysis_targets` が部分集合, When 解析実行, Then baseline は read/write されず、要求された target 群に対する non-diff 全解析へフォールバックする
+  - Given `--diff HEAD~1 src/foo.rs` のように `analysis_targets` が部分集合, When 解析実行, Then baseline は read/write されず、要求された target 群に対する non-diff 全スコープ解析へフォールバックする
   - Given `--diff HEAD~1` だがベースラインが存在しない, When 解析実行, Then 全解析にフォールバックし、その旨が `stderr` に明示される
 - **優先度**: Should
 - **出典**: ユーザー確認済み + 2026-03-19 設計判断
@@ -770,7 +770,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る。request ごとに `source_excerpt` と `cpg_excerpt` は相互排他的とする
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - LLM 呼び出しは `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` とする
-  - **Aggregate sidecar budget**: 1 回の `kalos check` 全体で LLM sidecar に費やす総所要時間の上限は `120s`（暫定値）とする。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照）
+  - **Aggregate sidecar budget**: 1 回の `kalos check` 全体で LLM sidecar に費やす壁時間（wall-clock time）の上限は `120s`（暫定値）とする。並行ディスパッチ時は個々の request 所要時間の合算ではなく、最初の request 送信開始から最後の response 受信完了までの経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照）
   - **Preflight failure**: `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。代表ファイルの言語解決不可・multi-file 診断の断片還元不可による request 省略は正常動作であり warning を出さない（ADR-0005 参照）
   - **URL 秘匿化**: エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL に含まれうるトークンや API キーの資格情報漏えいを防ぐ（ADR-0005 参照）
 - **優先度**: Must

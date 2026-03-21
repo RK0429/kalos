@@ -225,7 +225,7 @@ CPG Extraction
 - SARIF writer は `Diagnostic.message` → `result.message.text`、`template_suggestion` → `result.properties.kalos.template_suggestion`、`llm_suggestion`（存在する場合）→ `result.properties.kalos.llm_suggestion` の固定写像を用いる
 - `Baseline Cache Adapter` は `DiffBaseline`（丸め済み `scope_risk` を含む `ScopeMetrics`、`ScopeDiagnosticSnapshot`、`*_risk`/`*_score` を含む `OverallScore`、`DependencyIndexManifest`）だけを保持し、計算ロジックは持たない
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
-- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。各 plugin metric は `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う。per-invocation fuel budget と aggregate fuel budget はいずれも WASM fuel metering で制御し（fuel が規範的上限、壁時間は参考値。ADR-0004 参照）、diff mode では現在の実行で失敗またはスキップされたプラグインの baseline cache 済み `MetricValue` を最終出力から除外する
+- `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。各 plugin metric は `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱い、当該モジュールが初期化中に登録した全 `MetricDefinition` をロールバックする（登録の原子性。ADR-0004 参照）。per-invocation fuel budget と aggregate fuel budget はいずれも WASM fuel metering で制御し（fuel が規範的上限、壁時間は参考値。ADR-0004 参照）、diff mode では現在の実行で失敗またはスキップされたプラグインの baseline cache 済み `MetricValue` を最終出力から除外する
 - `Configuration` は `--config` 指定時の `WorkspaceRoot` 解決、CLI path 引数から `analysis_targets` への正規化（省略時は `["."]`）、`analysis_targets` と plugin `path` の `WorkspaceRoot` 内包性検証、`sha256` 構文検証を行い、違反時は設定/入力エラー（exit code 2）として処理する。`Plugin Host` は解決済み `plugin_manifest` だけを受け取り、ファイル読込失敗・checksum 不一致・SPI 不一致・`metric_id` 衝突・fuel budget 超過・メモリ超過・aggregate fuel budget 超過を warning + skip として扱う
 - `Plugin Host` は WASM プラグイン invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。fuel が規範的（normative）な上限であり、壁時間は環境により変動する参考値である。**上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する**（ADR-0004 参照）。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
@@ -324,7 +324,7 @@ sequenceDiagram
     CLI->>APP: 実行要求
     APP->>APP: analysis_targets が全ワークスペースか判定
     alt analysis_targets が部分集合
-        APP->>APP: diff 最適化を無効化し non-diff 全解析へフォールバック（§5.3 参照）
+        APP->>APP: diff 最適化を無効化し non-diff 全スコープ解析へフォールバック（§5.3 参照）
     else analysis_targets が全ワークスペース
         APP->>GIT: base-ref 解決 + analysis_targets との交差
         GIT-->>APP: changed paths + base_snapshot_hash
@@ -356,7 +356,7 @@ sequenceDiagram
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
 - `ReportMetadata.schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
 - `--diff` の最適化が有効な実行では `Impact Analysis Service` が `Project` scope を `recompute_scopes` に必ず含め、project-level metrics と `scores.overall` / `scores.project` を post-change 状態から再構成する
-- `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする（要求された `analysis_targets` のみを対象とし、全ワークスペースへ拡張しない）
+- `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全スコープ解析へフォールバックする（要求された `analysis_targets` のみを対象とし、全ワークスペースへ拡張しない）
 - **ベースラインキャッシュ write-back 契約**:
   - **保存場所**: 環境変数 `$KALOS_CACHE_DIR` で指定する。未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`（ADR-0003 参照）
   - **書き込み条件**: 全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）
@@ -380,7 +380,7 @@ sequenceDiagram
 - `workspace_root_hash` は `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュであり、解析対象パスが変わった場合にベースラインの不正な再利用を防ぐ。正規化規則: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出し、明示指定時は `WorkspaceRoot` 相対パスへ正規化したソート済み重複排除リストからハッシュを算出する。明示指定は網羅性を判定せず常に部分集合として扱う（ADR-0003 参照）
 - ベースラインキャッシュは `--level` に関わらず全構成要素を保存する（永続化ペイロード: `ScopeMetrics` 全階層 + `ScopeDiagnosticSnapshot` + `OverallScore` + `DependencyIndexManifest`。詳細は §5.2 保存単位を参照）。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない
-- ベースラインキャッシュの永続化対象は全ワークスペース解析に限定する。`analysis_targets` が部分集合の実行は cache を生成せず、既存 cache も読まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全解析へフォールバックする（全ワークスペースへ拡張しない）
+- ベースラインキャッシュの永続化対象は全ワークスペース解析に限定する。`analysis_targets` が部分集合の実行は cache を生成せず、既存 cache も読まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全スコープ解析へフォールバックする（全ワークスペースへ拡張しない）
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree を表し、現在ワークツリーのハッシュは含めない
 - 外部シンボル解決は `Dependency Symbol Resolver Port` の責務であり、依存定義・lockfile・ローカル stub / metadata cache だけを入力に使う。解決失敗は `SourceAnalysis.warnings` として下流へ渡し、解析時の追加ネットワーク通信は行わない
 - Managed Tool Cache Adapter が参照する bundle manifest（version/checksum）は kalos release の一部として versioning され、GitHub Action はその manifest を差し替えずに prewarm / restore/save の wrapper として振る舞う
@@ -455,7 +455,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 外部プロセス呼出 | CodeQL 呼出は引数配列で実行し、シェル展開しない |
 | LLM 送信データ | `--llm` 明示時のみ送信し、対象コード断片または `CpgSubgraphExcerpt` を最小化する。プロバイダは `KALOS_LLM_PROVIDER` で選択し（v1: `openai`、デフォルト: `openai`）、プロバイダがリクエスト形式を決定する。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で設定し、未設定時はプロバイダ固有のデフォルト URL を使用する（`REQ-NF-009`, ADR-0005 参照） |
 | LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、または `KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合は設定エラー（exit code 2）とする（ADR-0005 参照） |
-| LLM タイムボックス | per-request: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。aggregate sidecar budget: `120s`（暫定値）— 上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。暫定値は PoC で確定予定（ADR-0005 参照） |
+| LLM タイムボックス | per-request: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。aggregate sidecar budget: `120s`（暫定値、壁時間）— 並行ディスパッチ時も経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。暫定値は PoC で確定予定（ADR-0005 参照） |
 | LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
 | 出力データ | SARIF/JSON に機密情報を埋め込まない。ファイルパスの正規化を行う |
@@ -505,7 +505,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 | connect timeout | 3 秒 |
 | overall timeout | 30 秒 |
 | retry | 0 |
-| aggregate sidecar budget | 120 秒（暫定値）。1 回の `kalos check` 全体で LLM sidecar に費やす総所要時間の上限。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照） |
+| aggregate sidecar budget | 120 秒（暫定値、壁時間）。1 回の `kalos check` 全体で LLM sidecar に費やす壁時間の上限。並行ディスパッチ時は個々の request 所要時間の合算ではなく経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照） |
 | preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` 未設定または `KALOS_LLM_ENDPOINT_URL` が不正 URL の場合は設定エラー（exit code 2）。代表ファイルの言語解決不可・multi-file 断片還元不可は warning なしで request 省略（正常動作）（ADR-0005 参照） |
 | post-dispatch fallback | タイムアウト・非応答・エラー時は当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す |
 | コア不変条件 | いずれの障害・省略でもコア診断・スコア・Exit code は不変 |
