@@ -507,7 +507,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では階層横断の依存解決や diff モード時のベースライン整合性に必要な他階層結果を追加で算出してよい。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`
-- `--level function|module|project`: 指定階層のメトリクス・診断を報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）や、diff モードでベースライン整合性に必要な他階層結果は内部的に算出してよいが、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
+  - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）や、diff モードでベースライン整合性に必要な他階層結果は内部的に算出してよいが、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
@@ -819,7 +819,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: `enabled = false` セマンティクスの明文化（REQ-FUNC-026 拡充、REQ-FUNC-011 scope_risk 除外注記）、KAL-PAT002 受け入れ基準追加、summary_scope 表記を snake_case に統一、デフォルト閾値の校正注記追加、subset analysis_targets フォールバックの明確化、用語集にアーキテクチャコンポーネント定義を追加 | Claude |
-| 0.2.12 | 2026-03-20 | `primary_scope_id` による診断の canonical scope 契約、Application Pipeline による summary materialization、plugin baseline 再利用ゲートと `aggregate_cpu_time_budget` による決定論性規約を追加 | Codex |
+| 0.2.12 | 2026-03-20 | `primary_scope_id` による診断の canonical scope 契約、Application Pipeline による summary materialization、plugin baseline 再利用ゲートと `aggregate_fuel_budget` による決定論性規約を追加 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` のフィールド名を `start_line`/`end_line`/`column` に統一、full mode の診断完全性を「選択された --level に関して完全」へ明確化、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | `kalos check` の位置引数省略時デフォルト `.` を明記、`analysis_targets` の正規化・検証責務を Configuration に一本化、SARIF の rule/severity/location 写像を拡充、stray `API` 表記を除去、メタ情報バージョンを同期 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 契約、`analysis_targets` 正規化基準、diff fallback 条件のトレーサビリティを補強 | Codex |

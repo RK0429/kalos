@@ -55,10 +55,10 @@ kalos は同時に以下を満たす必要がある。
   - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
   - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
-- `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ。**全ワークスペース判定と正規化**: 位置引数省略時（デフォルト `["."]`）は全ワークスペースとして扱い、`analysis_targets_hash` は正規形 `["."]` から算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化したうえでソート済み重複排除リストからハッシュを算出する。明示的指定が `WorkspaceRoot` 配下の全対象ファイルを網羅するかどうかは判定しない（明示指定は常に部分集合として扱う）
-- `rule_catalog_version`: 組み込みルールカタログの版
-- `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
-- `kalos_version`: kalos バイナリ自体の版
+  - `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ。**全ワークスペース判定と正規化**: 位置引数省略時（デフォルト `["."]`）は全ワークスペースとして扱い、`analysis_targets_hash` は正規形 `["."]` から算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化したうえでソート済み重複排除リストからハッシュを算出する。明示的指定が `WorkspaceRoot` 配下の全対象ファイルを網羅するかどうかは判定しない（明示指定は常に部分集合として扱う）
+  - `rule_catalog_version`: 組み込みルールカタログの版
+  - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
+  - `kalos_version`: kalos バイナリ自体の版
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。保存範囲も変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
 - ベースラインの **write-back 契約**: 書き込み条件は全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）。書き込みタイミングは `DiagnosticReport` の assemble 完了後、exit code 返却前。一時ファイルへ書き込み後にリネームし、部分書き込みを防ぐ。kalos 自体の実行エラー（exit code 2）では書き込まない。詳細は [architecture.md §5.2](../architecture.md) の write-back 契約を参照
 - ベースラインの **永続化対象は全ワークスペース解析に限定** する。`analysis_targets` が全ワークスペースの部分集合である実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない

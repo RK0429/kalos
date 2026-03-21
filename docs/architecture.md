@@ -590,7 +590,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: 版メタ同期、`enabled = false` のスコア集約除外セマンティクス追記、merged dependency graph 生成契約追加、Application Pipeline 責務表追加、C4 レベル3 名称修正 + Git Diff Adapter 追加、ベースライン write-back ライフサイクル追加、subset fallback 文言明確化、`summary_scope` 表記統一 | Claude |
-| 0.2.12 | 2026-03-20 | Diagnostics 出力を `List<Diagnostic>` に整理し、Application Pipeline の report assembly / summary materialization、`primary_scope_id` 契約、plugin baseline 再利用ゲートと aggregate CPU time budget を反映 | Codex |
+| 0.2.12 | 2026-03-20 | Diagnostics 出力を `List<Diagnostic>` に整理し、Application Pipeline の report assembly / summary materialization、`primary_scope_id` 契約、plugin baseline 再利用ゲートと aggregate fuel budget を反映 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` フィールド名を `start_line`/`end_line`/`column` に統一、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | `analysis_targets` 正規化の owner を Configuration へ移動、CLI path 省略時のデフォルト `["."]` を明記、SARIF の rule/severity/location/message 写像規則を同期 | Claude |
 | 0.2.9 | 2026-03-19 | 明示 `--config` の `WorkspaceRoot` 解決、`analysis_targets` 検証 owner、plugin load order、diff fallback 条件を同期 | Codex |
