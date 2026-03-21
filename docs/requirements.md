@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.2.11 |
-| 最終更新日 | 2026-03-19 |
+| バージョン | 0.3.0 |
+| 最終更新日 | 2026-03-21 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
 | レビュー者 | Codex |
@@ -81,6 +81,11 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | 統一CPG表現 | 4言語のCPGを言語非依存な共通構造と言語固有の拡張ノードで表現する内部データ構造 |
 | CodeQL | GitHub が開発するコード解析エンジン。ソースコードをデータベース化し、クエリ言語でコードプロパティを検索・抽出できる |
 | SARIF | Static Analysis Results Interchange Format。静的解析ツールの結果を表現するJSON形式の標準規格（OASIS標準） |
+| Configuration（構成管理コンテキスト） | `.kalos.toml` の読み込み・検証・正規化を担う境界づけられたコンテキスト。集約ルートは `ProjectConfig` であり、`ProjectConfig.resolve()` が設定解決を行う。詳細は architecture.md §4.1 参照 |
+| CLI Shell | CLI 引数の解釈・バリデーションを担うコンポーネント。`--level`, `--diff`, `--format` 等のオプションを解釈し、Application Pipeline へ渡す。詳細は architecture.md §4.1 参照 |
+| Application Pipeline | パイプラインオーケストレーションを担うコンポーネント。diff/full モード選択、`DiagnosticReport` の組み立て（summary materialization を含む）、exit code 判定を行う。詳細は architecture.md §4.1 参照 |
+| Plugin Host | WASM プラグインのロード・検証・実行を担うコンポーネント。`plugin_manifest` に基づくプラグインの決定論的ロードとサンドボックス実行を管理する。詳細は architecture.md §4.1 参照 |
+| DiagnosticReport | 解析結果の最終出力を表す値オブジェクト。診断一覧、メトリクス、スコア、サマリー、メタデータを保持し、human/JSON/SARIF 形式への写像元となる。詳細は architecture.md §4.1 参照 |
 
 ## 3. 機能要件
 
@@ -186,6 +191,8 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の組で保持する。`normalized_risk` は `0.0〜1.0` の閉区間に正規化されたリスク値であり、`0.0` が最良、`1.0` が最悪を表す。`H` は底 2 の Shannon entropy、`clamp(x, 0, 1)` は 0 未満を 0、1 超を 1 に丸める操作とする。`raw_value`, `normalized_risk`, `scope_risk`, `level_risk`, `overall_risk`, `overflow_ratio` は、それぞれ算出直後に小数第 6 位で round-half-up し、その丸め済み値をキャッシュ・比較・外部出力に用いる。
 
+> **校正注記**: v1 のデフォルト閾値・重大度境界・パターン検出カットオフは、ソフトウェア品質メトリクスの学術文献と開発実務の専門家判断に基づく暫定値である。実プロジェクトでのフィードバックに基づき v2 以降で校正を予定する。見直し条件: (1) 偽陽性率が 30% を超える、(2) 偽陰性率が 20% を超える、(3) ユーザーフィードバックで特定の閾値に苦情が集中する。
+
 #### REQ-FUNC-008: 関数レベルメトリクスの算出
 
 - **説明**: CPG の関数サブグラフに対して、v1 で固定した関数レベルメトリクスを算出する
@@ -248,7 +255,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: 関数・モジュール・プロジェクトの各階層メトリクスを集約し、0〜100 の総合スコアを算出する
 - **入力**: 全階層のメトリクス算出結果
 - **処理**:
-  1. 各スコープの `scope_risk` を、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均として算出する
+  1. 各スコープの `scope_risk` を、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均として算出する。ただし、`enabled = false` のルールにバインドされたメトリクスは算術平均の母集団から除外する。あるスコープで対象メトリクスが全て除外された場合、そのスコープの `scope_risk` は `0.0`（リスクなし）とする
   2. 各階層の `level_risk` を、その階層に属する `scope_risk` の算術平均として算出する。プロジェクト階層は単一スコープなので、その `scope_risk` をそのまま用いる
   3. デフォルト重みは `function: 0.4`, `module: 0.35`, `project: 0.25` とし、設定ファイルで上書き可能とする。各重みは `> 0.0` かつ有限でなければならない。不正な値は設定エラー（exit code 2）とする。合計が `1.0` でない場合は比例再正規化する
   4. ある階層にスコープが 0 件の場合、その階層の重みは残る階層へ比例再配分する
@@ -313,6 +320,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **出力**: `kind = "pattern"` の診断オブジェクトのリスト。各診断は共通フィールド `rule_id`, `severity`, `location`, `message`, `template_suggestion` に加え、`pattern` フィールド `{ pattern_type, evidence_scopes, evidence_message }` を持つ。内部的には各診断が canonical `primary_scope_id` を持ち、rule の主対象 scope を優先する。単一の主対象 scope が定義できない cross-scope 診断では `evidence_scopes` の辞書順最小 `ScopeId` を `primary_scope_id` とする。diff mode の診断一覧判定と baseline の `ScopeDiagnosticSnapshot` への帰属はこの `primary_scope_id` で決定する。単一ファイルへ結び付かない cross-scope 診断では、`location` は `evidence_scopes` のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = null` を代表位置として用いる。PAT001 の `M-F002` 平均は対象 owner scope 配下関数の既算出結果から求める。human 形式では `column = null` の位置を `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では `startColumn` / `endColumn` を出力しない
 - **受け入れ基準**:
   - Given 過度に多くの責務を持つ module owner scope, When `--level module` または `--level all` で診断実行, Then `KAL-PAT001` として検出される
+  - Given 関数の `foreign_accesses >= 5` かつ `foreign_accesses / (foreign_accesses + local_accesses) >= 0.70`, When 診断実行, Then `KAL-PAT002` として検出される
+  - Given 関数の `foreign_accesses / (foreign_accesses + local_accesses) < 0.70`, When 診断実行, Then その関数に対して `KAL-PAT002` は報告されない
   - Given モジュール依存グラフに循環がある, When 診断実行, Then `KAL-PAT003` として検出される
 - **優先度**: Should
 - **出典**: ユーザー確認済み + 2026-03-19 設計判断
@@ -489,8 +498,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: `--level` オプションで解析対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline が指定階層のメトリクス算出・診断生成のみを実行する。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
-  - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = WholeProject`
-  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）は内部的に算出し、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = ListedDiagnostics` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
+  - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`
+  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）は内部的に算出し、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
@@ -556,9 +565,12 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-026: 個別ルールの有効/無効切り替え
 
-- **説明**: 設定ファイルで個別ルールの `enabled` を `false` に設定することで、当該ルールの診断を無効化できる
+- **説明**: 設定ファイルで個別ルールの `enabled` を `false` に設定することで、当該ルールの全効果を抑制する。影響範囲はルール種別により異なる
+  - **メトリクスルール**（例: `KAL-F001`）: メトリクス計算は実行する（他ルールの内部依存のため）。`metrics` 出力にも含む（計算結果の観測は維持）。ただし、診断は生成せず、`scope_risk` 集約への参加を除外する（REQ-FUNC-011 ステップ 1 参照）。結果として `scores`・`summary` 件数・`exit code` に影響しない
+  - **パターンルール**（例: `KAL-PAT003`）: パターン検出自体を実行しない。診断は生成されず、`summary` 件数・`exit code` に影響しない
 - **受け入れ基準**:
   - Given ルール`KAL-PAT003`を `enabled = false` に設定, When 解析実行, Then `KAL-PAT003` の診断は報告されない
+  - Given `KAL-F001` を `enabled = false` に設定, When 解析実行, Then `KAL-F001` の診断は報告されず、`KAL-F001` にバインドされたメトリクスは `scope_risk` 集約から除外される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -641,8 +653,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する。ベースラインの互換性は `BaselineFingerprint`（`workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash`、`rule_catalog_version`、`extractor_version`、`kalos_version`）の完全一致で判定する
   - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。ロード失敗・タイムアウト・スキップされたプラグインの `MetricValue` は baseline 断片から除外する
   - ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。これにより、異なる `--level` での実行間でもベースラインを再利用できる
-  - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff の全解析へフォールバックする
-  - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff の全解析へフォールバックする
+  - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全解析へフォールバックする（全ワークスペースへの拡張は行わない）。`--level` は指定通り保持する
+  - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
   - baseline cache の再利用は best-effort とし、checkout path が変わる CI や cache 未復元環境では correctness を優先して全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
   - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は「変更後のプロジェクト全体」を意味し、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
@@ -797,6 +809,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.3.0 | 2026-03-21 | レビュー指摘解決: `enabled = false` セマンティクスの明文化（REQ-FUNC-026 拡充、REQ-FUNC-011 scope_risk 除外注記）、KAL-PAT002 受け入れ基準追加、summary_scope 表記を snake_case に統一、デフォルト閾値の校正注記追加、subset analysis_targets フォールバックの明確化、用語集にアーキテクチャコンポーネント定義を追加 | Claude |
 | 0.2.12 | 2026-03-20 | `primary_scope_id` による診断の canonical scope 契約、Application Pipeline による summary materialization、plugin baseline 再利用ゲートと `aggregate_cpu_time_budget` による決定論性規約を追加 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` のフィールド名を `start_line`/`end_line`/`column` に統一、full mode の診断完全性を「選択された --level に関して完全」へ明確化、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
 | 0.2.10 | 2026-03-19 | `kalos check` の位置引数省略時デフォルト `.` を明記、`analysis_targets` の正規化・検証責務を Configuration に一本化、SARIF の rule/severity/location 写像を拡充、stray `API` 表記を除去、メタ情報バージョンを同期 | Claude |

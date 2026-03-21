@@ -1,0 +1,530 @@
+# kalos/docs レビュー指摘 解決メモ
+
+## メタ情報
+
+| 項目 | 内容 |
+|---|---|
+| 作成日 | 2026-03-21 |
+| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（全 4 件） |
+| 目的 | 全レビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
+
+---
+
+## 1. 版メタ情報の同期ポリシー（must × 3 文書）
+
+### 指摘
+
+requirements.md / architecture.md / domain_model.md の先頭メタ情報が `0.2.11 / 2026-03-19` のまま、変更履歴は `0.2.12 / 2026-03-20` まで更新されている。
+
+### 判断
+
+**ポリシー**: 先頭メタ情報は常に変更履歴の最新エントリと一致させる。今回の修正バッチでは全文書を `0.3.0 / 2026-03-21` へ同時に上げる（指摘解決による変更が複数箇所にまたがるため minor バンプとする）。
+
+**同期ルール（今後適用）**:
+1. 変更履歴にエントリを追加するとき、先頭メタ情報を同じバージョン・日付に更新する
+2. architecture.md の「入力」欄は参照先文書のバージョンと一致させる
+3. domain_model.md の「入力」欄も同様
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` L7–8 | `0.3.0` / `2026-03-21` に更新 |
+| `architecture.md` L7–10 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0, domain_model.md v0.3.0` に更新 |
+| `domain_model.md` L7–10 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0` に更新 |
+| 各文書の変更履歴末尾 | `0.3.0 / 2026-03-21` エントリを追加（変更内容は「レビュー指摘解決」で統一） |
+
+---
+
+## 2. `rules.<RuleId>.enabled = false` のセマンティクス（must）
+
+### 指摘
+
+`enabled = false` がメトリクス系ルール（例: `KAL-F001`）に対して何を止めるのか未定義。診断だけか、スコア集約・metrics 出力・exit code 判定からも除外されるのか不明。
+
+### 判断
+
+`enabled = false` は **ルールの全効果を抑制する**。ユーザーが特定ルールを無効化した場合、そのルールがスコアにも exit code にも影響しないことを期待するため。
+
+#### メトリクスルール（例: `KAL-F001`）の場合
+
+| 観点 | `enabled = true`（デフォルト） | `enabled = false` |
+|---|---|---|
+| メトリクス計算 | 実行する | **実行する**（他ルールの内部依存のため。例: `KAL-PAT001` が `M-F002` を参照） |
+| `metrics` 出力 | 含む | **含む**（計算結果の観測は維持） |
+| 診断生成 | 閾値違反で生成 | **生成しない** |
+| `scope_risk` 集約への参加 | `ScoredAndDiagnosable` として参加 | **除外**（スコアリング時に当該メトリクスを `scope_risk` 算出から除外） |
+| `scores` への影響 | 間接的に反映 | **なし** |
+| `summary` 件数 | 診断があれば計上 | **なし**（診断なし） |
+| `exit code` 判定 | 診断があれば影響 | **なし**（診断なし） |
+
+#### パターンルール（例: `KAL-PAT003`）の場合
+
+| 観点 | `enabled = true` | `enabled = false` |
+|---|---|---|
+| パターン検出 | 実行する | **実行しない** |
+| 診断生成 | 検出時に生成 | **生成しない** |
+| `summary` / `exit code` | 診断があれば影響 | **なし** |
+
+#### スコアリング除外の実装指針
+
+`scope_risk` の算出ステップ（REQ-FUNC-011 ステップ 1）で、disabled なルールにバインドされたメトリクスの `normalized_risk` を算術平均の母集団から除外する。`level_risk` 以降の集約は変更なし。あるスコープで全メトリクスが disabled の場合、そのスコープの `scope_risk` は `0.0`（リスクなし）とする。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` REQ-FUNC-026（L557–563） | 説明を拡充: メトリクスルールとパターンルールそれぞれの `enabled = false` の影響範囲（diagnostics, scores, metrics 出力, summary, exit code）を明文化する。受け入れ基準を追加: `Given KAL-F001 を enabled = false に設定, When 解析実行, Then KAL-F001 の診断は報告されず、KAL-F001 バインドのメトリクスは scope_risk 集約から除外される` |
+| `requirements.md` REQ-FUNC-011（L246–259） | ステップ 1 に注記を追加: `enabled = false` のルールにバインドされたメトリクスは `scope_risk` 算術平均の母集団から除外する |
+| `domain_model.md` 診断コンテキストの設計意図 | `RuleConfig.enabled = false` 時のスコアリング除外契約を追記 |
+| `architecture.md` Diagnostics/Metrics の責務説明 | `enabled = false` のルールが scores 集約に参加しない旨を責務境界で明記 |
+
+---
+
+## 3. 差分解析の merged dependency graph 責務（must）
+
+### 指摘
+
+差分フローで `changed paths` だけ再抽出するとき、未変更スコープの依存辺をどこで合成して逆閉包を計算するかが未定義。Impact Analysis Service が owner とされるが、baseline の `DependencyIndexManifest` と今回の差分 `UnifiedCpg` を「誰がどう統合して closure を計算するか」が書かれていない。
+
+### 判断
+
+**Impact Analysis Service が merged dependency graph の生成と逆閉包計算の唯一の owner** である。以下の契約を architecture.md §5.3 に追加する。
+
+#### Merged dependency graph 生成契約
+
+- **入力**:
+  1. `DiffBaseline.dependency_index`（ベースラインの `DependencyIndexManifest` — 全スコープ間の依存辺）
+  2. 差分 `SourceAnalysis.cpg`（変更されたファイルから抽出した `UnifiedCpg`）
+- **処理**:
+  1. 差分 `UnifiedCpg` から変更スコープの依存辺を抽出する
+  2. baseline `DependencyIndexManifest` の変更スコープに関する辺を差分 CPG 由来の辺で **置換** する
+  3. 未変更スコープの辺は baseline をそのまま保持する
+  4. 統合した依存グラフ上で変更スコープを起点に **逆** 推移的閉包を計算し、`AffectedScopeSet` を求める
+- **フォールバック**:
+  - baseline に `DependencyIndexManifest` が存在しない場合 → `fallback_to_full = true`
+  - 依存辺の統合でグラフ整合性を保証できない場合（未解決参照が多数等） → `fallback_to_full = true`
+- **出力**: merged `DependencyIndexManifest`（次回ベースライン保存用） + `AffectedScopeSet`
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `architecture.md` §5.3 差分解析の契約 | 上記の「merged dependency graph 生成契約」を新たな箇条として追加する。Impact Analysis Service の入力に `DiffBaseline.dependency_index` と差分 `SourceAnalysis.cpg` を明示する |
+| `architecture.md` §5.2 差分解析フロー（シーケンス図） | Impact Analysis への入力矢印に `DiffBaseline.dependency_index` を明示する |
+| `domain_model.md` §3.4 差分解析コンテキストの設計意図 | merged dependency graph の統合手順（baseline 辺の置換方式）と、`DependencyIndexManifest` の更新タイミング（成功時のベースライン保存時に最新の merged index を含める）を追記 |
+
+---
+
+## 4. `ScoreWeights` の正規化・再配分契約（must）
+
+### 指摘
+
+`domain_model.md` は `ScoreWeights` を「`> 0.0` かつ有限」としか定義していないが、`requirements.md` は「合計 ≠ 1.0 時の比例再正規化」と「0 件階層の重み再配分」を必須にしている。
+
+### 判断
+
+正規化と再配分は **`OverallScore` 算出時の計算不変条件** であり、`ScoreWeights` 値オブジェクト自体の不変条件ではない。`ScoreWeights` は入力値を保持するだけで、正規化はスコアリング関数が担う。
+
+#### 不変条件の配置
+
+| 不変条件 | 配置先 |
+|---|---|
+| 各重みが `> 0.0` かつ有限 | `ScoreWeights` 値オブジェクト（`ProjectConfig.resolve()` が検証） |
+| 合計 ≠ 1.0 時の比例再正規化: `adjusted_weight[l] = weight[l] / Σ(weights)` | `OverallScore` 算出ロジック（メトリクス算出コンテキスト） |
+| 0 件階層の重み再配分: disabled 階層の重みを残存階層へ比例再配分 | `OverallScore` 算出ロジック（メトリクス算出コンテキスト） |
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `domain_model.md` §3.2 設計意図の `OverallScore` 項目 | 「re-normalization」と「empty-level redistribution」の計算不変条件を明記する。requirements.md REQ-FUNC-011 ステップ 3–4 を参照先として示す |
+| `domain_model.md` §3.2 `ScoreWeights` 設計意図 | `ScoreWeights` 自体は入力検証のみ（`> 0.0` かつ有限）を担い、正規化はスコアリング時に行う旨を明記 |
+
+---
+
+## 5. Subset `analysis_targets` のフォールバックセマンティクス（must）
+
+### 指摘
+
+ADR-0003 で `analysis_targets` が部分集合の場合のフォールバックが「要求 target の再解析」と「全ワークスペース全解析」の両方に読める。
+
+### 判断
+
+フォールバックは **要求された `analysis_targets` のみを non-diff で全解析する**。全ワークスペースへの拡張は行わない。
+
+#### 確定セマンティクス
+
+1. `analysis_targets` が全ワークスペースの部分集合であると判定された場合:
+   - `--diff` 最適化を無効化する
+   - ベースラインを生成しない、既存ベースラインも消費しない
+   - **要求された `analysis_targets` だけ** を non-diff 全解析する（全ワークスペースに拡張しない）
+   - `--level` は指定通り保持する
+   - 出力の `analysis_targets` は要求された path 群をそのまま反映する
+2. 「全ワークスペースの部分集合」の判定: 位置引数が明示的に指定され、それが `WorkspaceRoot` 配下の全対象ファイルを網羅しない場合。位置引数省略時（デフォルト `.`）は全ワークスペースとして扱う
+
+#### 文言の統一
+
+全文書で「non-diff 全解析」を「non-diff full analysis of the requested targets」の意味で使い、「全ワークスペース解析」（full-workspace analysis）と明確に区別する。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` REQ-FUNC-034 の diff fallback 記述 | 「要求された `analysis_targets` のみを non-diff で解析する」と明記し、全ワークスペースへの拡張がないことを明確にする |
+| `architecture.md` §5.2 最終段の不変条件リスト（L346 付近） | フォールバック説明を「要求された `analysis_targets` / `--level` を保った non-diff 解析」に修正し、括弧書きで「全ワークスペースに拡張しない」を付加 |
+| `domain_model.md` §3.4 `InvalidationPlan.fallback_to_full` 設計意図（L549 付近） | 同上の文言修正 |
+| `adr/0003-deterministic-core-and-baseline-cache.md` L63 | 「要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする」に修正し、直後に「全ワークスペースへ拡張しない」を注記する |
+
+---
+
+## 6. `KAL-PAT002` の受け入れ基準（should）
+
+### 指摘
+
+`KAL-PAT001` と `KAL-PAT003` には受け入れ基準があるが、`KAL-PAT002`（Feature Envy）にはない。
+
+### 判断
+
+以下の受け入れ基準を追加する。
+
+```
+- Given 関数の foreign_accesses >= 5 かつ foreign_accesses / (foreign_accesses + local_accesses) >= 0.70,
+  When 診断実行, Then KAL-PAT002 として検出される
+- Given 関数の foreign_accesses / (foreign_accesses + local_accesses) < 0.70,
+  When 診断実行, Then その関数に対して KAL-PAT002 は報告されない
+```
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` REQ-FUNC-014 受け入れ基準（L314 付近） | 上記 2 件の受け入れ基準を追加 |
+
+---
+
+## 7. `summary_scope` の表記統一（should）
+
+### 指摘
+
+`whole_project | listed_diagnostics`（snake_case）と `WholeProject / ListedDiagnostics`（PascalCase）が混在。
+
+### 判断
+
+**外部出力値（JSON フィールド値）は snake_case を正とする**: `whole_project`, `listed_diagnostics`, `affected_only`。文書中で enum の内部表現に言及する場合は PascalCase を使ってよいが、初出時に `WholeProject（JSON 値: `"whole_project"`）` のように外部値との対応を示す。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` L492–493 | `WholeProject` / `ListedDiagnostics` を snake_case に統一するか、初出で JSON 値との対応を明記 |
+| `domain_model.md` の `DiagnosticsScope` enum 定義 | 同上 |
+| `architecture.md` の差分解析契約 | 同上 |
+
+---
+
+## 8. デフォルト閾値・カットオフの校正根拠（should）
+
+### 指摘
+
+固定値（閾値、パターン検出カットオフ、重大度境界）の根拠が不明。
+
+### 判断
+
+v1 の閾値は **専門家判断に基づく暫定値** であり、実証データに基づくものではない。以下の注記を追加する。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` §3.2 冒頭または REQ-FUNC-013 直前 | 注記を追加: 「v1 のデフォルト閾値・重大度境界・パターン検出カットオフは、ソフトウェア品質メトリクスの学術文献と開発実務の専門家判断に基づく暫定値である。実プロジェクトでのフィードバックに基づき v2 以降で校正を予定する。見直し条件: (1) 偽陽性率が 30% を超える、(2) 偽陰性率が 20% を超える、(3) ユーザーフィードバックで特定の閾値に苦情が集中する」 |
+
+---
+
+## 9. 要件文中の内部コンポーネント名への参照（should）
+
+### 指摘
+
+`Configuration`、`Plugin Host`、`Application Pipeline`、`CLI Shell`、`DiagnosticReport` が前置きなく登場し、要件単体での可読性が低い。
+
+### 判断
+
+requirements.md の用語集（§6）にアーキテクチャ由来の内部コンポーネント名の短い定義を追加し、architecture.md への参照を示す。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` 用語集（§6 付近） | `Configuration`、`Plugin Host`、`Application Pipeline`、`CLI Shell`、`DiagnosticReport` の短い定義（1–2 文）と architecture.md §4.1 への参照を追加 |
+
+---
+
+## 10. `Application Pipeline` の責務表への追加（should）
+
+### 指摘
+
+architecture.md §4.1 の責務表に `Application Pipeline` がなく、実質的な orchestration owner が表から抜けている。
+
+### 判断
+
+`Application Pipeline` を責務表に追加する。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `architecture.md` §4.1 責務表 | 以下の行を追加: `Application Pipeline` / パイプラインオーケストレーション、diff/full モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 / 全コンテキスト出力 + `ProjectConfig` / `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code / 大部分の REQ-FUNC-* を横断 |
+
+---
+
+## 11. C4 レベル 2 図の名称と内容修正（should）
+
+### 指摘
+
+「C4 レベル2: コンテナ図」が実際にはコンポーネント粒度で描かれており、`Git Diff Adapter` が載っていない。
+
+### 判断
+
+- セクション名を **「C4 レベル3: コンポーネント図」** に改称する（kalos 単一バイナリ = コンテナ、その内部構成 = コンポーネント）
+- `Git Diff Adapter` を Kalos サブグラフ内に追加する
+- `Application Pipeline` の位置付けを図上で明確にする
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `architecture.md` §3.3 | セクション見出しを「C4 レベル3: コンポーネント図」に変更。Mermaid 図に `Git Diff Adapter` を追加し、`APP --> GIT` の依存辺を描く |
+
+---
+
+## 12. ベースラインキャッシュの write-back ライフサイクル（should）
+
+### 指摘
+
+`Baseline Cache Adapter` の write-back タイミングが主要フローに現れていない。
+
+### 判断
+
+差分解析フロー（§5.2）の不変条件リストに write-back 契約を追加する。
+
+#### Write-back 契約
+
+- **書き込み条件**: 全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）
+- **書き込みタイミング**: `DiagnosticReport` の assemble 完了後、exit code 返却前
+- **書き込まない条件**:
+  - `analysis_targets` が部分集合の実行
+  - kalos 自体の実行エラー（exit code 2）
+- **原子性**: 一時ファイルへ書き込み後にリネームする（部分書き込みを防ぐ）
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `architecture.md` §5.2 の不変条件リスト末尾 | 上記の write-back 契約を箇条書きで追加 |
+| `architecture.md` §5.1 全解析フロー（シーケンス図） | Report 出力の後に `APP->>Cache: ベースライン保存（全ワークスペース解析時）` のステップを追加 |
+| `architecture.md` §5.2 差分解析フロー（シーケンス図） | 同様に保存ステップを追加 |
+
+---
+
+## 13. `InvalidationPlan` の集合不変条件（should）
+
+### 指摘
+
+`recompute_scopes` と `reuse_scopes` の排他性、`AffectedScopeSet` との関係、`fallback_to_full = true` 時の解釈が不明。
+
+### 判断
+
+以下の不変条件を domain_model.md に追加する。
+
+| 不変条件 | 説明 |
+|---|---|
+| `recompute_scopes ∩ reuse_scopes = ∅` | 同一スコープが再計算と再利用の両方に属することはない |
+| `recompute_scopes ∪ reuse_scopes = 全既知スコープ`（`fallback_to_full = false` 時） | 全スコープがいずれかに分類される |
+| `AffectedScopeSet.scopes ⊆ recompute_scopes` | 影響を受けたスコープは必ず再計算対象 |
+| `fallback_to_full = true` 時 | `recompute_scopes` と `reuse_scopes` は無視され、全スコープを対象に non-diff 解析が実行される |
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `domain_model.md` §3.4 設計意図 | 上記 4 件の不変条件を `InvalidationPlan` の設計意図に追記 |
+
+---
+
+## 14. `SourceFile` の Entity / Value Object 分類（should）
+
+### 指摘
+
+`SourceFile` が Entity として宣言されているが、`path` と `language` だけを持ち、独立したライフサイクルや可変状態がない。
+
+### 判断
+
+`SourceFile` を **Value Object** に再分類する。
+
+- `SourceFile` は `SourceAnalysis.source_files` マップで `FilePath` をキーとして管理されており、`path` は Entity としての同一性ではなくマップキーとして機能している
+- 可変状態を持たない（`path` と `language` は解析実行ごとに決定され変更されない）
+- `SourceAnalysis` 集約の外で独立に追跡・参照されることはない
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `domain_model.md` §3.1 クラス図 | `<<Entity>>` を `<<ValueObject>>` に変更 |
+| `domain_model.md` §3.1 設計意図 | `SourceFile` を VO とする根拠（マップキーとして同定され、独立ライフサイクルなし）を追記 |
+
+---
+
+## 15. `Configuration` の名称混在の解消（should）
+
+### 指摘
+
+「Configuration」がコンテキスト名・責務主体・`ProjectConfig` の別名として混在している。
+
+### 判断
+
+以下の命名規則を適用する。
+
+| 用途 | 使う名称 | 例 |
+|---|---|---|
+| 境界づけられたコンテキスト名 | 構成管理コンテキスト / Configuration Context | コンテキストマップ上の表記 |
+| 集約ルート / 型名 | `ProjectConfig` | コード・ドメインモデル図の表記 |
+| 設定解決の操作主体 | `ProjectConfig.resolve()` | 設計意図の記述 |
+
+「Configuration が ○○ する」という主語を `ProjectConfig.resolve()` または「構成管理コンテキスト」に置き換える。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `domain_model.md` §3.5 設計意図（L611–619） | 「Configuration は」を「`ProjectConfig.resolve()` は」に修正 |
+| `domain_model.md` §3.5 用語集（L741） | `WorkspaceRoot` の定義で「Configuration が解決した」を「`ProjectConfig.resolve()` が解決した」に修正 |
+| `domain_model.md` 本文中の「Configuration」が責務主体として使われている他の箇所 | 同様に修正（全文検索で「Configuration は」「Configuration が」を特定） |
+
+---
+
+## 16. レポートコンテキストの value object 図の追加（should）
+
+### 指摘
+
+`ReportMetadata`、`AnalysisTarget`、`ReportViewOptions`、`LlmEnrichmentRequest` が図に現れず、構造把握が困難。
+
+### 判断
+
+§3.6 に簡略クラス図を追加する。
+
+```mermaid
+classDiagram
+    class ReportMetadata {
+        <<ValueObject>>
+        +List~AnalysisTarget~ analysis_targets
+        +String tool_version
+        +String schema_version
+    }
+    class AnalysisTarget {
+        <<ValueObject>>
+        +FilePath path
+    }
+    class ReportViewOptions {
+        <<ValueObject>>
+        +Option~AnalysisLevel~ requested_level
+        +Option~Severity~ minimum_severity
+    }
+    class LlmEnrichmentRequest {
+        <<ValueObject>>
+        +RuleId rule_id
+        +Severity severity
+        +Language language
+        +FilePath workspace_relative_path
+        +Option~MetricContext~ metric
+        +Option~PatternContext~ pattern
+        +Option~SourceExcerpt~ source_excerpt
+        +Option~CpgSubgraphExcerpt~ cpg_excerpt
+    }
+
+    ReportMetadata *-- AnalysisTarget
+```
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `domain_model.md` §3.6 | 上記クラス図を既存のテキスト説明の前に挿入 |
+
+---
+
+## 17. ADR-0001: 単一バイナリの保証範囲（should）
+
+### 指摘
+
+「単一バイナリ配布」の効用が、後続 ADR の外部アーティファクト前提（CodeQL bundle, WASM plugin）と噛み合わない。
+
+### 判断
+
+ADR-0001 の帰結に保証範囲の明確化を追加する。
+
+> 「単一バイナリ」は kalos 実行ファイル自体を指す。CodeQL bundle（ADR-0002; Managed Tool Cache Adapter が初回 bootstrap で取得）および WASM プラグイン（ADR-0004; ユーザーがワークスペースに配置）は kalos バイナリに同梱されない外部アーティファクトである。kalos はこれらの取得・検証・キャッシュを責務として担うが、配布物としてはバイナリ単体を単位とする。
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `adr/0001-adopt-modular-monolith.md` §帰結 ポジティブ | 1 番目の箇条の後に上記の保証範囲注記を追加 |
+
+---
+
+## 18. ADR-0003: ベースラインキャッシュの運用帰結（should）
+
+### 指摘
+
+保存内容が重いのに、保持期間・削除責任・容量肥大化の帰結がない。
+
+### 判断
+
+ADR-0003 のネガティブ帰結に運用ガイダンスを追加する。
+
+> - ベースラインキャッシュはリポジトリ規模に比例して増大する。v1 では自動 eviction を提供しない
+> - **CI**: キャッシュは best-effort。CI の cache restore/save メカニズム（GitHub Actions `actions/cache` 等）で管理し、checkout path を安定化させて `workspace_root_hash` のヒット率を高める運用が必要
+> - **ローカル**: ユーザーがキャッシュディレクトリを手動削除できる。将来の改善候補として LRU eviction またはサイズベースの pruning を検討する
+> - **保存場所**: `$KALOS_CACHE_DIR`（未設定時は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`）
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `adr/0003-deterministic-core-and-baseline-cache.md` §帰結 ネガティブ | 上記の運用ガイダンスを追加 |
+
+---
+
+## 19. ADR-0005: LLM 連携の運用帰結（should）
+
+### 指摘
+
+`source_excerpt` / `cpg_excerpt` を外部 LLM に送る判断を含むのに、API キー管理・outbound 通信前提・監査/ログ境界がネガティブ帰結にない。
+
+### 判断
+
+ADR-0005 のネガティブ帰結に運用上の考慮事項を追加する。
+
+> - **API キー管理**: 環境変数 `KALOS_LLM_API_KEY` で提供する。kalos は永続化しない
+> - **Outbound 通信**: `--llm` は設定済み LLM エンドポイントへのネットワークアクセスを暗示する。エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）
+> - **データ機密性**: `source_excerpt` / `cpg_excerpt` はプロプライエタリコードを含む可能性がある。`--llm` の指定をもってユーザーの明示的オプトインとする
+> - **監査境界**: リクエスト/レスポンスのメタデータ（タイムスタンプ、トークン数、ステータスコード）は debug レベルで構造化ログに出力する。コンテンツ自体はログに含めない
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `adr/0005-optional-llm-enrichment.md` §帰結 ネガティブ | 上記の運用考慮事項を追加 |
+
+---
+
+## 更新対象文書の一覧
+
+| # | 文書 | 必要な更新の要約 |
+|---|---|---|
+| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false セマンティクス）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope 表記統一、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化 |
+| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope 表記統一、fallback 文言修正 |
+| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope 表記統一 |
+| 4 | `adr/0001-adopt-modular-monolith.md` | 単一バイナリ保証範囲の注記追加 |
+| 5 | `adr/0003-deterministic-core-and-baseline-cache.md` | subset fallback 文言修正、キャッシュ運用帰結追加 |
+| 6 | `adr/0005-optional-llm-enrichment.md` | LLM 運用帰結追加 |

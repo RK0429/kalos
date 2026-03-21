@@ -60,7 +60,7 @@ kalos は同時に以下を満たす必要がある。
 - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
 - `kalos_version`: kalos バイナリ自体の版
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけで、保存範囲は変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
-- ベースラインの **永続化対象は全ワークスペース解析に限定** する。`analysis_targets` が全ワークスペースの部分集合である実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
+- ベースラインの **永続化対象は全ワークスペース解析に限定** する。`analysis_targets` が全ワークスペースの部分集合である実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
 - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。失敗またはスキップされたプラグインの `MetricValue` は baseline 断片から除外し、stale な report-only plugin metric が部分的に残ることを防ぐ
@@ -83,6 +83,10 @@ kalos は同時に以下を満たす必要がある。
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree hash であり、取得元が曖昧だと再利用判定が壊れるため、`git rev-parse <base-ref>^{tree}` 相当の取得方法を実装で固定する必要がある
 - checkout path が実行ごとに変わる CI では `workspace_root_hash` によりキャッシュヒット率が下がる。再利用は best-effort とし、ヒット率を重視する環境では checkout path を安定化させ、baseline cache を restore/save する運用が必要
 - 保存不変条件により、`analysis_targets` サブセット実行ではベースラインが生成されない。`--level` 限定実行でも全ワークスペース解析であればベースラインは生成できるが、CI で差分解析のベースラインを安定運用するには、定期的な全ワークスペース解析（nightly ビルド等）が必要となる
+- ベースラインキャッシュはリポジトリ規模に比例して増大する。v1 では自動 eviction を提供しない
+- **CI**: キャッシュは best-effort。CI の cache restore/save メカニズム（GitHub Actions `actions/cache` 等）で管理し、checkout path を安定化させて `workspace_root_hash` のヒット率を高める運用が必要
+- **ローカル**: ユーザーがキャッシュディレクトリを手動削除できる。将来の改善候補として LRU eviction またはサイズベースの pruning を検討する
+- **保存場所**: `$KALOS_CACHE_DIR`（未設定時は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`）
 
 ### リスク
 
