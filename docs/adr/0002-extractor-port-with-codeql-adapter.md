@@ -18,7 +18,7 @@
 
 **本 ADR のスコープ**: 中核の判断は「`ExtractorPort` を定義し、初期アダプタとして CodeQL を採用する」ことである。以下の付随事項は `ExtractorPort` 採用に不可分なため、本 ADR で併せて決定する:
 
-- **Managed Tool Cache Adapter**: CodeQL bundle の bootstrap/検証/キャッシュは `ExtractorPort` の実装詳細であり、アダプタ交換時に一体で差し替わるため分離しない
+- **Tool Cache Port と Managed Tool Cache Adapter**: CodeQL bundle の bootstrap/検証/キャッシュは CPG Extraction コンテキスト内の独立したポート（`Tool Cache Port`）として定義し、`Managed Tool Cache Adapter` がこれを実装する。`ExtractorPort`（CPG 抽出ロジック）と `Tool Cache Port`（ツール取得・検証）は同一コンテキスト内で協調するが、責務は分離される（architecture.md §4.1, §4.2 参照）
 - **CLI 主導 bootstrap**: `REQ-FUNC-031` の単一バイナリ要件により bootstrap の正本は CLI 側に置く必要がある。これはポート設計から自然に導かれる
 - **GitHub Action の wrapper 限定**: `REQ-FUNC-032` で Action は prewarm/cache wrapper に留めると明記されており、bootstrap 経路の一貫性として本 ADR で拘束する
 

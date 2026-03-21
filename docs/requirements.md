@@ -167,8 +167,8 @@ AIエージェントによるコーディングの発達に伴い、生成され
 #### REQ-FUNC-006: 解析対象の除外パターン指定
 
 - **説明**: glob パターンにより解析対象ファイルの除外を制御する。v1 では包含側の allowlist（`--include`）は提供しない
-- **入力**: glob パターン（CLI引数 `--exclude` または設定ファイル）
-- **処理**: 指定パターンにマッチするファイルを解析対象から除外する。実効除外集合は `.gitignore` の既定除外、設定ファイル `exclude`、CLI `--exclude` を正規化した和集合とし、CLI は下位設定を置換せず追加する。v1 では negation パターンによる除外解除は提供しない
+- **入力**: CLI 引数 `--exclude <pattern>`（繰り返し可）、または設定ファイル `[general].exclude`（glob パターンの配列）
+- **処理**: 指定パターンにマッチするファイルを解析対象から除外する。実効除外集合は `.gitignore` の既定除外、設定ファイル `[general].exclude`（配列）、CLI `--exclude`（繰り返し指定）を正規化した和集合とし、CLI は下位設定を置換せず追加する。v1 では negation パターンによる除外解除は提供しない
 - **受け入れ基準**:
   - Given `--exclude "vendor/**"` 指定, When 解析実行, Then vendor配下のファイルは解析対象から除外される
   - Given `.gitignore` が存在し除外指定なし, When 解析実行, Then `.gitignore` のパターンに該当するファイルは除外される
@@ -285,7 +285,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
 - **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
-- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、ネットワーク・ファイル書込を禁止する（fuel が規範的上限であり、壁時間は参考値。ADR-0004 参照）。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、fuel budget 超過、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate fuel budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない。diff mode では、現在の実行で正常にロード・評価されなかったプラグインの baseline cache 済み `MetricValue` も `metrics` 出力から除外し、stale なプラグインメトリクスを部分的に再利用しない
+- **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、ネットワーク・ファイル書込を禁止する（fuel が規範的上限であり、壁時間は参考値。上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する。ADR-0004 参照）。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、fuel budget 超過、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate fuel budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない。diff mode では、現在の実行で正常にロード・評価されなかったプラグインの baseline cache 済み `MetricValue` も `metrics` 出力から除外し、stale なプラグインメトリクスを部分的に再利用しない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
   - Given プラグインが既定上限を超過, When 解析実行, Then 当該プラグイン評価は失敗として打ち切られ、kalos 本体の実行は継続する
@@ -389,7 +389,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-018: `kalos check` コマンドによる解析実行
 
 - **説明**: `kalos check [<path>...]` で対象パスを解析する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
-- **入力**: 0 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数。位置引数を省略した場合はカレントディレクトリ `.` を暗黙の単一対象とする
+- **入力**: 0 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数。位置引数を省略した場合は `WorkspaceRoot`（正規形 `["."]`）を暗黙の対象とし、全ワークスペース解析として扱う（ADR-0003 参照）
 - **一覧・summary・exit code の母集団**:
   - 診断一覧: full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
@@ -407,7 +407,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
   - Given 有効なプロジェクトディレクトリ, When `kalos check .` を実行, Then 全対応言語ファイルが解析され、診断結果が端末に表示される
-  - Given 位置引数なしで `kalos check` を実行, When カレントディレクトリ配下に対応言語ファイルが存在, Then `.` をデフォルト対象として全対応言語ファイルが解析される
+  - Given 位置引数なしで `kalos check` を実行, When WorkspaceRoot 配下に対応言語ファイルが存在, Then WorkspaceRoot（正規形 `.`）をデフォルト対象として全ワークスペースが解析される
   - Given `kalos check src tests/test_app.py` のように複数 path を指定, When 解析実行, Then 指定された各 path 配下の対応言語ファイルが単一の解析対象集合として統合される
   - Given `--format json` 指定, When 解析実行, Then 結果がJSON形式で出力される
 - **優先度**: Must
@@ -533,7 +533,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-025: プロジェクト設定ファイルの読み込み
 
 - **説明**: `.kalos.toml` からルール・閾値・除外パターン・スコア重み・プラグイン登録を読み込む。Configuration は `--config <path>` 指定時はその `.kalos.toml` を明示的に読み込み、その親ディレクトリを `WorkspaceRoot` とする。`--config` 未指定時はカレントディレクトリから親方向に設定ファイルを探索し、最初に見つかった `.kalos.toml` の親ディレクトリを `WorkspaceRoot` とする。`.kalos.toml` が見つからない場合は最初に見つかった `.git` の親ディレクトリ、どちらも見つからない場合は実行時カレントディレクトリを `WorkspaceRoot` とする。Configuration は内部 `FilePath`、`workspace_relative_path`、`plugin_manifest`、`analysis_targets` をこの `WorkspaceRoot` 基準で正規化する。`analysis_targets` については CLI Shell から受け取った生パス（位置引数省略時のデフォルト `.` を含む）を `WorkspaceRoot` 相対パスへ正規化し、canonicalize 後に `WorkspaceRoot` 配下に入らないパスは入力エラーとして拒否する（monorepo対応）。プラグイン `path` も同様に `WorkspaceRoot` 配下に限定する
-- **設定の優先順位**: スカラー値は CLI引数 > プロジェクト設定ファイル > デフォルト値。`exclude` は `.gitignore` 既定値 + 設定ファイル + CLI の加算マージとし、プラグイン登録は `workspace_relative_path` と checksum を含む `plugin_manifest` へ正規化して保持する
+- **設定の優先順位**: スカラー値は CLI引数 > プロジェクト設定ファイル > デフォルト値。`[general].exclude`（配列）は `.gitignore` 既定値 + 設定ファイル + CLI の加算マージとし、プラグイン登録は `workspace_relative_path` と checksum を含む `plugin_manifest` へ正規化して保持する
 - **設定ファイル形式例**:
   ```toml
   [general]
@@ -592,9 +592,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-028: ファイル/ディレクトリ単位の除外パターン設定
 
-- **説明**: 設定ファイルの `exclude` フィールドでglob パターンにより解析対象を除外する
+- **説明**: 設定ファイルの `[general].exclude` フィールド（glob パターンの配列）により解析対象を除外する
 - **受け入れ基準**:
-  - Given `exclude = ["generated/**"]` 設定, When 解析実行, Then generated配下のファイルは解析対象から除外される
+  - Given `[general] exclude = ["generated/**"]` 設定, When 解析実行, Then generated配下のファイルは解析対象から除外される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 - **関連要件**: REQ-FUNC-006
@@ -659,10 +659,11 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - 指定された `base-ref` からの変更ファイルを特定し、当該ファイルのみを再抽出する
   - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する。diff 最適化が有効な実行では `Project` scope を常に再計算対象へ含め、project-level metrics と `scores.overall` / `scores.project` を stale な baseline 断片からそのまま流用してはならない
   - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する。ベースラインの互換性は `BaselineFingerprint`（`workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash`、`rule_catalog_version`、`extractor_version`、`kalos_version`）の完全一致で判定する
-  - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。ロード失敗・タイムアウト・スキップされたプラグインの `MetricValue` は baseline 断片から除外する
+  - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。ロード失敗・fuel budget 超過・スキップされたプラグインの `MetricValue` は baseline 断片から除外する
   - ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。これにより、異なる `--level` での実行間でもベースラインを再利用できる
   - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全解析へフォールバックする（全ワークスペースへの拡張は行わない）。`--level` は指定通り保持する
   - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
+  - baseline cache の保存場所は環境変数 `$KALOS_CACHE_DIR` で指定する。未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`（ADR-0003 参照）
   - baseline cache の再利用は best-effort とし、checkout path が変わる CI や cache 未復元環境では correctness を優先して全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
   - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は「変更後のプロジェクト全体」を意味し、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
@@ -762,7 +763,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - ネットワーク通信は (a) kalos CLI が行う CodeQL 管理対象 bundle の bootstrap、(b) `--llm` 指定時の LLM 呼び出し、のみに限定する
   - CodeQL bundle 取得は固定バージョン + SHA-256 検証付きで行い、その正本は kalos リリースに同梱される managed bundle manifest とする
   - LLM の API キーは環境変数 `KALOS_LLM_API_KEY` のみから取得し、設定ファイルへ保存しない
-  - LLM エンドポイント URL は環境変数 `KALOS_LLM_ENDPOINT_URL` で設定する。未設定時はプロバイダ固有のデフォルト URL へフォールバックする。接続先エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）
+  - LLM プロバイダは環境変数 `KALOS_LLM_PROVIDER` で指定する（v1 の許容値: `openai`）。未設定時のデフォルトは `openai` とする
+  - LLM エンドポイント URL は環境変数 `KALOS_LLM_ENDPOINT_URL` で設定する。未設定時は `KALOS_LLM_PROVIDER` で決まるプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）。接続先エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）
   - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る。request ごとに `source_excerpt` と `cpg_excerpt` は相互排他的とする
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - LLM 呼び出しは `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` とする

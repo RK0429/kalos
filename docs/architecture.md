@@ -227,7 +227,7 @@ CPG Extraction
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
 - `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。各 plugin metric は `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱う。per-invocation fuel budget と aggregate fuel budget はいずれも WASM fuel metering で制御し（fuel が規範的上限、壁時間は参考値。ADR-0004 参照）、diff mode では現在の実行で失敗またはスキップされたプラグインの baseline cache 済み `MetricValue` を最終出力から除外する
 - `Configuration` は `--config` 指定時の `WorkspaceRoot` 解決、CLI path 引数から `analysis_targets` への正規化（省略時は `["."]`）、`analysis_targets` と plugin `path` の `WorkspaceRoot` 内包性検証、`sha256` 構文検証を行い、違反時は設定/入力エラー（exit code 2）として処理する。`Plugin Host` は解決済み `plugin_manifest` だけを受け取り、ファイル読込失敗・checksum 不一致・SPI 不一致・`metric_id` 衝突・fuel budget 超過・メモリ超過・aggregate fuel budget 超過を warning + skip として扱う
-- `Plugin Host` は WASM プラグイン invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。fuel が規範的（normative）な上限であり、壁時間は環境により変動する参考値である（ADR-0004 参照）。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
+- `Plugin Host` は WASM プラグイン invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。fuel が規範的（normative）な上限であり、壁時間は環境により変動する参考値である。**上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する**（ADR-0004 参照）。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
 ### 4.3 推奨コード構成
 
@@ -358,6 +358,7 @@ sequenceDiagram
 - `--diff` の最適化が有効な実行では `Impact Analysis Service` が `Project` scope を `recompute_scopes` に必ず含め、project-level metrics と `scores.overall` / `scores.project` を post-change 状態から再構成する
 - `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする（要求された `analysis_targets` のみを対象とし、全ワークスペースへ拡張しない）
 - **ベースラインキャッシュ write-back 契約**:
+  - **保存場所**: 環境変数 `$KALOS_CACHE_DIR` で指定する。未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`（ADR-0003 参照）
   - **書き込み条件**: 全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）
   - **書き込みタイミング**: `DiagnosticReport` の assemble 完了後、exit code 返却前
   - **書き込まない条件**: `analysis_targets` が部分集合の実行、kalos 自体の実行エラー（exit code 2）
@@ -456,7 +457,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | LLM タイムボックス | `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
 | 出力データ | SARIF/JSON に機密情報を埋め込まない。ファイルパスの正規化を行う |
-| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。fuel が規範的上限（ADR-0004 参照） |
+| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。fuel が規範的上限。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照） |
 
 ### 7.3 デプロイ / 配布
 
@@ -493,7 +494,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 影響範囲メトリクス再計算 | 2 秒 |
 | 診断と出力 | 2 秒 |
 
-plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差分 `5_000_000 fuel`、参考: ~0.5s）は、それぞれ Metrics stage budget の内数として会計する。fuel が規範的上限であり、壁時間は参考値（ADR-0004 参照）。
+plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差分 `5_000_000 fuel`、参考: ~0.5s）は、それぞれ Metrics stage budget の内数として会計する。fuel が規範的上限であり、壁時間は参考値。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照）。
 
 #### LLM sidecar 予算
 

@@ -107,7 +107,7 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 
 - **Ports & Adapters**: 外部エンジン（CodeQL）や将来の代替エンジン、LLM、キャッシュストレージなどの外部依存を Port の背後に閉じ込め、ADR-0002/0004/0005 の差し替え可能性を実現する
 - **Pipe-and-Filter**: 要件文書の依存チェーン `CPG → Metrics → Diagnostics → Report` をステージの直列構成として表現し、ステージごとのベンチマーク・キャッシュ・障害切り分けを容易にする
-- **差分解析/ベースラインの位置づけ**: ADR-0003 で定義する `Impact Analysis Service` と `Baseline Cache` は、上記パイプラインを補助する横断サービスとして Application Pipeline の内部へ配置し、独立した別アーキテクチャへ昇格させない
+- **差分解析/ベースラインの位置づけ**: ADR-0003 で定義する `Impact Analysis Service` と `Baseline Cache Adapter` は、上記パイプラインを補助する横断サービスとして Application Pipeline が統制する。それぞれ独立したコンポーネント（`Impact Analysis Service` は内部サービス、`Baseline Cache Adapter` は `Baseline Cache Port` を実装するアダプタ）として配置し、独立したアーキテクチャ層へ昇格はさせない（architecture.md §4.1 参照）
 
 ## 帰結
 

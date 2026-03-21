@@ -304,7 +304,7 @@ classDiagram
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
 - `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。project スコープの正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一値とし、スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
-- プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過は `MetricValue` を生成しない非致命の運用イベントとして扱う（fuel が規範的上限。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
+- プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過は `MetricValue` を生成しない非致命の運用イベントとして扱う（fuel が規範的上限。具体的な budget 数値は暫定値であり PoC で確定予定。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
 ### 3.3 診断コンテキスト
@@ -699,7 +699,7 @@ stateDiagram-v2
 > **簡略化注記**: この図は主要な状態遷移を示す簡略版である。以下の詳細は §3 の設計意図で個別に記述している:
 > - `GeneratingDiagnostics → Completed` は内部的に DiagnosticReport の summary materialization・scope 判定、任意の LLM enrichment（`--llm` 指定時）、reporting（human/JSON/SARIF 変換）の各ステップを含む
 > - `ExtractingCpg` 中の非致命エラー（構文エラーによるファイルスキップ、外部シンボル解決失敗）は `AnalysisWarning` として記録され、パイプライン全体は `Failed` に遷移せず処理を継続する
-> - `ComputingMetrics` 中のプラグインタイムアウト・メモリ超過も非致命として扱い、該当プラグインのみをスキップする
+> - `ComputingMetrics` 中のプラグイン fuel budget 超過・メモリ超過も非致命として扱い、該当プラグインのみをスキップする
 
 ### 4.2 ソースファイル処理
 
