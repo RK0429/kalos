@@ -114,7 +114,10 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 ### ポジティブ
 
 - リリース・配布・CI 統合が単純になる
-  - **保証範囲**: 「単一バイナリ」は kalos 実行ファイル自体を指す。CodeQL bundle（ADR-0002; Managed Tool Cache Adapter が初回 bootstrap で取得）および WASM プラグイン（ADR-0004; ユーザーがワークスペースに配置）は kalos バイナリに同梱されない外部アーティファクトである。kalos はこれらの取得・検証・キャッシュを責務として担うが、配布物としてはバイナリ単体を単位とする
+  - **保証範囲**: 「単一バイナリ」は kalos 実行ファイル自体を指す。CodeQL bundle および WASM プラグインは kalos バイナリに同梱されない外部アーティファクトであり、責務の範囲が異なる:
+    - **CodeQL bundle**（ADR-0002）: Managed Tool Cache Adapter が取得（初回 bootstrap）・checksum 検証・ローカルキャッシュの全ライフサイクルを担う。ユーザーは手動で配置する必要がない
+    - **WASM プラグイン**（ADR-0004）: ユーザーがワークスペースに配置し、`.kalos.toml` の `[[plugins]] { path, sha256 }` で登録する。kalos は `sha256` checksum 検証と SPI version 検証を行うが、取得・配布は行わない
+    - 配布物としてはバイナリ単体を単位とする
 - ベンチマーク、スナップショットテスト、順序固定を一貫して適用できる
 - ドメインモデルの境界をコード構造へ直接反映しやすい
 - Ports & Adapters により外部依存（抽出エンジン、LLM、キャッシュ）を差し替え可能に保てる
@@ -130,6 +133,7 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 - モジュール境界が曖昧化するリスクがあるため、アーキテクチャテストで循環依存を禁止する
 - 無循環であっても依存方向の逆流（例: `domains` → `adapters`）は Hexagonal Architecture の原則に反する。許可する依存方向は以下の通りとし、`architecture.md` の「適合度関数: モジュール依存 DAG」で定義するアーキテクチャテストで強制する:
   - `application` → `domains`, `ports`
+  - `application` → `adapters`（コンポジションルートとしての具象アダプタ選択・初期化に限定。ドメインロジックからアダプタへの直接依存ではない）
   - `adapters` → `ports`
   - `domains` 間は公開契約（Port 経由）でのみ接続する
   - `domains` → `adapters` の直接依存、`adapters` → `domains` の直接依存は禁止する

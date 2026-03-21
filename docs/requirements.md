@@ -406,9 +406,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--llm`: LLM連携による改善提案を有効化
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
-  - Given 有効なプロジェクトディレクトリ, When `kalos check .` を実行, Then 全対応言語ファイルが解析され、診断結果が端末に表示される
-  - Given 位置引数なしで `kalos check` を実行, When WorkspaceRoot 配下に対応言語ファイルが存在, Then WorkspaceRoot（正規形 `.`）をデフォルト対象として全ワークスペースが解析される
-  - Given `kalos check src tests/test_app.py` のように複数 path を指定, When 解析実行, Then 指定された各 path 配下の対応言語ファイルが単一の解析対象集合として統合される
+  - Given 有効なプロジェクトディレクトリ, When 位置引数なしで `kalos check` を実行, Then WorkspaceRoot（正規形 `["."]`）をデフォルト対象として全ワークスペースが解析され、診断結果が端末に表示される。この実行は全ワークスペース解析としてベースライン生成・消費の対象となる
+  - Given `kalos check .` のように位置引数 `.` を明示的に指定, When 解析実行, Then CLI は「位置引数が明示指定された」と判定し、`analysis_targets` は部分集合として扱われる（ADR-0003: 明示指定は `WorkspaceRoot` 配下の網羅性を判定せず常に部分集合）。この実行はベースラインを生成も消費もしない
+  - Given `kalos check src tests/test_app.py` のように複数 path を指定, When 解析実行, Then 指定された各 path 配下の対応言語ファイルが単一の解析対象集合として統合され、部分集合として扱われる
   - Given `--format json` 指定, When 解析実行, Then 結果がJSON形式で出力される
 - **優先度**: Must
 - **出典**: ユーザー確認済み
@@ -449,7 +449,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - ルートには `schema_version`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
   - `schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
   - `analysis_targets` は CLI で受け取った解析対象 path 群を Configuration が `WorkspaceRoot` 基準で正規化・検証した配列とし、入力順を保持する。位置引数省略時のデフォルト `.` も同様に正規化する。単一 target の場合も配列で表現する
-  - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含めてよいが、v1 のプラグインメトリクスは report-only であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
+  - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含める。各メトリクスエントリには `participation` フィールド（`"scored_and_diagnosable"` | `"report_only"`）を付与し、当該メトリクスがスコアリング・診断に参加するか report 専用かを識別可能にする。v1 のプラグインメトリクスは `participation = "report_only"` であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
   - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に REQ-FUNC-011 に従うメトリクス集約済みの 0〜100 の整数であり、`summary` や診断件数から逆算しない。`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
@@ -659,8 +659,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - 指定された `base-ref` からの変更ファイルを特定し、当該ファイルのみを再抽出する
   - 変更ファイルから逆依存閉包で `AffectedScopeSet` を求め、影響範囲のみ再計算する。diff 最適化が有効な実行では `Project` scope を常に再計算対象へ含め、project-level metrics と `scores.overall` / `scores.project` を stale な baseline 断片からそのまま流用してはならない
   - 互換なベースラインが存在する場合、非変更スコープの `ScopeMetrics` と `ScopeDiagnosticSnapshot` を再利用する。ベースラインの互換性は `BaselineFingerprint`（`workspace_root_hash`、`base_snapshot_hash`、`config_hash`、`analysis_targets_hash`、`rule_catalog_version`、`extractor_version`、`kalos_version`）の完全一致で判定する
+  - `analysis_targets_hash` の正規化規則: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化し、ソート済み重複排除リストからハッシュを算出する（ADR-0003 参照）
   - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。ロード失敗・fuel budget 超過・スキップされたプラグインの `MetricValue` は baseline 断片から除外する
-  - ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。これにより、異なる `--level` での実行間でもベースラインを再利用できる
+  - ベースラインキャッシュは `--level` に関わらず以下の全構成要素を保存する（永続化ペイロード）: (1) 全階層の `ScopeMetrics`（丸め済み `scope_risk` を含む function / module / project）、(2) `ScopeDiagnosticSnapshot`（`primary_scope_id` ごとの診断断片）、(3) `OverallScore`（丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score`）、(4) `DependencyIndexManifest`（全スコープ間の依存辺）。`--level` は報告対象の制限であり、保存範囲には影響しない。これにより、異なる `--level` での実行間でもベースラインを再利用できる
   - baseline cache の永続化対象は全ワークスペース解析（除外適用後の全 target 群）に限定する。`analysis_targets` がその部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全解析へフォールバックする（全ワークスペースへの拡張は行わない）。`--level` は指定通り保持する
   - ベースラインが存在しない、互換でない、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする
   - baseline cache の保存場所は環境変数 `$KALOS_CACHE_DIR` で指定する。未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`（ADR-0003 参照）
@@ -768,6 +769,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - LLM outbound payload は allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` のみを許可し、`language` は代表ファイルの `SourceAnalysis.source_files` メタデータから解決でき、かつ必須根拠を代表ファイル断片へ還元できた場合に限る。request ごとに `source_excerpt` と `cpg_excerpt` は相互排他的とする
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - LLM 呼び出しは `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` とする
+  - **Aggregate sidecar budget**: 1 回の `kalos check` 全体で LLM sidecar に費やす総所要時間の上限は `120s`（暫定値）とする。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照）
+  - **Preflight failure**: `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。代表ファイルの言語解決不可・multi-file 診断の断片還元不可による request 省略は正常動作であり warning を出さない（ADR-0005 参照）
+  - **URL 秘匿化**: エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL に含まれうるトークンや API キーの資格情報漏えいを防ぐ（ADR-0005 参照）
 - **優先度**: Must
 - **出典**: 2026-03-19 ユーザー判断 + 設計具体化
 
@@ -820,6 +824,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.3.1 | 2026-03-22 | REQ-NF-009 に ADR-0005 の LLM runtime policy（aggregate sidecar budget 120s、preflight failure、URL 秘匿化契約）を伝播 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: `enabled = false` セマンティクスの明文化（REQ-FUNC-026 拡充、REQ-FUNC-011 scope_risk 除外注記）、KAL-PAT002 受け入れ基準追加、summary_scope 表記を snake_case に統一、デフォルト閾値の校正注記追加、subset analysis_targets フォールバックの明確化、用語集にアーキテクチャコンポーネント定義を追加 | Claude |
 | 0.2.12 | 2026-03-20 | `primary_scope_id` による診断の canonical scope 契約、Application Pipeline による summary materialization、plugin baseline 再利用ゲートと `aggregate_fuel_budget` による決定論性規約を追加 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` のフィールド名を `start_line`/`end_line`/`column` に統一、full mode の診断完全性を「選択された --level に関して完全」へ明確化、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |

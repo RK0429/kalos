@@ -53,7 +53,9 @@
 - **Preflight（request 生成抑止）**: 以下の条件に該当する診断には `LlmEnrichmentRequest` 自体を生成しない。テンプレート提案のみ返す
   - `SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合
   - multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合
+- **Preflight failure（request 生成前の障害処理）**: `--llm` が指定されたが `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。Preflight 条件（代表ファイルの言語解決不可、multi-file 診断の断片還元不可）に該当する診断は `LlmEnrichmentRequest` を生成せず、テンプレート提案のみ返す。Preflight 条件による request 省略は warning を出さない（正常動作）
 - **Sidecar budget（per `LlmEnrichmentRequest`）**: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。タイムアウトは個々の `LlmEnrichmentRequest`（= 診断単位の LLM API 呼び出し）ごとに適用する。複数診断がある場合の総所要時間は LLM Adapter の並行度に依存する（実装詳細）
+- **Aggregate sidecar budget**: 1 回の `kalos check` 実行全体で LLM sidecar に費やす総所要時間の上限は `120s`（暫定値）とする。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。コア診断・スコア・Exit code は不変。上限超過を `stderr` / 構造化ログへ warning として出力する。暫定値は PoC フィードバックに基づき v1 リリースまでに確定する
 - **Post-dispatch fallback（送信後の障害処理）**: `LlmEnrichmentRequest` の送信後にタイムアウト・非応答・エラーが発生した場合、当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す。コア診断・スコア・Exit code は不変
 
 ## 帰結
@@ -71,7 +73,7 @@
 - `--llm` 時の待ち時間が追加される
 - **API キー管理**: 環境変数 `KALOS_LLM_API_KEY` で提供する。kalos は永続化しない
 - **プロバイダ選択**: 環境変数 `KALOS_LLM_PROVIDER` でプロバイダを指定する（v1 の許容値: `openai`、デフォルト: `openai`）。プロバイダはリクエスト形式とデフォルトエンドポイント URL を決定する
-- **Outbound 通信**: `--llm` は LLM エンドポイントへのネットワークアクセスを暗示する（REQ-NF-009）。エンドポイント URL は環境変数 `KALOS_LLM_ENDPOINT_URL` で設定する。未設定時は `KALOS_LLM_PROVIDER` で決まるプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）。接続先エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）
+- **Outbound 通信**: `--llm` は LLM エンドポイントへのネットワークアクセスを暗示する（REQ-NF-009）。エンドポイント URL は環境変数 `KALOS_LLM_ENDPOINT_URL` で設定する。未設定時は `KALOS_LLM_PROVIDER` で決まるプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）。接続先エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）。**URL 秘匿化契約**: ログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。これにより、URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ。認証情報は `Authorization` ヘッダー経由で送信し、URL に埋め込まない運用を推奨する
 - **データ機密性**: `source_excerpt` / `cpg_excerpt` はプロプライエタリコードを含む可能性がある。`--llm` の指定をもってユーザーの明示的オプトインとする
 - **監査境界**: リクエスト/レスポンスのメタデータ（タイムスタンプ、トークン数、ステータスコード）は debug レベルで構造化ログに出力する。コンテンツ自体はログに含めない
 

@@ -74,6 +74,11 @@
 - Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、`metric_id` のグローバル一意性を検証する。組み込みメトリクスまたは先行ロード済みプラグインと `metric_id` が衝突したモジュールは deterministic なロード失敗として扱い、warning を出してスキップする
 - プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、`metric_id` 衝突、per-invocation fuel budget 超過、メモリ超過は warning + skip とし、当該プラグインのみを失敗させる。aggregate fuel budget 超過時は残りプラグインを warning 付きでスキップする。いずれも `stderr` / 構造化ログへ運用警告を出し、v1 の診断・スコア・Exit code 契約は変更しない
 - `REQ-NF-003` を守るため、評価 SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
+- **WASM instance lifecycle**: Plugin Host はプラグインモジュールごとに 1 つの WASM instance を生成する。instance の生存期間は単一の `kalos check` 実行スコープに限定し、実行完了時にすべての instance を破棄する。実行間で instance を再利用しない
+  - **初期化**: `plugin_manifest` 順（`workspace_relative_path` 昇順）にモジュールをロードし、`kalos_plugin_init()` を呼び出す。初期化時に `metric_register` で `MetricDefinition` を登録する
+  - **評価**: 登録済み `MetricDefinition` ごとに `level` に一致する各 `ScopeId` について `kalos_plugin_evaluate` を呼び出す。ホストは各呼び出しの前に guest state（グローバル変数、線形メモリの内容）を初期化完了直後のスナップショットへリセットする。これにより各評価は pure function 契約（`CpgSubgraph + MetricConfig -> MetricValue`）を WASM instance レベルで満たし、呼び出し順序への依存を排除する
+  - **破棄**: 全評価完了後、または per-invocation / aggregate fuel budget 超過時に instance を破棄し、線形メモリを解放する
+- **線形メモリ管理**: 各 WASM instance は独立した線形メモリ空間を持つ。初期サイズは WASM モジュールの宣言に従い、`linear_memory_limit`（v1 暫定値: `64 MiB`）を上限とする。上限超過時はトラップとして扱い、当該プラグインの評価を打ち切る
 - 実行リソース制限の正本は WASM fuel 単位とする。fuel は WASM 命令ごとに決定論的に消費される抽象コスト単位であり、壁時間やホスト CPU 速度に依存しない。これにより同一入力に対するプラグインの成否判定が `REQ-NF-003` の決定論性を維持する
   - **per-invocation fuel budget**: `500_000 fuel`（暫定値）。1 回の `kalos_plugin_evaluate` 呼び出しに対する上限
   - **aggregate fuel budget**: `30_000_000 fuel`（全解析、暫定値）/ `5_000_000 fuel`（diff mode、暫定値）。Metrics stage 全体でのプラグイン fuel 消費合計の上限

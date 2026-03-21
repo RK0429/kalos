@@ -184,7 +184,7 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
    - **要求された `analysis_targets` だけ** を non-diff 全解析する（全ワークスペースに拡張しない）
    - `--level` は指定通り保持する
    - 出力の `analysis_targets` は要求された path 群をそのまま反映する
-2. 「全ワークスペースの部分集合」の判定: 位置引数が明示的に指定され、それが `WorkspaceRoot` 配下の全対象ファイルを網羅しない場合。位置引数省略時（デフォルト `.`）は全ワークスペースとして扱う
+2. 「全ワークスペースの部分集合」の判定: 位置引数が明示的に指定された場合は、`WorkspaceRoot` 配下の全対象ファイルを網羅するかどうかに関わらず常に部分集合として扱う（実行時の網羅性判定は行わない）。位置引数省略時（デフォルト `.`）は全ワークスペースとして扱う
 
 #### 文言の統一
 
@@ -530,7 +530,7 @@ ADR-0003 のネガティブ帰結に運用ガイダンスを追加する。
 > - ベースラインキャッシュはリポジトリ規模に比例して増大する。v1 では自動 eviction を提供しない
 > - **CI**: キャッシュは best-effort。CI の cache restore/save メカニズム（GitHub Actions `actions/cache` 等）で管理し、checkout path を安定化させて `workspace_root_hash` のヒット率を高める運用が必要
 > - **ローカル**: ユーザーがキャッシュディレクトリを手動削除できる。将来の改善候補として LRU eviction またはサイズベースの pruning を検討する
-> - **保存場所**: `$KALOS_CACHE_DIR`（未設定時は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`）
+> - **保存場所**: `$KALOS_CACHE_DIR`（未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`）
 
 ### 更新対象
 

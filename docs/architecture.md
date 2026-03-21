@@ -378,8 +378,8 @@ sequenceDiagram
 - `WorkspaceRoot` は Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で一意に解決し、内部 `FilePath` / `workspace_relative_path` / `plugin_manifest` / `analysis_targets` はすべてこの基準から導出する
 - ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + analysis_targets_hash + rule_catalog_version + extractor_version + kalos_version` とする
 - `workspace_root_hash` は `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
-- `analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュであり、解析対象パスが変わった場合にベースラインの不正な再利用を防ぐ
-- ベースラインキャッシュは `--level` に関わらず全階層の `ScopeMetrics` と `ScopeDiagnosticSnapshot` を保存する。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない
+- `analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュであり、解析対象パスが変わった場合にベースラインの不正な再利用を防ぐ。正規化規則: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出し、明示指定時は `WorkspaceRoot` 相対パスへ正規化したソート済み重複排除リストからハッシュを算出する。明示指定は網羅性を判定せず常に部分集合として扱う（ADR-0003 参照）
+- ベースラインキャッシュは `--level` に関わらず全構成要素を保存する（永続化ペイロード: `ScopeMetrics` 全階層 + `ScopeDiagnosticSnapshot` + `OverallScore` + `DependencyIndexManifest`。詳細は §5.2 保存単位を参照）。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない
 - ベースラインキャッシュの永続化対象は全ワークスペース解析に限定する。`analysis_targets` が部分集合の実行は cache を生成せず、既存 cache も読まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全解析へフォールバックする（全ワークスペースへ拡張しない）
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree を表し、現在ワークツリーのハッシュは含めない
 - 外部シンボル解決は `Dependency Symbol Resolver Port` の責務であり、依存定義・lockfile・ローカル stub / metadata cache だけを入力に使う。解決失敗は `SourceAnalysis.warnings` として下流へ渡し、解析時の追加ネットワーク通信は行わない
@@ -454,7 +454,9 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 外部ツール取得 | CodeQL bundle は kalos release 同梱の managed bundle manifest で version/checksum を固定し、managed cache へ初回取得して SHA-256 を検証する |
 | 外部プロセス呼出 | CodeQL 呼出は引数配列で実行し、シェル展開しない |
 | LLM 送信データ | `--llm` 明示時のみ送信し、対象コード断片または `CpgSubgraphExcerpt` を最小化する。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` 環境変数で設定する（REQ-NF-009 参照） |
-| LLM タイムボックス | `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0` |
+| LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、または `KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合は設定エラー（exit code 2）とする（ADR-0005 参照） |
+| LLM タイムボックス | per-request: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。aggregate sidecar budget: `120s`（暫定値）— 上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。暫定値は PoC で確定予定（ADR-0005 参照） |
+| LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
 | 出力データ | SARIF/JSON に機密情報を埋め込まない。ファイルパスの正規化を行う |
 | プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。fuel が規範的上限。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照） |
@@ -503,7 +505,10 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 | connect timeout | 3 秒 |
 | overall timeout | 30 秒 |
 | retry | 0 |
-| 失敗時の挙動 | `llm_suggestion` を省略し、コア診断・スコア・Exit code は不変 |
+| aggregate sidecar budget | 120 秒（暫定値）。1 回の `kalos check` 全体で LLM sidecar に費やす総所要時間の上限。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照） |
+| preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` 未設定または `KALOS_LLM_ENDPOINT_URL` が不正 URL の場合は設定エラー（exit code 2）。代表ファイルの言語解決不可・multi-file 断片還元不可は warning なしで request 省略（正常動作）（ADR-0005 参照） |
+| post-dispatch fallback | タイムアウト・非応答・エラー時は当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す |
+| コア不変条件 | いずれの障害・省略でもコア診断・スコア・Exit code は不変 |
 
 ## 8. 適合度関数
 
@@ -590,6 +595,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.3.1 | 2026-03-22 | ADR-0005 の LLM runtime policy（aggregate sidecar budget 120s、preflight failure、URL 秘匿化契約）をセキュリティ設計・性能予算セクションへ伝播 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: 版メタ同期、`enabled = false` のスコア集約除外セマンティクス追記、merged dependency graph 生成契約追加、Application Pipeline 責務表追加、C4 レベル3 名称修正 + Git Diff Adapter 追加、ベースライン write-back ライフサイクル追加、subset fallback 文言明確化、`summary_scope` 表記統一 | Claude |
 | 0.2.12 | 2026-03-20 | Diagnostics 出力を `List<Diagnostic>` に整理し、Application Pipeline の report assembly / summary materialization、`primary_scope_id` 契約、plugin baseline 再利用ゲートと aggregate fuel budget を反映 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` フィールド名を `start_line`/`end_line`/`column` に統一、plugin の level-to-subgraph 契約と `schema_version` 初期値 `"1.0.0"` / バンプポリシーを定義 | Claude |
