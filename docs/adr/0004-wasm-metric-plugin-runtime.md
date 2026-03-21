@@ -64,7 +64,10 @@
     - `metric_register(id_ptr, id_len, level: u32, name_ptr, name_len, desc_ptr, desc_len) -> i32` — `MetricDefinition` を登録する。`id` は `MetricDefinition.id`（グローバル一意）、`level` は `AnalysisLevel`（0=Function, 1=Module, 2=Project）、`name`/`desc` は人間可読な名前と説明。v1 では `participation = ReportOnly`, `rule_binding = None` が暗黙に設定される（domain_model.md §3.2 参照）。成功時 0、重複 ID 時 -1 を返す
   - **plugin exports（プラグイン→ホスト）**: プラグインは以下の関数をエクスポートする
     - `kalos_plugin_init() -> i32` — 初期化。`metric_register` ホスト関数を呼び出して `MetricDefinition` を 1 つ以上登録する。1 モジュールが複数の `MetricDefinition` を登録できる（各登録は独立した `metric_id` を持つ）。成功時 0、失敗時非 0 を返す
-    - `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。未登録の `metric_id` が渡された場合の動作は未定義とする。戻り値のエンコーディング: 下位 32 ビットが `raw_value` の IEEE 754 binary32 表現、上位 32 ビットが `normalized_risk` の IEEE 754 binary32 表現（いずれも Little-Endian）。ホストは受け取った binary32 値を `f64` へ拡張し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
+    - `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。未登録の `metric_id` が渡された場合の動作は未定義とする。戻り値のエンコーディング: 下位 32 ビットが `raw_value` の IEEE 754 binary32 表現、上位 32 ビットが `normalized_risk` の IEEE 754 binary32 表現（いずれも Little-Endian）。ホストは受け取った binary32 値を `f64` へ拡張したのち、以下の **invalid-value contract** を適用する:
+      - `normalized_risk` が `NaN` または `±Inf` の場合: 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない。`stderr` / 構造化ログへ warning を出力する
+      - `normalized_risk` が有限だが `[0.0, 1.0]` の範囲外の場合: `clamp(normalized_risk, 0.0, 1.0)` で範囲内に収め、`stderr` / 構造化ログへ warning を出力したうえで処理を続行する
+      - 上記の検証を通過した値に対し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
     - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
     - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
   - **データ交換形式**: ホスト⇔プラグイン間の構造化データは Little-Endian の固定長バイナリレイアウトで受け渡す。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる
@@ -81,7 +84,7 @@
 - **線形メモリ管理**: 各 WASM instance は独立した線形メモリ空間を持つ。初期サイズは WASM モジュールの宣言に従い、`linear_memory_limit`（v1 暫定値: `64 MiB`）を上限とする。上限超過時はトラップとして扱い、当該プラグインの評価を打ち切る
 - 実行リソース制限の正本は WASM fuel 単位とする。fuel は WASM 命令ごとに決定論的に消費される抽象コスト単位であり、壁時間やホスト CPU 速度に依存しない。これにより同一入力に対するプラグインの成否判定が `REQ-NF-003` の決定論性を維持する
   - **per-invocation fuel budget**: `500_000 fuel`（暫定値）。1 回の `kalos_plugin_evaluate` 呼び出しに対する上限
-  - **aggregate fuel budget**: `30_000_000 fuel`（全解析、暫定値）/ `5_000_000 fuel`（diff mode、暫定値）。Metrics stage 全体でのプラグイン fuel 消費合計の上限
+  - **aggregate fuel budget**: `30_000_000 fuel`（全解析、暫定値）/ `5_000_000 fuel`（diff mode、暫定値）。Metrics stage 全体でのプラグイン fuel 消費合計の上限。diff 解析から全解析へフォールバックした場合（`InvalidationPlan.fallback_to_full = true`）は、実際の実行パスに従い全解析用の budget（`30_000_000 fuel`）を適用する
   - **linear_memory_limit**: `64 MiB`（暫定値）。プラグインの線形メモリ上限
   - **参考値**: `bench-linux-x64` プロファイル（REQ-NF-001 測定条件）上で、上記 fuel budget はおおむね per-invocation ~50ms / aggregate ~3s（全解析）/ ~0.5s（diff mode）の壁時間に相当する。ただしこの対応は参考であり、**fuel 値が規範的（normative）な上限**である。壁時間は環境により変動するため契約の一部ではない
   - 上記の暫定値は PoC ベンチマークで検証し、v1 リリースまでに確定する。確定後はこの ADR を改訂する。暫定値の根拠は `REQ-NF-001`（全解析 60s）/ `REQ-NF-002`（差分解析 10s）の性能バジェットにおいて、プラグイン評価を全体の 5% 以内に収める目安から導出した
@@ -109,7 +112,7 @@
 - SPI version `kalos-metric-spi-v1` の保守が必要であり、破壊的変更時は新 SPI version と移行計画を ADR で決定する
 - 実行性能の測定が不可欠
 - プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが `WorkspaceRoot` 基準の `plugin_manifest` へ正規化する）
-- fuel budget 超過、メモリ上限超過、aggregate fuel budget 超過時のプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る。v1 の診断・スコア・Exit code は既存契約のまま維持する。diff mode では baseline 断片に残る当該プラグインの `MetricValue` も最終出力から除外する
+- fuel budget 超過、メモリ上限超過、aggregate fuel budget 超過、および評価戻り値の `normalized_risk` が `NaN` / `±Inf` の場合、当該プラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る（有限な範囲外値は `clamp` で補正し warning を出力する）。v1 の診断・スコア・Exit code は既存契約のまま維持する。diff mode では baseline 断片に残る当該プラグインの `MetricValue` も最終出力から除外する
 
 ### リスク
 

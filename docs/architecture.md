@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.3.0 |
-| 最終更新日 | 2026-03-21 |
+| バージョン | 0.4.0 |
+| 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.3.0, domain_model.md v0.3.0 |
+| 入力 | requirements.md v0.4.0, domain_model.md v0.4.0 |
 
 ## 1. 設計目標
 
@@ -425,7 +425,7 @@ sequenceDiagram
 - ファイル列挙順は正規化された絶対パス昇順
 - `Map` 相当は外部出力前にソートし、順序が観測可能な箇所では `BTreeMap` 系を用いる
 - 浮動小数点集約は `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` で行う。`AnalysisLevel` の順序は `function < module < project` に固定する
-- project scope の `ScopeId` 正規形は `(<project>, ".")` とし、比較器・キャッシュキー・外部出力で一貫して用いる
+- project scope の `ScopeId` 正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` とし、比較器・キャッシュキー・外部出力で一貫して用いる
 - `raw_value` / `normalized_risk` / `overflow_ratio` / 集約途中値は小数第 6 位で round-half-up する
 - 並列処理の結果マージは deterministic reduce を使う
 - JSON / SARIF 出力はキー順と要素順を安定化させる
@@ -459,7 +459,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
 | 出力データ | SARIF/JSON に機密情報を埋め込まない。ファイルパスの正規化を行う |
-| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。fuel が規範的上限。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照） |
+| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。diff mode から全解析へフォールバックした場合は全解析の budget（`30_000_000 fuel`）を適用する。fuel が規範的上限。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照） |
 
 ### 7.3 デプロイ / 配布
 
@@ -496,7 +496,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 影響範囲メトリクス再計算 | 2 秒 |
 | 診断と出力 | 2 秒 |
 
-plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差分 `5_000_000 fuel`、参考: ~0.5s）は、それぞれ Metrics stage budget の内数として会計する。fuel が規範的上限であり、壁時間は参考値。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照）。
+plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差分 `5_000_000 fuel`、参考: ~0.5s）は、それぞれ Metrics stage budget の内数として会計する。aggregate fuel budget は実際の実行パスに従い、diff mode から全解析へフォールバックした場合は全解析の budget（`30_000_000 fuel`）を適用する。fuel が規範的上限であり、壁時間は参考値。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照）。
 
 #### LLM sidecar 予算
 
@@ -595,6 +595,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、入力参照更新、project scope 正規形を 3-field 表記に統一、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |
 | 0.3.1 | 2026-03-22 | ADR-0005 の LLM runtime policy（aggregate sidecar budget 120s、preflight failure、URL 秘匿化契約）をセキュリティ設計・性能予算セクションへ伝播 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: 版メタ同期、`enabled = false` のスコア集約除外セマンティクス追記、merged dependency graph 生成契約追加、Application Pipeline 責務表追加、C4 レベル3 名称修正 + Git Diff Adapter 追加、ベースライン write-back ライフサイクル追加、subset fallback 文言明確化、`summary_scope` 表記統一 | Claude |
 | 0.2.12 | 2026-03-20 | Diagnostics 出力を `List<Diagnostic>` に整理し、Application Pipeline の report assembly / summary materialization、`primary_scope_id` 契約、plugin baseline 再利用ゲートと aggregate fuel budget を反映 | Codex |

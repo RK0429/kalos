@@ -5,10 +5,10 @@
 | 項目 | 内容 |
 |---|---|
 | 作成日 | 2026-03-21 |
-| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（全 4 件） |
+| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、全 18 指摘） |
 | 目的 | 全レビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 
-**注意**: 本メモの設計判断は 2026-03-21 付けで requirements.md / architecture.md / domain_model.md / ADR 群に適用済み。以下の §・行番号参照は適用前の文書構成に基づくため、現在の文書構成とは一致しない場合がある。
+**注意**: 本メモの設計判断は 2026-03-21 付けで v0.3.0 として初回適用済み。2026-03-22 付けで再レビュー指摘（版メタ v0.4.0 同期、project scope 正規形統一、ADR-0004 NaN/Inf/out-of-range セマンティクス、aggregate fuel budget フォールバック）を反映し v0.4.0 へ更新した。以下の §・行番号参照は初回適用前の文書構成に基づくため、現在の文書構成とは一致しない場合がある。
 
 ---
 
@@ -20,7 +20,7 @@ requirements.md / architecture.md / domain_model.md の先頭メタ情報が `0.
 
 ### 判断
 
-**ポリシー**: 先頭メタ情報は常に変更履歴の最新エントリと一致させる。今回の修正バッチでは全文書を `0.3.0 / 2026-03-21` へ同時に上げる（指摘解決による変更が複数箇所にまたがるため minor バンプとする）。
+**ポリシー**: 先頭メタ情報は常に変更履歴の最新エントリと一致させる。初回修正バッチでは全文書を `0.3.0 / 2026-03-21` へ同時に上げた。再レビュー指摘の反映バッチでは `0.4.0 / 2026-03-22` へ更新する。
 
 **同期ルール（今後適用）**:
 1. 変更履歴にエントリを追加するとき、先頭メタ情報を同じバージョン・日付に更新する
@@ -31,10 +31,10 @@ requirements.md / architecture.md / domain_model.md の先頭メタ情報が `0.
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` 先頭メタ情報 | `0.3.0` / `2026-03-21` に更新 |
-| `architecture.md` 先頭メタ情報 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0, domain_model.md v0.3.0` に更新 |
-| `domain_model.md` 先頭メタ情報 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0` に更新 |
-| 各文書の変更履歴末尾 | `0.3.0 / 2026-03-21` エントリを追加（変更内容は「レビュー指摘解決」で統一） |
+| `requirements.md` 先頭メタ情報 | `0.4.0` / `2026-03-22` に更新 |
+| `architecture.md` 先頭メタ情報 | `0.4.0` / `2026-03-22` に更新。入力欄を `requirements.md v0.4.0, domain_model.md v0.4.0` に更新 |
+| `domain_model.md` 先頭メタ情報 | `0.4.0` / `2026-03-22` に更新。入力欄を `requirements.md v0.4.0` に更新 |
+| 各文書の変更履歴末尾 | `0.4.0 / 2026-03-22` エントリを追加 |
 
 ---
 
@@ -565,11 +565,14 @@ ADR-0005 のネガティブ帰結に運用上の考慮事項を追加する。
 
 ## 更新対象文書の一覧
 
+本一覧は §1–§19 の初回バッチ（v0.3.0）と、再レビュー指摘に基づく v0.4.0 フォローアップの両方を含む。v0.4.0 フォローアップで追加された項目には末尾に「（v0.4.0）」を付記する。
+
 | # | 文書 | 必要な更新の要約 |
 |---|---|---|
-| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別） |
-| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化） |
-| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記（fallback_to_full の定義を §5 と整合）、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope/diagnostics_scope 表記統一・値分離 |
+| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
+| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化）、project scope 正規形を 3-field 表記に統一（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
+| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記（fallback_to_full の定義を §5 と整合）、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope/diagnostics_scope 表記統一・値分離、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一（v0.4.0）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
 | 4 | `adr/0001-adopt-modular-monolith.md` | 単一バイナリ保証範囲の注記追加（CodeQL managed bundle と WASM user-supplied plugin のライフサイクル責務を区別） |
 | 5 | `adr/0003-deterministic-core-and-baseline-cache.md` | subset fallback 文言修正、キャッシュ運用帰結追加 |
-| 6 | `adr/0005-optional-llm-enrichment.md` | LLM 運用帰結追加 |
+| 6 | `adr/0004-wasm-metric-plugin-runtime.md` | WASM instance lifecycle（初期化・評価・破棄）の契約追加、線形メモリ管理の上限・トラップ動作追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加（v0.4.0） |
+| 7 | `adr/0005-optional-llm-enrichment.md` | LLM 運用帰結追加 |

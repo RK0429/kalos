@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.3.0 |
-| 最終更新日 | 2026-03-21 |
+| バージョン | 0.4.0 |
+| 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.3.0 |
+| 入力 | requirements.md v0.4.0 |
 
 ## 1. サブドメイン分類
 
@@ -298,13 +298,13 @@ classDiagram
 - `MetricDefinition.id` は組み込みとプラグインを横断してグローバル一意でなければならない。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、既存 ID と衝突したプラグインを deterministic なロード失敗として warning 付きで無効化する
 - Plugin Host は各 plugin `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する
 - `MetricConfig` はプラグイン SPI へ渡す正規化済み設定マップ。ホストが設定ファイル由来の値を解決してから渡す
-- `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）
+- `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）。`normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し `MetricValue` を生成しない。有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を報告から省略できる。ただし、パターンルールの入力として必要な下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出し保持する。これらは報告・スコア集約の対象にはならない。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
 - `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。project スコープの正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一値とし、スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
-- プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過は `MetricValue` を生成しない非致命の運用イベントとして扱う（fuel が規範的上限。具体的な budget 数値は暫定値であり PoC で確定予定。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
+- プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過、および評価戻り値の `normalized_risk` が `NaN` / `±Inf` の場合は `MetricValue` を生成しない非致命の運用イベントとして扱う（有限だが `[0.0, 1.0]` 範囲外の `normalized_risk` は `clamp` で補正し warning を出力する。fuel が規範的上限であり、diff mode から全解析へフォールバックした場合は全解析の budget を適用する。具体的な budget 数値は暫定値であり PoC で確定予定。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
 ### 3.3 診断コンテキスト
@@ -482,7 +482,7 @@ classDiagram
 **設計意図:**
 
 - ルールを `MetricRule`（メトリクス値→閾値比較）と `PatternRule`（構造情報中心のパターン検出）に分離。入力データと評価ロジックが根本的に異なるため、単一 Rule では閾値・メトリクス値フィールドが PatternRule に対して無意味になり不変条件が弱まる
-- `PatternRule.evaluation_scope` は `detect()` の呼び出し粒度を決定する。`Function` はスコープ候補ごとに関数サブグラフで、`Module` は owner scope ごとにモジュールサブグラフで、`Project` はプロジェクト全体のグラフビューで 1 回だけ呼び出される。v1 での対応: `KAL-PAT001`（Module）、`KAL-PAT002`（Function）、`KAL-PAT003`（Project — モジュール依存グラフ全体を入力とし、SCC 検出で複数の診断を返し得る）。`detect()` の `cpg` 引数には `evaluation_scope` に対応する `UnifiedCpg.subgraph(scope_id)` の結果を渡す。`Project` スコープの場合は正規形 `ScopeId(level = Project)` のサブグラフ、すなわち CPG 全体のビューとなる
+- `PatternRule.evaluation_scope` は `detect()` の呼び出し粒度を決定する。`Function` はスコープ候補ごとに関数サブグラフで、`Module` は owner scope ごとにモジュールサブグラフで、`Project` はプロジェクト全体のグラフビューで 1 回だけ呼び出される。v1 での対応: `KAL-PAT001`（Module）、`KAL-PAT002`（Function）、`KAL-PAT003`（Project — モジュール依存グラフ全体を入力とし、SCC 検出で複数の診断を返し得る）。`detect()` の `cpg` 引数には `evaluation_scope` に対応する `UnifiedCpg.subgraph(scope_id)` の結果を渡す。`Project` スコープの場合は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` のサブグラフ、すなわち CPG 全体のビューとなる
 - `PatternRule` は構造情報を主入力とするが、`KAL-PAT001` のように対象 scope に集約済みメトリクスが必要な場合は `AnalysisMetrics` の既算出結果を参照できる
 - `Diagnostic` は `kind` を discriminant とし、`MetricObservation` または `PatternEvidence` のどちらか一方だけを持つ。これによりメトリクス診断とパターン診断の出力契約を同一 aggregate の中で型安全に表現できる
 - `Diagnostic.primary_scope_id` は差分表示・`ScopeDiagnosticSnapshot` への永続化・決定論的順序付けで使う canonical owner である。metric 診断では評価対象 `ScopeId` と一致し、pattern 診断では rule の主対象 scope を使う。cross-scope pattern で単一の主対象 scope が定義できない場合は `PatternEvidence.evidence_scopes` の辞書順最小 `ScopeId` を `primary_scope_id` とする
@@ -746,7 +746,7 @@ stateDiagram-v2
 | スコープメトリクス (ScopeMetrics) | 特定のスコープ（関数、モジュール等）に対する全メトリクス値の集合。丸め済み `scope_risk` を保持し、階層は `scope_id.level` から導出する | ScopeId |
 | 解析メトリクス (AnalysisMetrics) | 全階層または `--level` 指定で選択された階層のメトリクス結果と総合スコアを束ねる集約ルート | ScopeMetrics, OverallScore |
 | 総合スコア (OverallScore) | 選択された階層群のメトリクスを重み付き集約した丸め済みリスク値と、0〜100の整数評価値。非対象階層の部分スコアは `None` を許容する | ScoreWeights |
-| スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成し、`AnalysisLevel.Module` では言語ごとの owner scope（Python/TypeScript の class、Rust の module/file root module、Go の package）を表す。project は `("<project>", ".")` の単一正規形を取る | AnalysisLevel |
+| スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成し、`AnalysisLevel.Module` では言語ごとの owner scope（Python/TypeScript の class、Rust の module/file root module、Go の package）を表す。project は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一正規形を取る | AnalysisLevel |
 | スコア重み (ScoreWeights) | 総合スコア算出時の各階層の重み。デフォルト: function 0.4, module 0.35, project 0.25 | — |
 | 解析階層 (AnalysisLevel) | メトリクス算出の粒度: Function / Module / Project | — |
 
@@ -860,6 +860,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、入力参照更新、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: 版メタ情報同期、`SourceFile` を VO に再分類、`RuleConfig.enabled = false` スコアリング除外契約追記、`OverallScore` 正規化・再配分不変条件追記、`ScoreWeights` 入力検証のみの役割を明記、merged dependency graph 統合手順・`DependencyIndexManifest` 更新タイミング追記、subset fallback 文言修正、`InvalidationPlan` 集合不変条件追記、`DiagnosticsScope`/`SummaryScope` の JSON 値対応を明記、`Configuration` 名称を `ProjectConfig.resolve()` に統一、§3.6 レポート VO クラス図追加 | Claude |
 | 0.2.12 | 2026-03-20 | `Diagnostic.primary_scope_id` による canonical scope 所有権、`ScopeDiagnosticSnapshot` のキー付け規則、Application Pipeline による summary materialization を追加 | Codex |
 | 0.2.11 | 2026-03-19 | `Diagnostic.location` フィールド名を `start_line`/`end_line`/`column` に統一、`DiagnosticsScope.WholeProject` の定義を `--level` 限定時の完全性として明確化、plugin の level-to-subgraph 契約と `LlmEnrichmentRequest` 組み立て者を Application Pipeline に統一、`schema_version` 初期値 `"1.0.0"` とバンプポリシーを定義 | Claude |
