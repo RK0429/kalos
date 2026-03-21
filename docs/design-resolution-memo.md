@@ -5,10 +5,10 @@
 | 項目 | 内容 |
 |---|---|
 | 作成日 | 2026-03-21 |
-| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、全 18 指摘） |
+| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 18 指摘 + v0.4.0 フォローアップ + v0.4.1 フォローアップ 2 件、計 21 項） |
 | 目的 | 全レビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 
-**注意**: 本メモの設計判断は 2026-03-21 付けで v0.3.0 として初回適用済み。2026-03-22 付けで再レビュー指摘（版メタ v0.4.0 同期、project scope 正規形統一、ADR-0004 NaN/Inf/out-of-range セマンティクス、aggregate fuel budget フォールバック）を反映し v0.4.0 へ更新した。以下の §・行番号参照は初回適用前の文書構成に基づくため、現在の文書構成とは一致しない場合がある。
+**注意**: 本メモの設計判断は 2026-03-21 付けで v0.3.0 として初回適用済み。2026-03-22 付けで再レビュー指摘（版メタ v0.4.0 同期、project scope 正規形統一、ADR-0004 NaN/Inf/out-of-range セマンティクス、aggregate fuel budget フォールバック）を反映し v0.4.0 へ更新した。さらに同日の追加レビューで 2 件の指摘（REQ-NF-005 の resolver adapter 完了条件、LLM provider 契約の伝播不足）を反映し v0.4.1 へ更新した。以下の §・行番号参照は初回適用前の文書構成に基づくため、現在の文書構成とは一致しない場合がある。
 
 ---
 
@@ -563,14 +563,61 @@ ADR-0005 のネガティブ帰結に運用上の考慮事項を追加する。
 
 ---
 
+## 20. REQ-NF-005 の言語追加完了条件に resolver adapter を明記（should）（v0.4.1）
+
+### 指摘
+
+`REQ-NF-005`（言語サポートの追加）は「CPG 抽出境界内の parser / normalizer / language profile の追加で対応可能」と記述しているが、完全な言語サポートには `Dependency Symbol Resolver Port` の language-specific resolver adapter（`REQ-FUNC-007`）も必要であり、この関係が明示されていない。architecture.md の QA-04 適合度関数も同様にコア拡張性のみを計測対象としており、resolver adapter の位置付けが不明確だった。
+
+### 判断
+
+`REQ-NF-005` の完了条件に resolver adapter との関係を注記として追加する。コア拡張性の保証（CPG 抽出境界内の変更面限定）は維持しつつ、完全な言語サポートには `Dependency Symbol Resolver Port` の adapter（`REQ-FUNC-007`）が別途必要である旨を明文化する。
+
+architecture.md では以下を更新する:
+- **QA-04 適合度関数**: スコープ注記に resolver adapter が閾値外だが必要である旨を追加
+- **§6.1 CPG 抽出エンジンの扱い**: resolver adapter が PoC 項目 #6 で追跡される旨を追加
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `requirements.md` REQ-NF-005 | 完了条件注記として `Dependency Symbol Resolver Port` の language-specific resolver adapter（`REQ-FUNC-007`）との関係を追加 |
+| `architecture.md` QA-04 適合度関数 | スコープ注記に resolver adapter（`REQ-FUNC-007`）が `adapters/dependency_resolver/` への追加であり閾値外だが完全な言語サポートには必要である旨を追加 |
+| `architecture.md` §6.1 | resolver adapter が extractor 境界内に閉じ込められ、PoC 項目 #6 で追跡される旨を追加 |
+
+---
+
+## 21. LLM provider 契約の伝播（should）（v0.4.1）
+
+### 指摘
+
+ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていたが、architecture.md 上でプロバイダ選択メカニズム（`KALOS_LLM_PROVIDER` によるリクエスト形式・デフォルトエンドポイント URL の決定）が §4.2 ルール・§6 技術選定・§7.2 セキュリティ設計に伝播されていなかった。
+
+### 判断
+
+`KALOS_LLM_PROVIDER` 環境変数がリクエスト形式とデフォルトエンドポイント URL を決定する契約を architecture.md の関連セクションに伝播する:
+- **§4.2 依存/ルール**: LLM Adapter の依存関係表に provider 選択を追加
+- **§6 技術選定表**: LLM 連携の行に provider 契約を追加
+- **§7.2 セキュリティ設計**: LLM 送信データの行に provider 選択と preflight failure の契約を追加
+
+### 更新対象
+
+| 文書 | 更新内容 |
+|---|---|
+| `architecture.md` §4.2 | LLM Adapter 依存関係に `KALOS_LLM_PROVIDER` によるプロバイダ選択を追記 |
+| `architecture.md` §6 技術選定表 | LLM 連携行に「プロバイダ選択（`KALOS_LLM_PROVIDER`）がリクエスト形式とデフォルトエンドポイント URL を決定する」を追記 |
+| `architecture.md` §7.2 セキュリティ設計 | LLM 送信データ行に provider 契約と preflight failure 条件を追記 |
+
+---
+
 ## 更新対象文書の一覧
 
-本一覧は §1–§19 の初回バッチ（v0.3.0）と、再レビュー指摘に基づく v0.4.0 フォローアップの両方を含む。v0.4.0 フォローアップで追加された項目には末尾に「（v0.4.0）」を付記する。
+本一覧は §1–§21 の全バッチを含む: 初回バッチ（v0.3.0、§1–§19）、再レビュー指摘に基づく v0.4.0 フォローアップ（既存 § への追記）、および追加レビューに基づく v0.4.1 フォローアップ（§20–§21）。v0.4.0 フォローアップで追加された項目には末尾に「（v0.4.0）」、v0.4.1 フォローアップで追加された項目には末尾に「（v0.4.1）」を付記する。
 
 | # | 文書 | 必要な更新の要約 |
 |---|---|---|
-| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
-| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化）、project scope 正規形を 3-field 表記に統一（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
+| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0）、REQ-NF-005 完了条件に resolver adapter（`REQ-FUNC-007`）との関係を注記（v0.4.1） |
+| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化）、project scope 正規形を 3-field 表記に統一（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0）、QA-04 適合度関数・§6.1 に resolver adapter（`REQ-FUNC-007`）の位置付けを明記（v0.4.1）、LLM provider 契約（`KALOS_LLM_PROVIDER`）を §4.2・§6・§7.2 に伝播（v0.4.1） |
 | 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記（fallback_to_full の定義を §5 と整合）、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope/diagnostics_scope 表記統一・値分離、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一（v0.4.0）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
 | 4 | `adr/0001-adopt-modular-monolith.md` | 単一バイナリ保証範囲の注記追加（CodeQL managed bundle と WASM user-supplied plugin のライフサイクル責務を区別） |
 | 5 | `adr/0003-deterministic-core-and-baseline-cache.md` | subset fallback 文言修正、キャッシュ運用帰結追加 |

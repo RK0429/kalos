@@ -38,7 +38,7 @@ kalos は、ソースコードからコードプロパティグラフ（CPG）�
 
 | ID | 品質特性 | 刺激 | 環境 | 応答 | 測定基準 | 対応要件 |
 |---|---|---|---|---|---|---|
-| QA-01 | 決定論性 | 同一ソース・同一設定で `kalos check .` を繰り返し実行する | Linux/macOS/Windows の対応環境 | CPG 正規化順、メトリクス集約順、診断出力順を固定し、同一結果を返す | メトリクス値・診断・総合スコア・JSON/SARIF のハッシュが一致 | `REQ-NF-003` |
+| QA-01 | 決定論性 | 同一ソース・同一設定で `kalos check`（引数省略 = 全ワークスペース）を繰り返し実行する | Linux/macOS/Windows の対応環境 | CPG 正規化順、メトリクス集約順、診断出力順を固定し、同一結果を返す | メトリクス値・診断・総合スコア・JSON/SARIF のハッシュが一致 | `REQ-NF-003` |
 | QA-02 | 性能 | 1万 LOC 規模のプロジェクトを全階層解析する | `bench-linux-x64`（4 vCPU / 16GB / SSD、managed CodeQL bundle warm、baseline cache empty） | パイプライン各段階を時間予算内で完了する | 全解析 60 秒以内 | `REQ-NF-001` |
 | QA-03 | 性能 | 10 ファイル以下の変更を PR で評価する | `bench-linux-x64` + baseline cache warm + stable checkout path | 変更影響範囲のみ再計算し、既存ベースラインを再利用する | 差分解析 10 秒以内 | `REQ-NF-002`, `REQ-FUNC-034` |
 | QA-04 | 拡張性 | 新言語を 1 つ追加する | 既存コアを維持したまま機能拡張する | CPG 抽出境界内の parser / normalizer / language profile 追加で対応する | Metrics・Scoring・Reporting・CLI 層の変更不要 | `REQ-NF-005` |
@@ -286,7 +286,7 @@ sequenceDiagram
     participant R as Reporting
     participant Cache as Baseline Cache
 
-    U->>CLI: kalos check .
+    U->>CLI: kalos check（引数省略 = 全ワークスペース）
     CLI->>APP: 実行要求
     APP->>CFG: 設定探索・マージ
     CFG-->>APP: ProjectConfig
@@ -521,7 +521,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 ### 適合度関数: 全解析性能
 
-- **計測対象**: 10k LOC コーパスに対する `kalos check .`
+- **計測対象**: 10k LOC コーパスに対する `kalos check`（引数省略 = 全ワークスペース）
 - **閾値**: p95 <= 60 秒
 - **計測方法**: nightly ベンチマーク CI
 - **違反時のアクション**: 直近変更を perf regression として扱い、原因を切り分ける
