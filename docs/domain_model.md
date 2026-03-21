@@ -73,9 +73,9 @@ graph LR
                       ↓
  List<Diagnostic>(テンプレート提案と canonical scope を含む)
                       ↓
- [Application Pipeline] summary materialization + ExitCode 判定
+ [Application Pipeline] summary materialization + scope 判定
                       ↓
-        DiagnosticReport(診断 + summary + ExitCode)
+        DiagnosticReport(診断 + summary + diagnostics_scope + summary_scope)
                       ↓
   Optional LlmSuggestionBundle(DiagnosticId ごとの補助提案)
                       ↓
@@ -345,6 +345,7 @@ classDiagram
         <<Entity>>
         +RuleId id
         +PatternType pattern_type
+        +AnalysisLevel evaluation_scope
         +Severity default_severity
         +String description
         +String suggestion_template
@@ -471,6 +472,7 @@ classDiagram
     PatternRule --> RuleId
     PatternRule --> Severity
     PatternRule --> PatternType
+    PatternRule --> AnalysisLevel
     LlmSuggestionBundle *-- LlmSuggestion
     LlmSuggestionBundle ..> DiagnosticId
     InlineSuppression --> FileLocation
@@ -480,6 +482,7 @@ classDiagram
 **設計意図:**
 
 - ルールを `MetricRule`（メトリクス値→閾値比較）と `PatternRule`（構造情報中心のパターン検出）に分離。入力データと評価ロジックが根本的に異なるため、単一 Rule では閾値・メトリクス値フィールドが PatternRule に対して無意味になり不変条件が弱まる
+- `PatternRule.evaluation_scope` は `detect()` の呼び出し粒度を決定する。`Function` はスコープ候補ごとに関数サブグラフで、`Module` は owner scope ごとにモジュールサブグラフで、`Project` はプロジェクト全体のグラフビューで 1 回だけ呼び出される。v1 での対応: `KAL-PAT001`（Module）、`KAL-PAT002`（Function）、`KAL-PAT003`（Project — モジュール依存グラフ全体を入力とし、SCC 検出で複数の診断を返し得る）。`detect()` の `cpg` 引数には `evaluation_scope` に対応する `UnifiedCpg.subgraph(scope_id)` の結果を渡す。`Project` スコープの場合は正規形 `ScopeId(level = Project)` のサブグラフ、すなわち CPG 全体のビューとなる
 - `PatternRule` は構造情報を主入力とするが、`KAL-PAT001` のように対象 scope に集約済みメトリクスが必要な場合は `AnalysisMetrics` の既算出結果を参照できる
 - `Diagnostic` は `kind` を discriminant とし、`MetricObservation` または `PatternEvidence` のどちらか一方だけを持つ。これによりメトリクス診断とパターン診断の出力契約を同一 aggregate の中で型安全に表現できる
 - `Diagnostic.primary_scope_id` は差分表示・`ScopeDiagnosticSnapshot` への永続化・決定論的順序付けで使う canonical owner である。metric 診断では評価対象 `ScopeId` と一致し、pattern 診断では rule の主対象 scope を使う。cross-scope pattern で単一の主対象 scope が定義できない場合は `PatternEvidence.evidence_scopes` の辞書順最小 `ScopeId` を `primary_scope_id` とする
@@ -551,7 +554,7 @@ classDiagram
 
 - `Impact Analysis` が `AffectedScopeSet` と `InvalidationPlan` の導出ロジックの唯一の owner であり、結果値そのものは公開言語として下流コンテキストへ渡す
 - `Impact Analysis` は merged dependency graph の生成と逆閉包計算も担う。統合手順: (1) 差分 `UnifiedCpg` から変更スコープの依存辺を抽出、(2) baseline `DependencyIndexManifest` の変更スコープに関する辺を差分 CPG 由来の辺で **置換**、(3) 未変更スコープの辺は baseline をそのまま保持、(4) 統合した依存グラフ上で変更スコープを起点に逆推移的閉包を計算し `AffectedScopeSet` を求める。`DependencyIndexManifest` の更新タイミング: 全ワークスペース解析が正常完了した場合のベースライン保存時に、最新の merged index を含める
-- `InvalidationPlan.fallback_to_full` は、`analysis_targets` が全 target 群の部分集合で diff 最適化を適用できない、baseline 不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない場合に `true` となる。`fallback_to_full = true` 時は、要求された `analysis_targets` / `--level` を保った non-diff 全解析を実行する（全ワークスペースへ拡張しない）
+- `analysis_targets` が全 target 群の部分集合である実行は `Impact Analysis` / `InvalidationPlan` 生成の前段で diff 最適化を無効化し、要求された `analysis_targets` / `--level` を保った non-diff 全解析へ short-circuit する（全ワークスペースへ拡張しない）。`InvalidationPlan.fallback_to_full` は、全ワークスペース diff フロー内で baseline 不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない場合に `true` となる
 - `BaselineFingerprint.workspace_root_hash` はワークスペースのルートディレクトリの正規化済み絶対パスから算出したハッシュ。異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `BaselineFingerprint.base_snapshot_hash` は「現在のワークスペース」ではなく `base-ref` 側のスナップショットを表す。これにより、同じ基準コミットに対する差分実行でベースラインを再利用できる
 - `BaselineFingerprint.config_hash` は、除外パターンの和集合と正規化済み `plugin_manifest` を含む `ProjectConfig` 全体のハッシュ。プラグイン差し替えや設定変更はこの値で再利用可否に反映される
@@ -693,6 +696,11 @@ stateDiagram-v2
     Completed --> [*]
 ```
 
+> **簡略化注記**: この図は主要な状態遷移を示す簡略版である。以下の詳細は §3 の設計意図で個別に記述している:
+> - `GeneratingDiagnostics → Completed` は内部的に DiagnosticReport の summary materialization・scope 判定、任意の LLM enrichment（`--llm` 指定時）、reporting（human/JSON/SARIF 変換）の各ステップを含む
+> - `ExtractingCpg` 中の非致命エラー（構文エラーによるファイルスキップ、外部シンボル解決失敗）は `AnalysisWarning` として記録され、パイプライン全体は `Failed` に遷移せず処理を継続する
+> - `ComputingMetrics` 中のプラグインタイムアウト・メモリ超過も非致命として扱い、該当プラグインのみをスキップする
+
 ### 4.2 ソースファイル処理
 
 ```mermaid
@@ -707,6 +715,8 @@ stateDiagram-v2
     Skipped --> [*]
     CpgGenerated --> [*]
 ```
+
+> **簡略化注記**: `Parsed → CpgGenerated` の間で外部シンボル解決が行われ、解決失敗時は `AnalysisWarning` を記録してメトリクス精度の範囲内で処理を継続する（REQ-FUNC-007）。
 
 ## 5. 用語集
 
@@ -745,9 +755,9 @@ stateDiagram-v2
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
 | 診断 (Diagnostic) | 閾値違反または構造的パターン検出の結果。`kind` に応じて `MetricObservation` または `PatternEvidence` を持ち、差分表示とベースライン断片化に使う canonical `primary_scope_id` を持つ | MetricRule, PatternRule, ScopeId |
-| 診断レポート (DiagnosticReport) | 診断一覧、一覧の完全性、materialized な summary、summary の母集団、Exit code を束ねる集約ルート | Diagnostic, DiagnosticSummary, DiagnosticsScope, SummaryScope |
+| 診断レポート (DiagnosticReport) | 診断一覧・一覧の完全性（`diagnostics_scope`）・materialized な summary・summary の母集団（`summary_scope`）を束ねる集約ルート。Exit code はフィールドとして保持せず、`determine_exit_code(strict)` メソッドで診断集合と `--strict` ポリシーから都度導出する | Diagnostic, DiagnosticSummary, DiagnosticsScope, SummaryScope, ExitCode |
 | メトリクスルール (MetricRule) | 組み込みメトリクス値を閾値と比較して診断を生成するルール。`KAL-Fxxx` / `KAL-Mxxx` / `KAL-Pxxx` 形式の RuleId で識別し、重大度は `overflow_ratio` と設定オーバーライドから導出する | RuleId |
-| パターンルール (PatternRule) | CPG を主入力とし、必要に応じて既算出メトリクスを参照して構造的パターンを検出するルール。`KAL-PATxxx` 形式の RuleId で識別 | PatternType, AnalysisMetrics |
+| パターンルール (PatternRule) | CPG を主入力とし、必要に応じて既算出メトリクスを参照して構造的パターンを検出するルール。`KAL-PATxxx` 形式の RuleId で識別。`evaluation_scope` が `detect()` の呼び出し粒度（Function / Module / Project）を決定する。Project スコープのルール（例: `KAL-PAT003`）は CPG 全体のビューを受け取り 1 回だけ評価される | PatternType, AnalysisLevel, AnalysisMetrics |
 | 診断ID (DiagnosticId) | 診断を一意に識別する値。LLM 補助提案との関連付けに使う | Diagnostic |
 | メトリクス観測値 (MetricObservation) | メトリクス診断の詳細。`metric_id`, `raw_value`, `normalized_risk`, `threshold`, `overflow_ratio` を含む | MetricId |
 | パターン根拠 (PatternEvidence) | パターン診断の詳細。`pattern_type`, `evidence_scopes`, `evidence_message` を含む | PatternType |

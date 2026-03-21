@@ -111,7 +111,7 @@ graph TB
         ToolCache[Managed Tool Cache Adapter<br>bundle bootstrap + verify]
         Metrics[Metrics Context<br>Metric Registry + Scoring]
         Diagnostics[Diagnostics Context<br>Rule Engine + Suggestions]
-        Report[Reporting Context<br>Human / JSON / SARIF ACL]
+        Report[Reporting Context — ACL（Anti-Corruption Layer）<br>Human / JSON / SARIF 出力]
         PluginHost[Plugin Host<br>WASM Loader + Capability Gate]
         Impact[Impact Analysis Service<br>影響範囲閉包と無効化判定]
         GIT[Git Diff Adapter<br>base-ref 解決 + 変更ファイル列挙]
@@ -210,7 +210,7 @@ CPG Extraction
 ルール:
 
 - ドメインコンテキスト同士は公開契約でのみ接続する
-- `Reporting` は ACL としてのみ存在し、ドメインへ逆流しない
+- `Reporting` は ACL（Anti-Corruption Layer — 外部出力スキーマからドメインを隔離する境界）としてのみ存在し、ドメインへ逆流しない
 - `Configuration` が `--config` を含む CLI 入力から `WorkspaceRoot` を一意に確定し、CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化する。正規化済み `analysis_targets` は入力順を保持したまま `ReportMetadata` として下流へ渡す
 - `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
@@ -305,6 +305,8 @@ sequenceDiagram
 
 ### 5.2 差分解析フロー
 
+以下のシーケンス図は `analysis_targets` が全ワークスペースである場合の差分解析フローを示す。`analysis_targets` が部分集合の場合は diff 最適化を適用せず、ベースラインの読み書きも行わない（§5.3 参照）。
+
 ```mermaid
 sequenceDiagram
     participant U as User/CI
@@ -320,27 +322,32 @@ sequenceDiagram
 
     U->>CLI: kalos check --diff <base-ref>
     CLI->>APP: 実行要求
-    APP->>GIT: base-ref 解決 + analysis_targets との交差
-    GIT-->>APP: changed paths + base_snapshot_hash
-    APP->>Cache: 既存ベースライン取得
-    Cache-->>APP: DiffBaseline?
-    APP->>CPG: changed paths のみ再抽出
-    CPG-->>APP: 変更スコープ SourceAnalysis
-    APP->>Impact: DiffBaseline.dependency_index + 差分 SourceAnalysis.cpg で逆依存閉包と無効化計画を計算
-    Impact-->>APP: AffectedScopeSet + InvalidationPlan + merged DependencyIndexManifest + 再利用断片
-    APP->>M: 影響範囲のみ再計算し再利用断片と統合
-    M-->>APP: 統合済み AnalysisMetrics
-    APP->>D: 統合済みメトリクスで診断
-    D-->>APP: 差分対象 List<Diagnostic>
-    APP->>R: DiagnosticReport / ReportMetadata / ReportViewOptions を含めて出力変換
-    APP->>Cache: ベースライン保存（全ワークスペース解析時）
-    R-->>U: 差分対象診断 + diagnostics_scope=affected_only + プロジェクト全体 summary
+    APP->>APP: analysis_targets が全ワークスペースか判定
+    alt analysis_targets が部分集合
+        APP->>APP: diff 最適化を無効化し non-diff 全解析へフォールバック（§5.3 参照）
+    else analysis_targets が全ワークスペース
+        APP->>GIT: base-ref 解決 + analysis_targets との交差
+        GIT-->>APP: changed paths + base_snapshot_hash
+        APP->>Cache: 既存ベースライン取得（BaselineFingerprint 照合）
+        Cache-->>APP: DiffBaseline?
+        APP->>CPG: changed paths のみ再抽出
+        CPG-->>APP: 変更スコープ SourceAnalysis
+        APP->>Impact: DiffBaseline.dependency_index + 差分 SourceAnalysis.cpg で逆依存閉包と無効化計画を計算
+        Impact-->>APP: AffectedScopeSet + InvalidationPlan + merged DependencyIndexManifest + 再利用断片
+        APP->>M: 影響範囲のみ再計算し再利用断片と統合
+        M-->>APP: 統合済み AnalysisMetrics
+        APP->>D: 統合済みメトリクスで診断
+        D-->>APP: 差分対象 List<Diagnostic>
+        APP->>R: DiagnosticReport / ReportMetadata / ReportViewOptions を含めて出力変換
+        APP->>Cache: ベースライン保存（全ワークスペース解析時）
+        R-->>U: 差分対象診断 + diagnostics_scope=affected_only + プロジェクト全体 summary
+    end
 ```
 
 差分解析では、以下を不変条件とする。
 
 - `scores.overall` は常に `AnalysisMetrics.OverallScore` の写像であり、診断件数から逆算しない。`--level all`（デフォルト）では変更後のプロジェクト全体メトリクス、`--level` で階層を限定した場合は変更後の指定階層メトリクスを意味する
-- `--level` で階層を限定した場合も、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出する。これらは報告・スコア集約の対象にはならない
+- `--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。ベースラインキャッシュの保存不変条件（§5.3、ADR-0003）として全階層の結果が必要なためである。`--level` で選択されなかった階層の結果は報告・スコア集約の対象にはならない
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する。ただし、プラグインメトリクスの再利用は当該プラグインが現在の実行で正常にロード・評価された場合に限り、失敗またはスキップされたプラグインの cache 済み `MetricValue` は除外する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
 - `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `whole_project`、`--level` で階層を限定した場合は `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
@@ -457,7 +464,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 配布単位 | 各 OS/arch 向けプリビルド単一バイナリ |
 | リリース経路 | GitHub Releases に成果物を配置し、公式 Action から取得 |
 | 付随資産 | CodeQL bundle は kalos release と一体で versioning される managed bundle manifest に従い、Managed Tool Cache Adapter が初回取得・checksum 検証・キャッシュする |
-| CI 統合 | GitHub Action は `check` 実行、managed bundle / baseline cache の prewarm・restore/save、SARIF upload をラップする。bootstrap と検証の正本は kalos CLI 側に置く |
+| CI 統合 | GitHub Action は `check` 実行、managed bundle / baseline cache の prewarm・restore/save、SARIF upload をラップする。bootstrap と検証の正本は kalos CLI 側に置く。差分解析の性能前提（QA-03: 10 秒以内）を満たすには、checkout path を実行間で安定させ `workspace_root_hash` のキャッシュヒット率を高める運用が必要である（ADR-0003 参照） |
 | ロールバック | 以前のバイナリへバージョンダウンするだけで復旧可能 |
 
 ### 7.4 性能予算

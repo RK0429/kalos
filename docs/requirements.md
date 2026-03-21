@@ -53,7 +53,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | 制約 | 内容 |
 |---|---|
 | 実装言語 | Rust |
-| CPG抽出エンジン | CodeQLを前提とする。4言語対応かつ長期安定の代替（Joern, Tree-sitter等）があれば設計フェーズで比較検討する |
+| CPG抽出エンジン | CodeQLを前提とする。CFG/DFG を含む CPG 抽出能力を持つ代替（Joern 等）があれば設計フェーズで比較検討する。Tree-sitter は構文解析基盤であり CPG 抽出エンジンのパーサー層として補完的に利用し得るが、単体では CFG/DFG を生成しないため CPG 抽出エンジンの代替候補ではない |
 | 対応OS | Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64) |
 | CI/CD基盤 | GitHub Actionsを主要ユースケースとして想定（特定基盤に限定しない） |
 
@@ -85,7 +85,12 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | CLI Shell | CLI 引数の解釈・バリデーションを担うコンポーネント。`--level`, `--diff`, `--format` 等のオプションを解釈し、Application Pipeline へ渡す。詳細は architecture.md §4.1 参照 |
 | Application Pipeline | パイプラインオーケストレーションを担うコンポーネント。diff/full モード選択、`DiagnosticReport` の組み立て（summary materialization を含む）、exit code 判定を行う。詳細は architecture.md §4.1 参照 |
 | Plugin Host | WASM プラグインのロード・検証・実行を担うコンポーネント。`plugin_manifest` に基づくプラグインの決定論的ロードとサンドボックス実行を管理する。詳細は architecture.md §4.1 参照 |
-| DiagnosticReport | 解析結果の最終出力を表す値オブジェクト。診断一覧、メトリクス、スコア、サマリー、メタデータを保持し、human/JSON/SARIF 形式への写像元となる。詳細は architecture.md §4.1 参照 |
+| DiagnosticReport | 診断コンテキストの集約ルート。診断一覧・一覧の完全性（`diagnostics_scope`）・重大度別件数サマリー（`summary`）・サマリー母集団（`summary_scope`）を束ねる。Exit code はフィールドとして保持せず `determine_exit_code(strict)` で都度導出する。レポートコンテキストでは `AnalysisMetrics`・`ReportMetadata` と組み合わせて human/JSON/SARIF 形式への写像元となる。詳細は domain_model.md §3.3、architecture.md §4.1 参照 |
+| SourceAnalysis | CPG 抽出コンテキストの集約ルート。統一 CPG・ソースファイルメタデータ・抑制コメント・解析警告を束ねる。詳細は domain_model.md §3.1 参照 |
+| ScopeId | メトリクス算出対象を一意に識別する値。階層（Function / Module / Project）・修飾名・ファイルパスで構成する。詳細は domain_model.md §3.2 参照 |
+| MetricDefinition | メトリクスの計算方法を定義するエンティティ。組み込みとプラグインが同一インターフェースを実装する。詳細は domain_model.md §3.2 参照 |
+| MetricValue | 算出された生値（`raw_value`）と 0〜1 の正規化リスク値（`normalized_risk`）のペア。詳細は domain_model.md §3.2 参照 |
+| BaselineFingerprint | 差分解析ベースラインの互換性を判定するための構成要素ハッシュの組。`workspace_root_hash`、`base_snapshot_hash`、`config_hash` 等を含む。詳細は domain_model.md §3.4 参照 |
 
 ## 3. 機能要件
 
@@ -174,13 +179,16 @@ AIエージェントによるコーディングの発達に伴い、生成され
 #### REQ-FUNC-007: 外部依存の型情報・シグネチャ解決
 
 - **説明**: 外部ライブラリの型情報・関数シグネチャを解決し、CPGのモジュール間エッジの精度を確保する
-- **入力**: プロジェクトの依存関係定義（`requirements.txt`, `package.json`, `Cargo.toml`, `go.mod` 等）、対応する lockfile、およびローカルに利用可能な型スタブ/メタデータ cache
+- **入力**: プロジェクトの依存関係定義（v1 対象: `Cargo.toml`, `package.json`, `go.mod`, `requirements.txt` / `pyproject.toml`）、対応する lockfile、およびローカルに利用可能な型スタブ/メタデータ cache
 - **処理**:
   - 各言語の dependency symbol resolver adapter が、依存関係定義・lockfile・ローカルに利用可能な型スタブ/メタデータ cache を利用して外部依存の公開API（関数シグネチャ、型定義）を取得する
   - 解析実行中の追加ネットワーク通信は行わず、取得した情報をCPGの `ExternalSymbol` ノードとして統合する
 - **例外**: 型情報が取得できない依存については、解決失敗として警告を出力する。メトリクス算出時には解決済みの依存のみで精度の範囲内の評価を行う
 - **受け入れ基準**:
   - Given `Cargo.toml` に記載された外部クレート, When CPG生成を実行, Then 当該クレートの公開関数シグネチャがCPGの外部ノードとして含まれる
+  - Given `package.json` + lockfile に記載された npm パッケージ, When CPG生成を実行, Then 当該パッケージの公開型定義がCPGの外部ノードとして含まれる
+  - Given `go.mod` に記載された外部モジュール, When CPG生成を実行, Then 当該モジュールの exported シンボルがCPGの外部ノードとして含まれる
+  - Given `requirements.txt` / `pyproject.toml` に記載された Python パッケージ, When CPG生成を実行, Then 型スタブが利用可能な場合は公開シグネチャがCPGの外部ノードとして含まれる
   - Given 型情報が取得できない依存, When CPG生成を実行, Then 解決失敗の警告を出力する
   - Given ネットワーク未接続かつ依存定義・lockfile・必要なローカル metadata が存在, When CPG生成を実行, Then 追加の外部通信なしで外部シンボル解決が試行される
 - **優先度**: Should
@@ -305,13 +313,13 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: CPG から v1 で固定したソフトウェア設計上の問題パターンを検出する
 - **入力**: 統一CPG と既算出メトリクス
-- **処理**: v1 では以下のパターンルールを適用する
+- **処理**: 各パターンルールは `evaluation_scope`（Function / Module / Project）を持ち、呼び出し粒度を決定する。scope-level ルール（Function / Module）はスコープ候補ごとにサブグラフを受け取って評価し、project-level ルールは CPG 全体のビューを受け取って 1 回だけ評価する。v1 では以下のパターンルールを適用する
 
-  | RuleId | パターン | 対象 | 検出条件 | デフォルト重大度 |
-  |---|---|---|---|---|
-  | `KAL-PAT001` | God Unit | `AnalysisLevel.Module` の owner scope（Python/TypeScript は class、Rust は named module または file root module、Go は package） | 対象 owner scope が `public_member_count >= 20` かつ `fan_out >= 8` かつ配下関数の `M-F002` 平均 `>= 0.50` | `warning` |
-  | `KAL-PAT002` | Feature Envy | 関数 | 外部オブジェクト/モジュールへの参照数が 5 以上かつ `foreign_accesses / (foreign_accesses + local_accesses) >= 0.70` | `warning` |
-  | `KAL-PAT003` | Circular Dependency | モジュール依存グラフ | SCC のサイズが 2 以上 | `error` |
+  | RuleId | パターン | evaluation_scope | 対象 | 検出条件 | デフォルト重大度 |
+  |---|---|---|---|---|---|
+  | `KAL-PAT001` | God Unit | Module | `AnalysisLevel.Module` の owner scope（Python/TypeScript は class、Rust は named module または file root module、Go は package） | 対象 owner scope が `public_member_count >= 20` かつ `fan_out >= 8` かつ配下関数の `M-F002` 平均 `>= 0.50` | `warning` |
+  | `KAL-PAT002` | Feature Envy | Function | 関数 | 外部オブジェクト/モジュールへの参照数が 5 以上かつ `foreign_accesses / (foreign_accesses + local_accesses) >= 0.70` | `warning` |
+  | `KAL-PAT003` | Circular Dependency | Project | モジュール依存グラフ全体 | SCC のサイズが 2 以上（1 回の評価で複数の SCC を検出し、SCC ごとに診断を生成する） | `error` |
 
 - **言語別の計数規則**:
   - `KAL-PAT001` は `--level all` または `--level module` のときのみ評価し、`PatternEvidence.evidence_scopes` には対象 owner scope を `ScopeId(level = Module)` として格納する
@@ -445,7 +453,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
   - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に REQ-FUNC-011 に従うメトリクス集約済みの 0〜100 の整数であり、`summary` や診断件数から逆算しない。`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
-  - `diagnostics_scope` は `whole_project | affected_only`、`summary_scope` は `whole_project | listed_diagnostics` とする
+  - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は full mode で「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
   - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` はすべて整数となる
@@ -496,10 +504,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-023: 解析階層の選択
 
-- **説明**: `--level` オプションで解析対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline が指定階層のメトリクス算出・診断生成のみを実行する。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
+- **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では階層横断の依存解決や diff モード時のベースライン整合性に必要な他階層結果を追加で算出してよい。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`
-  - `--level function|module|project`: 指定階層のメトリクス・診断のみを算出・報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）は内部的に算出し、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
+- `--level function|module|project`: 指定階層のメトリクス・診断を報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）や、diff モードでベースライン整合性に必要な他階層結果は内部的に算出してよいが、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される

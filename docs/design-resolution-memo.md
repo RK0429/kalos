@@ -44,19 +44,28 @@ requirements.md / architecture.md / domain_model.md の先頭メタ情報が `0.
 
 ### 判断
 
-`enabled = false` は **ルールの全効果を抑制する**。ユーザーが特定ルールを無効化した場合、そのルールがスコアにも exit code にも影響しないことを期待するため。
+`enabled = false` は **ルールのユーザー向け効果（診断生成・スコアリング参加・exit code 判定）を抑制する**。ユーザーが特定ルールを無効化した場合、そのルールが報告にもスコアにも exit code にも影響しないことを期待するため。ただし、内部計算とメトリクス観測は明示的に維持する（下表参照）。
 
 #### メトリクスルール（例: `KAL-F001`）の場合
 
+**抑制される効果（ユーザー向け）**:
+
 | 観点 | `enabled = true`（デフォルト） | `enabled = false` |
 |---|---|---|
-| メトリクス計算 | 実行する | **実行する**（他ルールの内部依存のため。例: `KAL-PAT001` が `M-F002` を参照） |
-| `metrics` 出力 | 含む | **含む**（計算結果の観測は維持） |
 | 診断生成 | 閾値違反で生成 | **生成しない** |
 | `scope_risk` 集約への参加 | `ScoredAndDiagnosable` として参加 | **除外**（スコアリング時に当該メトリクスを `scope_risk` 算出から除外） |
 | `scores` への影響 | 間接的に反映 | **なし** |
 | `summary` 件数 | 診断があれば計上 | **なし**（診断なし） |
 | `exit code` 判定 | 診断があれば影響 | **なし**（診断なし） |
+
+**維持される内部動作（観測用）**:
+
+| 観点 | `enabled = true`（デフォルト） | `enabled = false` |
+|---|---|---|
+| メトリクス計算 | 実行する | **実行する**（他ルールの内部依存のため。例: `KAL-PAT001` が `M-F002` を参照） |
+| `metrics` 出力 | 含む | **含む**（計算結果の観測は維持。disabled ルールの計算値もメトリクス一覧に含まれる） |
+
+**設計根拠**: メトリクス計算を維持する理由は 2 つある。(1) 他の enabled なルールが当該メトリクスを内部依存として参照する可能性がある。(2) `metrics` 出力にメトリクス値を含めることで、ユーザーがルールを無効化しても計算値を観測・比較できる。これらは「ルールの効果」ではなく「メトリクス基盤の観測契約」であり、`enabled` フラグの管轄外である。
 
 #### パターンルール（例: `KAL-PAT003`）の場合
 
@@ -151,9 +160,21 @@ ADR-0003 で `analysis_targets` が部分集合の場合のフォールバック
 
 ### 判断
 
-フォールバックは **要求された `analysis_targets` のみを non-diff で全解析する**。全ワークスペースへの拡張は行わない。
+subset `analysis_targets` の場合は **要求された `analysis_targets` のみを non-diff で全解析する**。全ワークスペースへの拡張は行わない。
 
-#### 確定セマンティクス
+これは `InvalidationPlan.fallback_to_full`（§13 参照）とは別の概念である。両者の関係を以下に整理する。
+
+#### `analysis_targets` 制約と `fallback_to_full` の関係
+
+| 概念 | 決定するもの | 適用タイミング |
+|---|---|---|
+| **subset `analysis_targets` 制約** | 解析対象のファイル集合（全ワークスペースか、指定パスのみか） | パイプライン開始時に判定 |
+| **`InvalidationPlan.fallback_to_full`** | diff 最適化の適用有無（baseline を使ったスコープ再利用か、全スコープ再計算か） | diff 解析フロー内で Impact Analysis Service が判定 |
+
+- subset `analysis_targets` の場合、diff 最適化は常に無効（ベースラインを生成も消費もしない）。この判定は `fallback_to_full` フラグより**上流**で行われる
+- `fallback_to_full = true` は全ワークスペース解析の diff フロー内で発生するフォールバックであり、解析対象の**ファイル集合自体は変更しない**（全ワークスペースのまま）
+
+#### subset `analysis_targets` 確定セマンティクス
 
 1. `analysis_targets` が全ワークスペースの部分集合であると判定された場合:
    - `--diff` 最適化を無効化する
@@ -165,7 +186,9 @@ ADR-0003 で `analysis_targets` が部分集合の場合のフォールバック
 
 #### 文言の統一
 
-全文書で「non-diff 全解析」を「non-diff full analysis of the requested targets」の意味で使い、「全ワークスペース解析」（full-workspace analysis）と明確に区別する。
+- 「non-diff 全解析」は「要求された `analysis_targets` 内の全スコープを non-diff で解析する」の意味で使う
+- 「全ワークスペース解析」（full-workspace analysis）は「`WorkspaceRoot` 配下の全対象ファイルを解析する」の意味で使い、上記と明確に区別する
+- `fallback_to_full` は「diff 最適化を無効化して全スコープを再計算する」の意味に限定し、解析対象ファイル集合の拡張を含意しない
 
 ### 更新対象
 
@@ -203,7 +226,7 @@ ADR-0003 で `analysis_targets` が部分集合の場合のフォールバック
 
 ---
 
-## 7. `summary_scope` の表記統一（should）
+## 7. `summary_scope` / `diagnostics_scope` の表記統一（should）
 
 ### 指摘
 
@@ -211,14 +234,27 @@ ADR-0003 で `analysis_targets` が部分集合の場合のフォールバック
 
 ### 判断
 
-**外部出力値（JSON フィールド値）は snake_case を正とする**: `whole_project`, `listed_diagnostics`, `affected_only`。文書中で enum の内部表現に言及する場合は PascalCase を使ってよいが、初出時に `WholeProject（JSON 値: `"whole_project"`）` のように外部値との対応を示す。
+**外部出力値（JSON フィールド値）は snake_case を正とする**。文書中で enum の内部表現に言及する場合は PascalCase を使ってよいが、初出時に JSON 値との対応を示す。
+
+`SummaryScope` と `DiagnosticsScope` は別の enum であり、取りうる値が異なる。混同を防ぐため、値の所属を明示して記述する。
+
+#### 各 enum の値一覧
+
+| enum | 内部表現（PascalCase） | JSON 値（snake_case） | 意味 |
+|---|---|---|---|
+| `SummaryScope` | `WholeProject` | `"whole_project"` | summary の母集団がプロジェクト全体（`--level all` 時、または diff mode の merged post-change） |
+| `SummaryScope` | `ListedDiagnostics` | `"listed_diagnostics"` | summary の母集団が `diagnostics` リストに含まれる指定階層の診断のみ（`--level` で階層限定時） |
+| `DiagnosticsScope` | `WholeProject` | `"whole_project"` | `diagnostics` 一覧が選択された `--level` に関して完全（full mode） |
+| `DiagnosticsScope` | `AffectedOnly` | `"affected_only"` | `diagnostics` 一覧が影響範囲のみ（diff mode） |
+
+**注意**: `"whole_project"` は両 enum に存在するが意味が異なる。`"listed_diagnostics"` は `SummaryScope` 専用、`"affected_only"` は `DiagnosticsScope` 専用である。
 
 ### 更新対象
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` L492–493 | `WholeProject` / `ListedDiagnostics` を snake_case に統一するか、初出で JSON 値との対応を明記 |
-| `domain_model.md` の `DiagnosticsScope` enum 定義 | 同上 |
+| `requirements.md` L492–493 | `WholeProject` / `ListedDiagnostics` を snake_case に統一するか、初出で JSON 値との対応を明記。`SummaryScope` と `DiagnosticsScope` の値を混同しない記述に修正 |
+| `domain_model.md` の `DiagnosticsScope` / `SummaryScope` enum 定義 | 同上。各 enum の値一覧を上記の表に合わせて整理 |
 | `architecture.md` の差分解析契約 | 同上 |
 
 ---
@@ -341,7 +377,7 @@ architecture.md §4.1 の責務表に `Application Pipeline` がなく、実質�
 | `recompute_scopes ∩ reuse_scopes = ∅` | 同一スコープが再計算と再利用の両方に属することはない |
 | `recompute_scopes ∪ reuse_scopes = 全既知スコープ`（`fallback_to_full = false` 時） | 全スコープがいずれかに分類される |
 | `AffectedScopeSet.scopes ⊆ recompute_scopes` | 影響を受けたスコープは必ず再計算対象 |
-| `fallback_to_full = true` 時 | `recompute_scopes` と `reuse_scopes` は無視され、全スコープを対象に non-diff 解析が実行される |
+| `fallback_to_full = true` 時 | `recompute_scopes` と `reuse_scopes` は無視され、現在の `analysis_targets` 内の全スコープを対象に non-diff 再計算が実行される（`analysis_targets` の拡張は行わない。§5 参照） |
 
 ### 更新対象
 
@@ -460,9 +496,16 @@ classDiagram
 
 ### 判断
 
-ADR-0001 の帰結に保証範囲の明確化を追加する。
+ADR-0001 の帰結に保証範囲の明確化を追加する。CodeQL bundle と WASM plugin はライフサイクルが異なるため、責務を分けて記述する。
 
-> 「単一バイナリ」は kalos 実行ファイル自体を指す。CodeQL bundle（ADR-0002; Managed Tool Cache Adapter が初回 bootstrap で取得）および WASM プラグイン（ADR-0004; ユーザーがワークスペースに配置）は kalos バイナリに同梱されない外部アーティファクトである。kalos はこれらの取得・検証・キャッシュを責務として担うが、配布物としてはバイナリ単体を単位とする。
+> 「単一バイナリ」は kalos 実行ファイル自体を指す。以下の外部アーティファクトは kalos バイナリに同梱されないが、ライフサイクルの管理責務が異なる。
+>
+> | アーティファクト | 管理モデル | 取得 | 配置 | 検証 | キャッシュ |
+> |---|---|---|---|---|---|
+> | **CodeQL bundle**（ADR-0002） | Managed artifact | kalos（Managed Tool Cache Adapter が初回 bootstrap で自動取得） | kalos（`$KALOS_CACHE_DIR` 配下に配置） | kalos（バージョン整合性を検証） | kalos（キャッシュ管理を担う） |
+> | **WASM plugin**（ADR-0004） | User-supplied artifact | ユーザー（ユーザーが入手） | ユーザー（ワークスペース内に配置し `.kalos.toml` の `[[plugins]] { path, sha256 }` で登録） | kalos（`sha256` チェックサム照合・SPI バージョン検証） | なし（ワークスペース内の配置をそのまま使用） |
+>
+> 配布物としてはバイナリ単体を単位とする。
 
 ### 更新対象
 
@@ -522,9 +565,9 @@ ADR-0005 のネガティブ帰結に運用上の考慮事項を追加する。
 
 | # | 文書 | 必要な更新の要約 |
 |---|---|---|
-| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false セマンティクス）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope 表記統一、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化 |
-| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope 表記統一、fallback 文言修正 |
-| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope 表記統一 |
-| 4 | `adr/0001-adopt-modular-monolith.md` | 単一バイナリ保証範囲の注記追加 |
+| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別） |
+| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化） |
+| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記（fallback_to_full の定義を §5 と整合）、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope/diagnostics_scope 表記統一・値分離 |
+| 4 | `adr/0001-adopt-modular-monolith.md` | 単一バイナリ保証範囲の注記追加（CodeQL managed bundle と WASM user-supplied plugin のライフサイクル責務を区別） |
 | 5 | `adr/0003-deterministic-core-and-baseline-cache.md` | subset fallback 文言修正、キャッシュ運用帰結追加 |
 | 6 | `adr/0005-optional-llm-enrichment.md` | LLM 運用帰結追加 |

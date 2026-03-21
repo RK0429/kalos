@@ -55,16 +55,17 @@ kalos は同時に以下を満たす必要がある。
   - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
   - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
-- `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ
+- `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ。**全ワークスペース判定と正規化**: 位置引数省略時（デフォルト `["."]`）は全ワークスペースとして扱い、`analysis_targets_hash` は正規形 `["."]` から算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化したうえでソート済み重複排除リストからハッシュを算出する。明示的指定が `WorkspaceRoot` 配下の全対象ファイルを網羅するかどうかは判定しない（明示指定は常に部分集合として扱う）
 - `rule_catalog_version`: 組み込みルールカタログの版
 - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
 - `kalos_version`: kalos バイナリ自体の版
-- ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけで、保存範囲は変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
+- ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。保存範囲も変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
+- ベースラインの **write-back 契約**: 書き込み条件は全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）。書き込みタイミングは `DiagnosticReport` の assemble 完了後、exit code 返却前。一時ファイルへ書き込み後にリネームし、部分書き込みを防ぐ。kalos 自体の実行エラー（exit code 2）では書き込まない。詳細は [architecture.md §5.2](../architecture.md) の write-back 契約を参照
 - ベースラインの **永続化対象は全ワークスペース解析に限定** する。`analysis_targets` が全ワークスペースの部分集合である実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
 - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。失敗またはスキップされたプラグインの `MetricValue` は baseline 断片から除外し、stale な report-only plugin metric が部分的に残ることを防ぐ
-- `InvalidationPlan.fallback_to_full` は次の場合に `true` となる: `analysis_targets` が全ワークスペースの部分集合で diff 最適化を適用できない、ベースライン不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない
+- `analysis_targets` が部分集合の場合は diff 最適化が**上流で**無効化され、`InvalidationPlan` は生成されない（前項参照）。`InvalidationPlan.fallback_to_full` は**全ワークスペース解析の diff フロー内**で次の場合に `true` となる: ベースライン不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない。`fallback_to_full = true` は解析対象のファイル集合自体を変更せず、diff 最適化のみを無効化して全スコープを再計算する
 - コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
 
 ## 帰結
@@ -86,7 +87,7 @@ kalos は同時に以下を満たす必要がある。
 - ベースラインキャッシュはリポジトリ規模に比例して増大する。v1 では自動 eviction を提供しない
 - **CI**: キャッシュは best-effort。CI の cache restore/save メカニズム（GitHub Actions `actions/cache` 等）で管理し、checkout path を安定化させて `workspace_root_hash` のヒット率を高める運用が必要
 - **ローカル**: ユーザーがキャッシュディレクトリを手動削除できる。将来の改善候補として LRU eviction またはサイズベースの pruning を検討する
-- **保存場所**: `$KALOS_CACHE_DIR`（未設定時は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`）
+- **保存場所**: `$KALOS_CACHE_DIR`（未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`）
 
 ### リスク
 

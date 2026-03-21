@@ -8,9 +8,11 @@
 
 要件では、ユーザーが独自メトリクスを追加できる拡張機構が求められている。v1 ではユーザー入力面は `.kalos.toml` の `[[plugins]] { path, sha256 }` とし、`path` は解決済み `WorkspaceRoot` 基準で解釈する。そこから解決した内部表現 `plugin_manifest` を Plugin Host の正本とする。外部の配布パッケージ形式は将来拡張へ残す。
 
-- `REQ-FUNC-012`
-- `REQ-NF-006`
-- `REQ-NF-003`
+- `REQ-FUNC-012` — メトリクス定義のプラグイン拡張
+- `REQ-NF-001` — 中規模プロジェクトの全階層解析時間（60s 以内）
+- `REQ-NF-002` — 差分解析の実行時間（10s 以内）
+- `REQ-NF-003` — 決定論的評価
+- `REQ-NF-006` — メトリクス定義の追加
 
 さらに、対応 OS が Linux / macOS / Windows にまたがるため、配布・互換性・安全性を同時に考える必要がある。
 
@@ -51,13 +53,32 @@
 ## 根拠
 
 - kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
+- **v1 モジュール ABI / ホスト契約**: v1 で受け入れるプラグインモジュールは以下の条件を満たすこと
+  - **target**: `wasm32-unknown-unknown`（WASI 不使用）。ファイルシステム・ネットワーク・クロック等の WASI API は一切インポートを許可しない。これにより `REQ-NF-003` の決定論性を保証し、サンドボックス面を最小化する
+  - **host exports（ホスト→プラグイン）**: ホストは以下の関数をプラグインにエクスポートする
+    - `cpg_node_count(scope_ptr, scope_len) -> u32` — 対象スコープのノード数を返す
+    - `cpg_edge_count(scope_ptr, scope_len) -> u32` — 対象スコープのエッジ数を返す
+    - `cpg_read_node(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — ノードデータを線形メモリへ書き込む
+    - `cpg_read_edge(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — エッジデータを線形メモリへ書き込む
+    - `config_read(key_ptr, key_len, buf_ptr, buf_len) -> i32` — `MetricConfig` のキーに対応する値を線形メモリへ書き込む
+  - **plugin exports（プラグイン→ホスト）**: プラグインは以下の関数をエクスポートする
+    - `kalos_plugin_init() -> i32` — 初期化。`MetricDefinition`（`metric_id`, `level`, `name`, `description`）を登録する
+    - `kalos_plugin_evaluate(scope_ptr, scope_len) -> i64` — 指定スコープに対しメトリクスを評価し `MetricValue` を返す
+    - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
+    - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
+  - **データ交換形式**: ホスト⇔プラグイン間の構造化データは Little-Endian の固定長バイナリレイアウトで受け渡す。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる
+  - **WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
 - ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は各 plugin metric を `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
 - Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、`metric_id` のグローバル一意性を検証する。組み込みメトリクスまたは先行ロード済みプラグインと `metric_id` が衝突したモジュールは deterministic なロード失敗として扱い、warning を出してスキップする
-- プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、`metric_id` 衝突、タイムアウト、メモリ超過は warning + skip とし、当該プラグインのみを失敗させる。aggregate CPU time budget 超過時は残りプラグインを warning 付きでスキップする。いずれも `stderr` / 構造化ログへ運用警告を出し、v1 の診断・スコア・Exit code 契約は変更しない
+- プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、`metric_id` 衝突、per-invocation fuel budget 超過、メモリ超過は warning + skip とし、当該プラグインのみを失敗させる。aggregate fuel budget 超過時は残りプラグインを warning 付きでスキップする。いずれも `stderr` / 構造化ログへ運用警告を出し、v1 の診断・スコア・Exit code 契約は変更しない
 - `REQ-NF-003` を守るため、評価 SPI は pure function (`CpgSubgraph + MetricConfig -> MetricValue`) とし、乱数・時刻・外部 I/O を禁止する
-- 実行ごとに `cpu_time_budget = 50ms`、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate_cpu_time_budget = 3s`（全解析）/ `0.5s`（diff mode）を既定上限として適用する
-- per-invocation `cpu_time_budget` と `aggregate_cpu_time_budget` はいずれも WASM fuel metering で制御する。壁時間に依存しないことで、同一入力に対するプラグインの成否判定が `REQ-NF-003` の決定論性を維持する
+- 実行リソース制限の正本は WASM fuel 単位とする。fuel は WASM 命令ごとに決定論的に消費される抽象コスト単位であり、壁時間やホスト CPU 速度に依存しない。これにより同一入力に対するプラグインの成否判定が `REQ-NF-003` の決定論性を維持する
+  - **per-invocation fuel budget**: `500_000 fuel`（暫定値）。1 回の `kalos_plugin_evaluate` 呼び出しに対する上限
+  - **aggregate fuel budget**: `30_000_000 fuel`（全解析、暫定値）/ `5_000_000 fuel`（diff mode、暫定値）。Metrics stage 全体でのプラグイン fuel 消費合計の上限
+  - **linear_memory_limit**: `64 MiB`（暫定値）。プラグインの線形メモリ上限
+  - **参考値**: `bench-linux-x64` プロファイル（REQ-NF-001 測定条件）上で、上記 fuel budget はおおむね per-invocation ~50ms / aggregate ~3s（全解析）/ ~0.5s（diff mode）の壁時間に相当する。ただしこの対応は参考であり、**fuel 値が規範的（normative）な上限**である。壁時間は環境により変動するため契約の一部ではない
+  - 上記の暫定値は PoC ベンチマークで検証し、v1 リリースまでに確定する。確定後はこの ADR を改訂する。暫定値の根拠は `REQ-NF-001`（全解析 60s）/ `REQ-NF-002`（差分解析 10s）の性能バジェットにおいて、プラグイン評価を全体の 5% 以内に収める目安から導出した
 - diff mode では、現在の実行で失敗またはスキップされたプラグインの baseline cache 済み `MetricValue` を最終出力から除外する。これにより stale な report-only plugin metric の部分的再利用を防ぐ
 - **v1 SPI 互換性契約**: Plugin Host は SPI version `kalos-metric-spi-v1` を定義する。WASM モジュールは custom section `kalos_spi_version` に SPI version 文字列（例: `kalos-metric-spi-v1`）を宣言する。ホストはロード時にこの値を検証し、以下の規則で互換性を判定する
   - SPI version が完全一致する場合のみロードを許可する
@@ -74,7 +95,7 @@
 - コアの変更面を抑えたままメトリクス追加を許可できる
 - 決定論的な評価経路に外部プラグインを載せても、純粋関数契約で再現性を維持できる
 - kalos 本体の単一バイナリ配布（ADR-0001）を崩さずにプラグイン拡張を提供できる
-- 時間・メモリ上限を契約化することで `REQ-NF-001/002` との整合を説明しやすい
+- fuel・メモリ上限を契約化することで `REQ-NF-001/002` との整合を説明しやすい
 - v1 は report-only metric に限定することで、RuleId / score / exit code 契約を増やさずに拡張点を提供できる
 
 ### ネガティブ
@@ -82,9 +103,9 @@
 - SPI version `kalos-metric-spi-v1` の保守が必要であり、破壊的変更時は新 SPI version と移行計画を ADR で決定する
 - 実行性能の測定が不可欠
 - プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが `WorkspaceRoot` 基準の `plugin_manifest` へ正規化する）
-- タイムアウト、メモリ上限、aggregate CPU time budget 超過時のプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る。v1 の診断・スコア・Exit code は既存契約のまま維持する。diff mode では baseline 断片に残る当該プラグインの `MetricValue` も最終出力から除外する
+- fuel budget 超過、メモリ上限超過、aggregate fuel budget 超過時のプラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る。v1 の診断・スコア・Exit code は既存契約のまま維持する。diff mode では baseline 断片に残る当該プラグインの `MetricValue` も最終出力から除外する
 
 ### リスク
 
 - WASM オーバーヘッドが大きい場合、初期リリースでは組み込みメトリクス中心で運用し、外部プラグインを experimental 扱いにする可能性がある
-- 既定上限（50ms / 64MiB / 3s / 0.5s）が厳しすぎる、または緩すぎる可能性があるため、PoC で計測し必要なら v1.1 で再調整する
+- fuel budget の暫定値（500K / 30M / 5M fuel, 64MiB）は `REQ-NF-001/002` の性能バジェットの 5% 目安から導出したが、実ワークロードで厳しすぎる、または緩すぎる可能性がある。PoC ベンチマークで検証し v1 リリースまでに確定する

@@ -50,7 +50,11 @@
 - `REQ-NF-003` を守るため、スコア・重大度・Exit code はテンプレート側だけで確定させる
 - LLM への入力は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` と `cpg_excerpt` は request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
 - LLM 出力は `DiagnosticId` ごとの `LlmSuggestionBundle` として report 層で併記し、`DiagnosticReport` 自体は変更しない
-- LLM は optional sidecar budget（`connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`）で実行し、タイムアウト・非応答・`SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合は `LlmEnrichmentRequest` 自体を生成せず、`llm_suggestion` を省略してテンプレート提案のみ返す
+- **Preflight（request 生成抑止）**: 以下の条件に該当する診断には `LlmEnrichmentRequest` 自体を生成しない。テンプレート提案のみ返す
+  - `SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合
+  - multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合
+- **Sidecar budget（per `LlmEnrichmentRequest`）**: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。タイムアウトは個々の `LlmEnrichmentRequest`（= 診断単位の LLM API 呼び出し）ごとに適用する。複数診断がある場合の総所要時間は LLM Adapter の並行度に依存する（実装詳細）
+- **Post-dispatch fallback（送信後の障害処理）**: `LlmEnrichmentRequest` の送信後にタイムアウト・非応答・エラーが発生した場合、当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す。コア診断・スコア・Exit code は不変
 
 ## 帰結
 
@@ -66,7 +70,7 @@
 - テンプレート提案と sidecar 提案の整形ルールが必要
 - `--llm` 時の待ち時間が追加される
 - **API キー管理**: 環境変数 `KALOS_LLM_API_KEY` で提供する。kalos は永続化しない
-- **Outbound 通信**: `--llm` は設定済み LLM エンドポイントへのネットワークアクセスを暗示する。エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）
+- **Outbound 通信**: `--llm` は LLM エンドポイントへのネットワークアクセスを暗示する（REQ-NF-009）。エンドポイント URL の設定方法（環境変数・設定ファイル・プロバイダ固有のデフォルト等）は LLM Adapter の実装仕様として別途定義する。接続先エンドポイント URL は info レベルでログ出力する（ペイロードは出力しない）
 - **データ機密性**: `source_excerpt` / `cpg_excerpt` はプロプライエタリコードを含む可能性がある。`--llm` の指定をもってユーザーの明示的オプトインとする
 - **監査境界**: リクエスト/レスポンスのメタデータ（タイムスタンプ、トークン数、ステータスコード）は debug レベルで構造化ログに出力する。コンテンツ自体はログに含めない
 

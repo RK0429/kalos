@@ -9,12 +9,18 @@
 要件では CPG 抽出エンジンとして CodeQL を前提としつつ、代替エンジンの比較検討余地も残している。さらに、新言語追加時は CPG 抽出境界内の parser / normalizer / language profile 追加で対応できること、およびクリーン環境でも手動インストールなしで初回実行できることが要求される。
 
 - `REQ-FUNC-001`〜`REQ-FUNC-007`
-- `REQ-FUNC-031`
+- `REQ-FUNC-031`, `REQ-FUNC-032`
 - `REQ-NF-005`
-- `REQ-NF-007`
+- `REQ-NF-007`, `REQ-NF-009`
 - 要件書 5章「PoC / 将来拡張で検証する項目」
 
 ドメインモデル上も、`ExtractorPort` の外部公開契約は `SourceAnalysis` として定義され、`UnifiedCpg` はその内部公開言語として位置付けられている。
+
+**本 ADR のスコープ**: 中核の判断は「`ExtractorPort` を定義し、初期アダプタとして CodeQL を採用する」ことである。以下の付随事項は `ExtractorPort` 採用に不可分なため、本 ADR で併せて決定する:
+
+- **Managed Tool Cache Adapter**: CodeQL bundle の bootstrap/検証/キャッシュは `ExtractorPort` の実装詳細であり、アダプタ交換時に一体で差し替わるため分離しない
+- **CLI 主導 bootstrap**: `REQ-FUNC-031` の単一バイナリ要件により bootstrap の正本は CLI 側に置く必要がある。これはポート設計から自然に導かれる
+- **GitHub Action の wrapper 限定**: `REQ-FUNC-032` で Action は prewarm/cache wrapper に留めると明記されており、bootstrap 経路の一貫性として本 ADR で拘束する
 
 ## 検討した選択肢
 
@@ -88,3 +94,9 @@ Python/TS/Rust/Go で最適エンジンを変える。
 ### リスク
 
 - CodeQL の実行時間が `REQ-NF-001` を満たさない可能性があるため、PoC に失敗した場合の代替案比較を継続する
+  - **PoC 失敗の判定基準**: `architecture.md` QA-02 で定義する `bench-linux-x64`（4 vCPU / 16GB / SSD、managed CodeQL bundle warm、baseline cache empty）環境において、1 万 LOC 規模プロジェクトの全解析が 60 秒以内に完了しないこと（`REQ-NF-001`）
+  - **再判断のトリガー**: 上記ベンチマーク PoC が閾値未達の場合、本 ADR を `再検討中` に戻し、要件書 5 章 #1「CodeQL 代替アダプタ比較を継続するか」および #4「NF-001 の 60 秒目標と CodeQL 抽出時間の両立可能性」に基づいて代替エンジンの比較評価を再開する
+
+### 新言語追加時のスコープに関する注記
+
+本 ADR が保証する「新言語追加時の変更面の限定」は、CPG 抽出境界内の parser / normalizer / language profile 追加を指す（`REQ-NF-005`, `architecture.md` QA-04）。外部シンボル解決のための language-specific resolver adapter は `architecture.md` で `Dependency Symbol Resolver Port` として別ポート化されており、要件書 5 章 #3 で個別の PoC 項目として扱われる。resolver adapter の設計判断は `REQ-FUNC-007` のスコープであり、本 ADR の判断範囲外である。
