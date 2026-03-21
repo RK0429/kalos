@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.1 |
+| バージョン | 0.4.2 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -199,7 +199,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の組で保持する。`normalized_risk` は `0.0〜1.0` の閉区間に正規化されたリスク値であり、`0.0` が最良、`1.0` が最悪を表す。`H` は底 2 の Shannon entropy、`clamp(x, 0, 1)` は 0 未満を 0、1 超を 1 に丸める操作とする。`normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し当該メトリクスの `MetricValue` を生成しない。有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する。`raw_value`, `normalized_risk`, `scope_risk`, `level_risk`, `overall_risk`, `overflow_ratio` は、それぞれ算出直後に小数第 6 位で round-half-up し、その丸め済み値をキャッシュ・比較・外部出力に用いる。
 
-> **校正注記**: v1 のデフォルト閾値・重大度境界・パターン検出カットオフは、ソフトウェア品質メトリクスの学術文献と開発実務の専門家判断に基づく暫定値である。実プロジェクトでのフィードバックに基づき v2 以降で校正を予定する。見直し条件: (1) 偽陽性率が 30% を超える、(2) 偽陰性率が 20% を超える、(3) ユーザーフィードバックで特定の閾値に苦情が集中する。
+> **校正注記**: v1 のデフォルト閾値・重大度境界・パターン検出カットオフは、一般的なソフトウェア品質メトリクスの知見を参考にした設計時判断による暫定値であり、特定の実証研究に裏付けられたものではない（設計判断の経緯は design-resolution-memo.md §8 を参照）。実プロジェクトでのフィードバックに基づき v2 以降で校正を予定する。見直し条件: (1) 偽陽性率が 30% を超える、(2) 偽陰性率が 20% を超える、(3) ユーザーフィードバックで特定の閾値に苦情が集中する。これらの見直し閾値自体も同設計判断に基づく暫定値である。
 
 #### REQ-FUNC-008: 関数レベルメトリクスの算出
 
@@ -628,7 +628,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Windows: x86_64
 - **配布契約**: CodeQL 管理対象 bundle の version/checksum を定義する managed bundle manifest は、kalos リリースの一部としてバイナリと一体で versioning される
 - **受け入れ基準**:
-  - Given 各対応プラットフォームのクリーン環境, When バイナリをダウンロードして `kalos check .` を実行, Then kalos CLI 自身が CodeQL 管理対象 bundle の bootstrap / 検証 / キャッシュを行い、手動の追加ランタイムインストールなしで動作する
+  - Given 各対応プラットフォームのクリーン環境, When バイナリをダウンロードして `kalos check`（引数省略）を実行, Then kalos CLI 自身が CodeQL 管理対象 bundle の bootstrap / 検証 / キャッシュを行い、手動の追加ランタイムインストールなしで動作する
   - Given 同一 kalos リリースのバイナリ, When CodeQL bundle を bootstrap する, Then 利用する bundle の version/checksum はそのリリース同梱の managed bundle manifest によって一意に決まる
 - **優先度**: Must
 - **出典**: ユーザー確認済み + 2026-03-19 ユーザー判断
@@ -745,7 +745,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-NF-007: ゼロコンフィグでの初回実行
 
-- **基準**: 設定ファイルなしの状態で `kalos check .` を実行するだけで、デフォルトのルール・閾値で解析結果を得られる
+- **基準**: 設定ファイルなしの状態で `kalos check`（引数省略）を実行するだけで、デフォルトのルール・閾値で解析結果を得られる
 - **優先度**: Must
 - **出典**: エージェント推測→ユーザー確認済み
 
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.2 | 2026-03-22 | レビュー findings 解決: 校正注記の provenance 修正（unsupported 出典主張を除去）、`kalos check .`（明示 `.`）と引数省略の scope semantics を整合、REQ-NF-007・REQ-FUNC-031 の例示を引数省略形に統一 | Claude |
 | 0.4.1 | 2026-03-22 | レビュー指摘解決: `REQ-NF-005` に resolver adapter（`REQ-FUNC-007`）との関係を完了条件注記として追加 | Claude |
 | 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |
 | 0.3.1 | 2026-03-22 | REQ-NF-009 に ADR-0005 の LLM runtime policy（aggregate sidecar budget 120s、preflight failure、URL 秘匿化契約）を伝播 | Claude |

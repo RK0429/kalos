@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.0 |
+| バージョン | 0.4.2 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.0 |
+| 入力 | requirements.md v0.4.2 |
 
 ## 1. サブドメイン分類
 
@@ -681,7 +681,7 @@ classDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initialized: kalos check [<path>...] (default: .)
+    [*] --> Initialized: kalos check（引数省略 = 全ワークスペース）/ kalos check <path>...（部分集合）
     Initialized --> CollectingFiles: start()
     CollectingFiles --> ExtractingCpg: files collected
     ExtractingCpg --> ResolvingDiffImpact: CPG extracted [diff mode]
@@ -860,6 +860,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.2 | 2026-03-22 | レビュー findings 解決: 版メタ v0.4.2 同期（入力参照を requirements.md v0.4.2 に更新）、状態図トリガを引数省略/明示指定の scope semantics に整合 | Claude |
 | 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、入力参照更新、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |
 | 0.3.0 | 2026-03-21 | レビュー指摘解決: 版メタ情報同期、`SourceFile` を VO に再分類、`RuleConfig.enabled = false` スコアリング除外契約追記、`OverallScore` 正規化・再配分不変条件追記、`ScoreWeights` 入力検証のみの役割を明記、merged dependency graph 統合手順・`DependencyIndexManifest` 更新タイミング追記、subset fallback 文言修正、`InvalidationPlan` 集合不変条件追記、`DiagnosticsScope`/`SummaryScope` の JSON 値対応を明記、`Configuration` 名称を `ProjectConfig.resolve()` に統一、§3.6 レポート VO クラス図追加 | Claude |
 | 0.2.12 | 2026-03-20 | `Diagnostic.primary_scope_id` による canonical scope 所有権、`ScopeDiagnosticSnapshot` のキー付け規則、Application Pipeline による summary materialization を追加 | Codex |
