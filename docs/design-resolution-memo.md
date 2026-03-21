@@ -8,6 +8,8 @@
 | 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（全 4 件） |
 | 目的 | 全レビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 
+**注意**: 本メモの設計判断は 2026-03-21 付けで requirements.md / architecture.md / domain_model.md / ADR 群に適用済み。以下の §・行番号参照は適用前の文書構成に基づくため、現在の文書構成とは一致しない場合がある。
+
 ---
 
 ## 1. 版メタ情報の同期ポリシー（must × 3 文書）
@@ -29,9 +31,9 @@ requirements.md / architecture.md / domain_model.md の先頭メタ情報が `0.
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` L7–8 | `0.3.0` / `2026-03-21` に更新 |
-| `architecture.md` L7–10 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0, domain_model.md v0.3.0` に更新 |
-| `domain_model.md` L7–10 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0` に更新 |
+| `requirements.md` 先頭メタ情報 | `0.3.0` / `2026-03-21` に更新 |
+| `architecture.md` 先頭メタ情報 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0, domain_model.md v0.3.0` に更新 |
+| `domain_model.md` 先頭メタ情報 | `0.3.0` / `2026-03-21` に更新。入力欄を `requirements.md v0.3.0` に更新 |
 | 各文書の変更履歴末尾 | `0.3.0 / 2026-03-21` エントリを追加（変更内容は「レビュー指摘解決」で統一） |
 
 ---
@@ -83,8 +85,8 @@ requirements.md / architecture.md / domain_model.md の先頭メタ情報が `0.
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` REQ-FUNC-026（L557–563） | 説明を拡充: メトリクスルールとパターンルールそれぞれの `enabled = false` の影響範囲（diagnostics, scores, metrics 出力, summary, exit code）を明文化する。受け入れ基準を追加: `Given KAL-F001 を enabled = false に設定, When 解析実行, Then KAL-F001 の診断は報告されず、KAL-F001 バインドのメトリクスは scope_risk 集約から除外される` |
-| `requirements.md` REQ-FUNC-011（L246–259） | ステップ 1 に注記を追加: `enabled = false` のルールにバインドされたメトリクスは `scope_risk` 算術平均の母集団から除外する |
+| `requirements.md` REQ-FUNC-026 | 説明を拡充: メトリクスルールとパターンルールそれぞれの `enabled = false` の影響範囲（diagnostics, scores, metrics 出力, summary, exit code）を明文化する。受け入れ基準を追加: `Given KAL-F001 を enabled = false に設定, When 解析実行, Then KAL-F001 の診断は報告されず、KAL-F001 バインドのメトリクスは scope_risk 集約から除外される` |
+| `requirements.md` REQ-FUNC-011 | ステップ 1 に注記を追加: `enabled = false` のルールにバインドされたメトリクスは `scope_risk` 算術平均の母集団から除外する |
 | `domain_model.md` 診断コンテキストの設計意図 | `RuleConfig.enabled = false` 時のスコアリング除外契約を追記 |
 | `architecture.md` Diagnostics/Metrics の責務説明 | `enabled = false` のルールが scores 集約に参加しない旨を責務境界で明記 |
 
@@ -195,9 +197,9 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
 | 文書 | 更新内容 |
 |---|---|
 | `requirements.md` REQ-FUNC-034 の diff fallback 記述 | 「要求された `analysis_targets` のみを non-diff で解析する」と明記し、全ワークスペースへの拡張がないことを明確にする |
-| `architecture.md` §5.2 最終段の不変条件リスト（L346 付近） | フォールバック説明を「要求された `analysis_targets` / `--level` を保った non-diff 解析」に修正し、括弧書きで「全ワークスペースに拡張しない」を付加 |
-| `domain_model.md` §3.4 `InvalidationPlan.fallback_to_full` 設計意図（L549 付近） | 同上の文言修正 |
-| `adr/0003-deterministic-core-and-baseline-cache.md` L63 | 「要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする」に修正し、直後に「全ワークスペースへ拡張しない」を注記する |
+| `architecture.md` §5.2 不変条件リスト | フォールバック説明を「要求された `analysis_targets` / `--level` を保った non-diff 解析」に修正し、括弧書きで「全ワークスペースに拡張しない」を付加 |
+| `domain_model.md` §3.4 `InvalidationPlan.fallback_to_full` 設計意図 | 同上の文言修正 |
+| `adr/0003-deterministic-core-and-baseline-cache.md` 判断セクション subset fallback 記述 | 「要求された `analysis_targets` / `--level` を保った non-diff 全解析へフォールバックする」に修正し、直後に「全ワークスペースへ拡張しない」を注記する |
 
 ---
 
@@ -222,7 +224,7 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` REQ-FUNC-014 受け入れ基準（L314 付近） | 上記 2 件の受け入れ基準を追加 |
+| `requirements.md` REQ-FUNC-014 受け入れ基準 | 上記 2 件の受け入れ基準を追加 |
 
 ---
 
@@ -253,7 +255,7 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` L492–493 | `WholeProject` / `ListedDiagnostics` を snake_case に統一するか、初出で JSON 値との対応を明記。`SummaryScope` と `DiagnosticsScope` の値を混同しない記述に修正 |
+| `requirements.md` `SummaryScope` / `DiagnosticsScope` 定義 | `WholeProject` / `ListedDiagnostics` を snake_case に統一するか、初出で JSON 値との対応を明記。`SummaryScope` と `DiagnosticsScope` の値を混同しない記述に修正 |
 | `domain_model.md` の `DiagnosticsScope` / `SummaryScope` enum 定義 | 同上。各 enum の値一覧を上記の表に合わせて整理 |
 | `architecture.md` の差分解析契約 | 同上 |
 
@@ -285,13 +287,13 @@ v1 の閾値は **専門家判断に基づく暫定値** であり、実証デ�
 
 ### 判断
 
-requirements.md の用語集（§6）にアーキテクチャ由来の内部コンポーネント名の短い定義を追加し、architecture.md への参照を示す。
+requirements.md の用語集（§2）にアーキテクチャ由来の内部コンポーネント名の短い定義を追加し、architecture.md への参照を示す。
 
 ### 更新対象
 
 | 文書 | 更新内容 |
 |---|---|
-| `requirements.md` 用語集（§6 付近） | `Configuration`、`Plugin Host`、`Application Pipeline`、`CLI Shell`、`DiagnosticReport` の短い定義（1–2 文）と architecture.md §4.1 への参照を追加 |
+| `requirements.md` 用語集（§2） | `Configuration`、`Plugin Host`、`Application Pipeline`、`CLI Shell`、`DiagnosticReport` の短い定義（1–2 文）と architecture.md §4.1 への参照を追加 |
 
 ---
 
@@ -432,8 +434,8 @@ architecture.md §4.1 の責務表に `Application Pipeline` がなく、実質�
 
 | 文書 | 更新内容 |
 |---|---|
-| `domain_model.md` §3.5 設計意図（L611–619） | 「Configuration は」を「`ProjectConfig.resolve()` は」に修正 |
-| `domain_model.md` §3.5 用語集（L741） | `WorkspaceRoot` の定義で「Configuration が解決した」を「`ProjectConfig.resolve()` が解決した」に修正 |
+| `domain_model.md` §3.5 設計意図 | 「Configuration は」を「`ProjectConfig.resolve()` は」に修正 |
+| `domain_model.md` §5.5 構成管理用語集 | `WorkspaceRoot` の定義で「Configuration が解決した」を「`ProjectConfig.resolve()` が解決した」に修正 |
 | `domain_model.md` 本文中の「Configuration」が責務主体として使われている他の箇所 | 同様に修正（全文検索で「Configuration は」「Configuration が」を特定） |
 
 ---
