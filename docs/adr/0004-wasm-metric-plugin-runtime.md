@@ -2,7 +2,7 @@
 
 ## ステータス
 
-承認済み
+承認済み（v0.4.4: SPI v1 ABI normative 仕様追加）
 
 ## コンテキスト
 
@@ -55,22 +55,27 @@
 - kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]] { path, sha256 }` へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
 - **v1 モジュール ABI / ホスト契約**: v1 で受け入れるプラグインモジュールは以下の条件を満たすこと
   - **target**: `wasm32-unknown-unknown`（WASI 不使用）。ファイルシステム・ネットワーク・クロック等の WASI API は一切インポートを許可しない。これにより `REQ-NF-003` の決定論性を保証し、サンドボックス面を最小化する
+  - **ptr/len エンコーディング契約**: ホスト⇔プラグイン間で文字列を渡す `ptr`/`len` 引数は、すべてプラグインの線形メモリ上のバイトオフセット（`ptr`: `u32`）とバイト長（`len`: `u32`）のペアである。文字列データは UTF-8 でエンコードする。NUL ターミネータは含めない。ホストは `len` バイトだけを読み書きし、範囲外アクセスはトラップとする
+  - **read ヘルパー戻り値契約**: `cpg_read_node`、`cpg_read_edge`、`config_read` の `i32` 戻り値は以下の共通セマンティクスに従う
+    - `>= 0`: 成功。戻り値は `buf_ptr` から書き込まれた実バイト数を表す
+    - `-1`: バッファ不足。`buf_len` が必要なデータサイズより小さい場合に返す。`buf_ptr` の内容は未定義とする。プラグインはより大きなバッファを `kalos_plugin_alloc` で確保して再呼び出しできる
+    - `-2`: 範囲外インデックスまたは存在しないキー。`cpg_read_node`/`cpg_read_edge` で `index >= count` の場合、または `config_read` で未定義のキーの場合に返す。`buf_ptr` の内容は未定義とする
   - **host exports（ホスト→プラグイン）**: ホストは以下の関数をプラグインにエクスポートする
     - `cpg_node_count(scope_ptr, scope_len) -> u32` — 対象スコープのノード数を返す
     - `cpg_edge_count(scope_ptr, scope_len) -> u32` — 対象スコープのエッジ数を返す
-    - `cpg_read_node(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — ノードデータを線形メモリへ書き込む
-    - `cpg_read_edge(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — エッジデータを線形メモリへ書き込む
-    - `config_read(key_ptr, key_len, buf_ptr, buf_len) -> i32` — `MetricConfig` のキーに対応する値を線形メモリへ書き込む
+    - `cpg_read_node(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — ノードデータを線形メモリへ書き込む。戻り値は read ヘルパー戻り値契約に従う
+    - `cpg_read_edge(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — エッジデータを線形メモリへ書き込む。戻り値は read ヘルパー戻り値契約に従う
+    - `config_read(key_ptr, key_len, buf_ptr, buf_len) -> i32` — `MetricConfig` のキーに対応する値を線形メモリへ書き込む。戻り値は read ヘルパー戻り値契約に従う
     - `metric_register(id_ptr, id_len, level: u32, name_ptr, name_len, desc_ptr, desc_len) -> i32` — `MetricDefinition` を登録する。`id` は `MetricDefinition.id`（グローバル一意）、`level` は `AnalysisLevel`（0=Function, 1=Module, 2=Project）、`name`/`desc` は人間可読な名前と説明。v1 では `participation = ReportOnly`, `rule_binding = None` が暗黙に設定される（domain_model.md §3.2 参照）。成功時 0、重複 ID 時 -1 を返す
   - **plugin exports（プラグイン→ホスト）**: プラグインは以下の関数をエクスポートする
     - `kalos_plugin_init() -> i32` — 初期化。`metric_register` ホスト関数を呼び出して `MetricDefinition` を 1 つ以上登録する。1 モジュールが複数の `MetricDefinition` を登録できる（各登録は独立した `metric_id` を持つ）。成功時 0、失敗時非 0 を返す
-    - `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。未登録の `metric_id` が渡された場合の動作は未定義とする。戻り値のエンコーディング: 下位 32 ビットが `raw_value` の IEEE 754 binary32 表現、上位 32 ビットが `normalized_risk` の IEEE 754 binary32 表現（いずれも Little-Endian）。ホストは受け取った binary32 値を `f64` へ拡張したのち、以下の **invalid-value contract** を適用する:
+    - `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。ホストは登録済みの `metric_id` のみを渡すことを保証するため、未登録の `metric_id` が渡されることは正常動作では発生しない。万一ホスト実装の不具合により未登録の `metric_id` が渡された場合、ホストは当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成せず、`stderr` / 構造化ログへ warning を出力する。プラグイン側の戻り値は無視する。戻り値のエンコーディング: 下位 32 ビットが `raw_value` の IEEE 754 binary32 表現、上位 32 ビットが `normalized_risk` の IEEE 754 binary32 表現（いずれも Little-Endian）。ホストは受け取った binary32 値を `f64` へ拡張したのち、以下の **invalid-value contract** を適用する:
       - `normalized_risk` が `NaN` または `±Inf` の場合: 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない。`stderr` / 構造化ログへ warning を出力する
       - `normalized_risk` が有限だが `[0.0, 1.0]` の範囲外の場合: `clamp(normalized_risk, 0.0, 1.0)` で範囲内に収め、`stderr` / 構造化ログへ warning を出力したうえで処理を続行する
       - 上記の検証を通過した値に対し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
     - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
     - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
-  - **データ交換形式**: ホスト⇔プラグイン間の構造化データは Little-Endian の固定長バイナリレイアウトで受け渡す。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる
+  - **データ交換形式**: ホスト⇔プラグイン間の構造化データは Little-Endian の固定長バイナリレイアウトで受け渡す。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（kind は CPG ノード種別の列挙値）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]` とする。いずれも Little-Endian。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す）とする。上記レイアウトは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
   - **WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
 - ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて `kalos_plugin_evaluate(metric_id, scope)` を 1 回ずつ呼び出し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする

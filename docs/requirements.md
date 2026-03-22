@@ -284,7 +284,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-012: メトリクス定義のプラグイン拡張
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
-- **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、プラグイン仕様に準拠したメトリクス定義
+- **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、SPI version `kalos-metric-spi-v1` の ABI 契約に準拠したメトリクス定義（normative ABI 仕様は ADR-0004 §host exports / §read ヘルパー戻り値契約 / §ptr/len エンコーディング契約 / §データ交換形式を参照）
 - **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、ネットワーク・ファイル書込を禁止する。diff mode から全解析へフォールバックした場合は全解析の budget（`30_000_000 fuel`）を適用する（fuel が規範的上限であり、壁時間は参考値。上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する。ADR-0004 参照）。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、fuel budget 超過、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate fuel budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない。diff mode では、現在の実行で正常にロード・評価されなかったプラグインの baseline cache 済み `MetricValue` も `metrics` 出力から除外し、stale なプラグインメトリクスを部分的に再利用しない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
@@ -771,7 +771,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - **v1 ディスパッチ**: LLM 呼び出しは sequential（max in-flight = 1）とする。per-request: `connect timeout = 3s`, `overall timeout = 30s`。**ステータス別リトライ**: 429 は `Retry-After` ヘッダーを尊重して 1 回だけリトライする（aggregate budget 残量が許す場合のみ）。5xx はリトライせずスキップする。それ以外のエラーもリトライせずスキップする（ADR-0005 参照）
   - **Aggregate sidecar budget**: 1 回の `kalos check` 全体で LLM sidecar に費やす壁時間（wall-clock time）の上限は `120s`（暫定値）とする。v1 では sequential ディスパッチのため、各 request の所要時間（429 リトライの待機時間を含む）の累積で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照）
-  - **Preflight failure**: `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。代表ファイルの言語解決不可・multi-file 診断の断片還元不可による request 省略は正常動作であり warning を出さない（ADR-0005 参照）
+  - **Preflight failure**: `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。`KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の値に設定されている場合も設定エラー（exit code 2）とする（ADR-0005 参照）。代表ファイルの言語解決不可・multi-file 診断の断片還元不可による request 省略は正常動作であり warning を出さない（ADR-0005 参照）
   - **URL 秘匿化**: エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL に含まれうるトークンや API キーの資格情報漏えいを防ぐ（ADR-0005 参照）
 - **優先度**: Must
 - **出典**: 2026-03-19 ユーザー判断 + 設計具体化
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.4 | 2026-03-22 | レビュー findings 解決: REQ-FUNC-012 にSPI v1 ABI normative 参照（ADR-0004）を追加、REQ-NF-009 Preflight failure に unsupported `KALOS_LLM_PROVIDER` の設定エラー（exit code 2）を追加（ADR-0005） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: non-diff full mode のベースライン動作を write-back only に明確化、`targets_explicitly_specified: bool` による CLI path 引数の由来記録を追加、baseline 永続化判定に `targets_explicitly_specified` を使用 | Claude |
 | 0.4.2 | 2026-03-22 | レビュー findings 解決: 校正注記の provenance 修正（unsupported 出典主張を除去）、`kalos check .`（明示 `.`）と引数省略の scope semantics を整合、REQ-NF-007・REQ-FUNC-031 の例示を引数省略形に統一 | Claude |
 | 0.4.1 | 2026-03-22 | レビュー指摘解決: `REQ-NF-005` に resolver adapter（`REQ-FUNC-007`）との関係を完了条件注記として追加 | Claude |

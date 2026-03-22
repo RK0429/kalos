@@ -163,7 +163,7 @@ graph TB
 | Metrics | メトリクス計算、正規化、階層スコア集約。`enabled = false` のルールにバインドされたメトリクスは計算・`metrics` 出力は維持するが、`scope_risk` 算術平均の母集団から除外する | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用。`enabled = false` のルールは診断を生成せず、当該ルールにバインドされたメトリクスは `scope_risk` 集約から除外される（スコアリング・summary・exit code に影響しない） | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `List<Diagnostic>` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-026`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
 | Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | 標準出力 / ファイル出力 | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
-| Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。詳細は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) 参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
+| Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ノード/エッジレイアウト、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
 | Observability Adapter | 構造化ログ、スパン、性能メトリクス | 実行イベント | ログ、内部計測 | `REQ-NF-001`, `REQ-NF-002` |
@@ -218,7 +218,7 @@ CPG Extraction
 - `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `Diagnostics` は canonical `primary_scope_id` を持つ `Diagnostic` の一覧だけを返し、diff 表示判定や `ScopeDiagnosticSnapshot` の所有単位はその `primary_scope_id` を基準にする。metric 診断では評価対象 `ScopeId`、pattern 診断では主対象 scope、単一の主対象を持たない cross-scope 診断では辞書順最小 `ScopeId` を使う
-- `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を sequential に（v1: max in-flight = 1）処理し、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す。429 応答時は `Retry-After` を尊重して 1 回リトライし（aggregate budget 残量が許す場合のみ）、5xx はスキップする（ADR-0005 参照）。プロバイダ選択は環境変数 `KALOS_LLM_PROVIDER` で行い（v1 の許容値: `openai`、デフォルト: `openai`）、選択されたプロバイダがリクエスト形式とデフォルトエンドポイント URL を決定する（`REQ-NF-009`, ADR-0005 参照）。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で上書き可能であり、未設定時はプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）
+- `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を sequential に（v1: max in-flight = 1）処理し、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す。429 応答時は `Retry-After` を尊重して 1 回リトライし（aggregate budget 残量が許す場合のみ）、5xx はスキップする（ADR-0005 参照）。プロバイダ選択は環境変数 `KALOS_LLM_PROVIDER` で行い（v1 の許容値: `openai`、デフォルト: `openai`）、選択されたプロバイダがリクエスト形式とデフォルトエンドポイント URL を決定する。`KALOS_LLM_PROVIDER` が v1 の許容値以外の場合は設定エラー（exit code 2）とする（`REQ-NF-009`, ADR-0005 参照）。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で上書き可能であり、未設定時はプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）
 - `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`SourceAnalysis.source_files` は workspace-relative path 一意かつ path 昇順の決定論的対応表である。`source_excerpt` または `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得し、request を生成する場合は相互排他的に一方のみを設定する。`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する。multi-file / multi-language 診断で必須根拠を代表ファイル断片へ還元できない場合は LLM sidecar を起動しない
 - `Application Pipeline` は `List<Diagnostic>` と `summary_scope` から `DiagnosticReport` を assemble する。`summary_scope = listed_diagnostics` では現在の診断一覧から、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から summary を materialize する
 - `ReportViewOptions.minimum_severity` は診断一覧の表示/出力対象だけを絞り込み、`DiagnosticReport.summary` と exit code の計算母集団は変えない
@@ -458,7 +458,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 外部ツール取得 | CodeQL bundle は kalos release 同梱の managed bundle manifest で version/checksum を固定し、managed cache へ初回取得して SHA-256 を検証する |
 | 外部プロセス呼出 | CodeQL 呼出は引数配列で実行し、シェル展開しない |
 | LLM 送信データ | `--llm` 明示時のみ送信し、対象コード断片または `CpgSubgraphExcerpt` を最小化する。プロバイダは `KALOS_LLM_PROVIDER` で選択し（v1: `openai`、デフォルト: `openai`）、プロバイダがリクエスト形式を決定する。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で設定し、未設定時はプロバイダ固有のデフォルト URL を使用する（`REQ-NF-009`, ADR-0005 参照） |
-| LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、または `KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合は設定エラー（exit code 2）とする（ADR-0005 参照） |
+| LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文、または `KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の場合は設定エラー（exit code 2）とする（ADR-0005 参照） |
 | LLM タイムボックス | **v1 ディスパッチ**: sequential（max in-flight = 1）。per-request: `connect timeout = 3s`, `overall timeout = 30s`。**ステータス別リトライ**: 429 は `Retry-After` ヘッダーを尊重して 1 回だけリトライする（aggregate budget 残量が許す場合のみ）。5xx はリトライせずスキップする。それ以外のエラーもリトライせずスキップする。aggregate sidecar budget: `120s`（暫定値、壁時間）— 経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。暫定値は PoC で確定予定（ADR-0005 参照） |
 | LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
@@ -511,7 +511,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 | v1 ディスパッチ | sequential（max in-flight = 1） |
 | ステータス別リトライ | 429: `Retry-After` を尊重して 1 回リトライ（aggregate budget 残量が許す場合のみ）。5xx: リトライせずスキップ。その他エラー: リトライせずスキップ（ADR-0005 参照） |
 | aggregate sidecar budget | 120 秒（暫定値、壁時間）。1 回の `kalos check` 全体で LLM sidecar に費やす壁時間の上限。v1 では sequential ディスパッチのため、各 request の所要時間（429 リトライの待機時間を含む）の累積で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照） |
-| preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` 未設定または `KALOS_LLM_ENDPOINT_URL` が不正 URL の場合は設定エラー（exit code 2）。代表ファイルの言語解決不可・multi-file 断片還元不可は warning なしで request 省略（正常動作）（ADR-0005 参照） |
+| preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` 未設定、`KALOS_LLM_ENDPOINT_URL` が不正 URL、または `KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の場合は設定エラー（exit code 2）。代表ファイルの言語解決不可・multi-file 断片還元不可は warning なしで request 省略（正常動作）（ADR-0005 参照） |
 | post-dispatch fallback | タイムアウト・非応答・エラー時は当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す |
 | コア不変条件 | いずれの障害・省略でもコア診断・スコア・Exit code は不変 |
 
@@ -601,6 +601,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.4 | 2026-03-22 | レビュー findings 解決: Plugin Host 責務表に SPI v1 normative ABI 参照（ADR-0004）を追加、LLM Adapter ルール・セキュリティ設計に unsupported `KALOS_LLM_PROVIDER` の設定エラー（exit code 2）を追加（ADR-0005） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: `--level` 非対象階層の報告除外を must exclude に強化し Reporting が射影 owner と明記、`targets_explicitly_specified` を Configuration 責務に追加、プラグイン評価順序を `workspace_relative_path → metric_id → ScopeId` 辞書順に明示（pre-invocation budget check 追加）、PoC 参照を #6 → #3（requirements.md §5）に修正、LLM v1 sequential dispatch・429/5xx ステータス別リトライポリシーを追加、Baseline Cache Port 境界を C4 L3 図と依存方向に明示 | Claude |
 | 0.4.2 | 2026-03-22 | レビュー findings 解決: Plugin Host 責務表に per-scope 評価ディスパッチ・fuel/memory budget・skip semantics を追加し出力列にプラグイン評価 `MetricValue` 群を反映、入力参照を domain_model.md v0.4.2 に同期 | Claude |
 | 0.4.1 | 2026-03-22 | レビュー指摘解決: 新言語追加完了条件に resolver adapter（`REQ-FUNC-007`）との関係を明文化（QA-04 適合度関数・§6.1）、LLM provider 契約（`KALOS_LLM_PROVIDER`・プロバイダによるリクエスト形式/デフォルトエンドポイント決定）を §4.2 ルール・§6 技術選定・§7.2 セキュリティ設計に伝播 | Claude |
