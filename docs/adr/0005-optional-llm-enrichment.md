@@ -1,8 +1,16 @@
 # ADR-0005: LLM は任意の後段エンリッチとして隔離する
 
+## メタ情報
+
+| 項目 | 内容 |
+|---|---|
+| 承認日 | 2026-03-18 |
+| 最終更新日 | 2026-03-22 |
+| 改訂 | v0.4.4 |
+
 ## ステータス
 
-承認済み（v0.4.4: unsupported KALOS_LLM_PROVIDER の preflight failure 追加）
+承認済み
 
 ## コンテキスト
 
@@ -83,3 +91,13 @@
 ### リスク
 
 - LLM が冗長または不正確な提案を返す可能性があるため、テンプレート結果を常に併記し、ユーザーが比較できるようにする
+
+## 改訂履歴
+
+| 日付 | 変更概要 | 関連文書版 |
+|---|---|---|
+| 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
+| 2026-03-19 | `LlmEnrichmentRequest` allowlist 設計追加、sidecar budget（connect/overall timeout）追加、preflight 条件（言語解決不可・multi-file 断片還元不可）追加 | architecture.md v0.2.0–v0.2.11 |
+| 2026-03-21 | レビュー指摘解決: LLM 運用帰結（API キー管理・プロバイダ選択・outbound 通信・データ機密性・監査境界）追加 | architecture.md v0.3.0–v0.3.1 |
+| 2026-03-22 | レビュー指摘解決: aggregate sidecar budget（120s 暫定値）追加、v1 ディスパッチポリシー（逐次実行・429/5xx ステータス別処理）追加、URL 秘匿化契約追加 | architecture.md v0.4.0–v0.4.3 |
+| 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | architecture.md v0.4.4 |

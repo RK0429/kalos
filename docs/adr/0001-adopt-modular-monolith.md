@@ -1,5 +1,13 @@
 # ADR-0001: 単一バイナリのモジュラーモノリスを採用し、内部構成に Ports & Adapters と Pipe-and-Filter を用いる
 
+## メタ情報
+
+| 項目 | 内容 |
+|---|---|
+| 承認日 | 2026-03-18 |
+| 最終更新日 | 2026-03-22 |
+| 改訂 | v0.4.0 |
+
 ## ステータス
 
 承認済み
@@ -137,3 +145,12 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
   - `adapters` → `ports`
   - `domains` 間は公開契約（Port 経由）でのみ接続する
   - `domains` → `adapters` の直接依存、`adapters` → `domains` の直接依存は禁止する
+
+## 改訂履歴
+
+| 日付 | 変更概要 | 関連文書版 |
+|---|---|---|
+| 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
+| 2026-03-19 | 内部構成パターン（A-1/A-2/A-3）の検討追加、選択肢 A-2（Ports & Adapters + Pipe-and-Filter）の採用根拠明確化 | architecture.md v0.2.0 |
+| 2026-03-21 | レビュー指摘解決: 帰結の保証範囲（CodeQL bundle / WASM プラグイン配布責務）明確化 | architecture.md v0.3.0 |
+| 2026-03-22 | レビュー指摘解決: 許可する依存方向ルール追記、差分解析/ベースラインの Application Pipeline 配下での位置づけ追記 | architecture.md v0.4.0 |

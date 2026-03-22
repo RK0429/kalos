@@ -5,7 +5,8 @@
 | 項目 | 内容 |
 |---|---|
 | 作成日 | 2026-03-21 |
-| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 18 指摘 + v0.4.0 フォローアップ + v0.4.1 フォローアップ 2 件、計 21 項） |
+| 最終更新日 | 2026-03-22 |
+| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 19 指摘 + v0.4.0 フォローアップ + v0.4.1 フォローアップ 2 件、計 21 項） |
 | 目的 | 上記 21 項のレビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 | 適用範囲 | v0.3.0–v0.4.1 の文書更新バッチ。v0.4.2 以降のレビュー起因更新は本メモの対象外であり、各文書の変更履歴を参照のこと |
 
@@ -245,7 +246,7 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
 
 | enum | 内部表現（PascalCase） | JSON 値（snake_case） | 意味 |
 |---|---|---|---|
-| `SummaryScope` | `WholeProject` | `"whole_project"` | summary の母集団がプロジェクト全体（`--level all` 時、または diff mode の merged post-change） |
+| `SummaryScope` | `WholeProject` | `"whole_project"` | summary の母集団が解決済み `analysis_targets` 内の全階層の診断（`--level all` 時、または diff mode の merged post-change） |
 | `SummaryScope` | `ListedDiagnostics` | `"listed_diagnostics"` | summary の母集団が `diagnostics` リストに含まれる指定階層の診断のみ（`--level` で階層限定時） |
 | `DiagnosticsScope` | `WholeProject` | `"whole_project"` | `diagnostics` 一覧が選択された `--level` に関して完全（full mode） |
 | `DiagnosticsScope` | `AffectedOnly` | `"affected_only"` | `diagnostics` 一覧が影響範囲のみ（diff mode） |
@@ -624,3 +625,11 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 | 5 | `adr/0003-deterministic-core-and-baseline-cache.md` | subset fallback 文言修正、キャッシュ運用帰結追加 |
 | 6 | `adr/0004-wasm-metric-plugin-runtime.md` | WASM instance lifecycle（初期化・評価・破棄）の契約追加、線形メモリ管理の上限・トラップ動作追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加（v0.4.0） |
 | 7 | `adr/0005-optional-llm-enrichment.md` | LLM 運用帰結追加 |
+
+## 変更履歴
+
+| 日付 | 変更内容 |
+|---|---|
+| 2026-03-22 | 第2次レビュー指摘解決: 初回件数を 18→19 に修正、`SummaryScope.WholeProject` の定義に `analysis_targets` 限定句を追加、最終更新日・変更履歴を追加 |
+| 2026-03-22 | PoC 参照番号を #6 → #3 に修正（v0.4.3 対応） |
+| 2026-03-21 | 初版作成（v0.3.0–v0.4.1 バッチの 21 項設計判断を記録） |

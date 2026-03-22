@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.4 |
+| バージョン | 0.4.7 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.4, domain_model.md v0.4.3 |
+| 入力 | requirements.md v0.4.5, domain_model.md v0.4.5 |
 
 ## 1. 設計目標
 
@@ -163,7 +163,7 @@ graph TB
 | Metrics | メトリクス計算、正規化、階層スコア集約。`enabled = false` のルールにバインドされたメトリクスは計算・`metrics` 出力は維持するが、`scope_risk` 算術平均の母集団から除外する | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用。`enabled = false` のルールは診断を生成せず、当該ルールにバインドされたメトリクスは `scope_risk` 集約から除外される（スコアリング・summary・exit code に影響しない） | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `List<Diagnostic>` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-026`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
 | Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | 標準出力 / ファイル出力 | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
-| Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ノード/エッジレイアウト、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
+| Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディング、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
 | Observability Adapter | 構造化ログ、スパン、性能メトリクス | 実行イベント | ログ、内部計測 | `REQ-NF-001`, `REQ-NF-002` |
@@ -301,7 +301,7 @@ sequenceDiagram
     D-->>APP: List<Diagnostic>
     APP->>LLM: 任意のエンリッチ要求
     LLM-->>APP: LlmSuggestionBundle?
-    APP->>R: DiagnosticReport / ReportMetadata / ReportViewOptions を含めて出力変換
+    APP->>R: DiagnosticReport / AnalysisMetrics / ReportMetadata / ReportViewOptions / LlmSuggestionBundle? を含めて出力変換
     APP->>Cache: ベースライン保存（全ワークスペース解析時）
     R-->>U: human/json/sarif + exit code
 ```
@@ -341,7 +341,7 @@ sequenceDiagram
         M-->>APP: 統合済み AnalysisMetrics
         APP->>D: 統合済みメトリクスで診断
         D-->>APP: 差分対象 List<Diagnostic>
-        APP->>R: DiagnosticReport / ReportMetadata / ReportViewOptions を含めて出力変換
+        APP->>R: DiagnosticReport / AnalysisMetrics / ReportMetadata / ReportViewOptions / LlmSuggestionBundle? を含めて出力変換
         APP->>Cache: ベースライン保存（全ワークスペース解析時）
         R-->>U: 差分対象診断 + diagnostics_scope=affected_only + プロジェクト全体 summary
     end
@@ -353,8 +353,8 @@ sequenceDiagram
 - `--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。ベースラインキャッシュの保存不変条件（§5.3、ADR-0003）として全階層の結果が必要なためである。`--level` で選択されなかった階層のメトリクス・診断・スコアは報告に含めない（must exclude）。この射影は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する。ただし、プラグインメトリクスの再利用は当該プラグインが現在の実行で正常にロード・評価された場合に限り、失敗またはスキップされたプラグインの cache 済み `MetricValue` は除外する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
-- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `whole_project`、`--level` で階層を限定した場合は `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
-- full mode の `diagnostics_scope = whole_project` は「選択された `--level` に関する診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
+- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `whole_project`（解決済み `analysis_targets` 内の全階層を母集団とする）、`--level` で階層を限定した場合は `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
+- full mode の `diagnostics_scope = whole_project` は「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
 - `ReportMetadata.schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
@@ -601,6 +601,9 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.7 | 2026-03-22 | 入力参照を domain_model.md v0.4.5 に同期（本体の変更なし） | Claude |
+| 0.4.6 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: Plugin Host 責務表の normative ABI 参照リストを更新（ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |
+| 0.4.5 | 2026-03-22 | 第2次レビュー指摘解決: §5.1/§5.2 シーケンス図の `APP->>R` メッセージに `AnalysisMetrics` / `LlmSuggestionBundle?` を追加、`diagnostics_scope` 定義に `analysis_targets` 限定句追加、`summary_scope` 定義に `analysis_targets` 限定句追加、入力参照を domain_model.md v0.4.4 に更新 | Claude |
 | 0.4.4 | 2026-03-22 | レビュー findings 解決: Plugin Host 責務表に SPI v1 normative ABI 参照（ADR-0004）を追加、LLM Adapter ルール・セキュリティ設計に unsupported `KALOS_LLM_PROVIDER` の設定エラー（exit code 2）を追加（ADR-0005） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: `--level` 非対象階層の報告除外を must exclude に強化し Reporting が射影 owner と明記、`targets_explicitly_specified` を Configuration 責務に追加、プラグイン評価順序を `workspace_relative_path → metric_id → ScopeId` 辞書順に明示（pre-invocation budget check 追加）、PoC 参照を #6 → #3（requirements.md §5）に修正、LLM v1 sequential dispatch・429/5xx ステータス別リトライポリシーを追加、Baseline Cache Port 境界を C4 L3 図と依存方向に明示 | Claude |
 | 0.4.2 | 2026-03-22 | レビュー findings 解決: Plugin Host 責務表に per-scope 評価ディスパッチ・fuel/memory budget・skip semantics を追加し出力列にプラグイン評価 `MetricValue` 群を反映、入力参照を domain_model.md v0.4.2 に同期 | Claude |

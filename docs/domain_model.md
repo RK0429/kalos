@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.3 |
+| バージョン | 0.4.5 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.3 |
+| 入力 | requirements.md v0.4.5 |
 
 ## 1. サブドメイン分類
 
@@ -490,8 +490,8 @@ classDiagram
 - `PatternRule.detect(..., config)` は解決済み `RuleConfig` を値として受け取る。`config.enabled = Some(false)` の場合は空リストを返し、診断生成後は `config.severity` を最終 `Diagnostic.severity` に上書きできる
 - `RuleConfig.enabled = false` は **ルールの全効果を抑制する**。メトリクスルールの場合、メトリクス計算と `metrics` 出力は維持するが、診断生成を抑制し、当該メトリクスを `scope_risk` 算術平均の母集団から除外する（スコアリング除外）。パターンルールの場合、パターン検出自体を実行しない。いずれの場合も `summary` 件数・`exit code` 判定への影響はなくなる
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = None` を代表位置として使う。human 形式では `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では column を出力しない
-- `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では「選択された `--level` に関して完全」であることを `WholeProject`（JSON 値: `"whole_project"`）で表し、diff mode では `AffectedOnly`（JSON 値: `"affected_only"`）を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
-- `DiagnosticReport.summary_scope` は summary と exit code がどの母集団に対する集計かを表す。`DiagnosticReport.summary` は materialized value であり、`SummaryScope.ListedDiagnostics`（JSON 値: `"listed_diagnostics"`）では現在の `diagnostics` 一覧から、diff mode かつ `summary_scope = WholeProject`（JSON 値: `"whole_project"`）では merged post-change `ScopeDiagnosticSnapshot` から Application Pipeline が再構成してから `DiagnosticReport` へ束ねる
+- `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では「選択された `--level` に関して、解決済み `analysis_targets` 内で完全」であることを `WholeProject`（JSON 値: `"whole_project"`）で表し、diff mode では `AffectedOnly`（JSON 値: `"affected_only"`）を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
+- `DiagnosticReport.summary_scope` は summary と exit code がどの母集団に対する集計かを表す。`SummaryScope.WholeProject`（JSON 値: `"whole_project"`）は summary の母集団が解決済み `analysis_targets` 内の全階層の診断であることを表す。`DiagnosticReport.summary` は materialized value であり、`SummaryScope.ListedDiagnostics`（JSON 値: `"listed_diagnostics"`）では現在の `diagnostics` 一覧から、diff mode かつ `summary_scope = WholeProject` では merged post-change `ScopeDiagnosticSnapshot` から Application Pipeline が再構成してから `DiagnosticReport` へ束ねる
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
 - JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`scores.overall` は `summary_scope` や診断件数の写像ではない。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
@@ -767,7 +767,7 @@ stateDiagram-v2
 | ルールID (RuleId) | ルールの一意識別子。`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式 | — |
 | 重大度 (Severity) | 診断の深刻さ: Error（品質基準を明確に逸脱）/ Warning（改善を強く推奨）/ Info（許容範囲内だが改善の余地あり） | — |
 | インライン抑制 (InlineSuppression) | `kalos-ignore` コメントによる診断抑制。ルールID指定で個別抑制、省略で全抑制 | RuleId |
-| 診断一覧スコープ (DiagnosticsScope) | `diagnostics` 一覧の完全性を表す値。`WholeProject` は full mode で「選択された `--level` に関する診断集合が完全」であることを意味し、未選択階層の診断欠落を意味しない。`AffectedOnly` は diff mode で影響範囲の診断のみを含むことを表す | DiagnosticReport |
+| 診断一覧スコープ (DiagnosticsScope) | `diagnostics` 一覧の完全性を表す値。`WholeProject` は full mode で「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」であることを意味し、未選択階層の診断欠落を意味しない。`AffectedOnly` は diff mode で影響範囲の診断のみを含むことを表す | DiagnosticReport |
 | 診断サマリー (DiagnosticSummary) | 重大度別の診断件数集計 | — |
 | Exit code | 解析結果のプロセス終了コード: Success(0) / DiagnosticFailure(1) / ToolError(2) | — |
 
@@ -862,6 +862,8 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.5 | 2026-03-22 | 入力参照を requirements.md v0.4.5 に同期（ドメインモデル本体の変更なし） | Claude |
+| 0.4.4 | 2026-03-22 | 第2次レビュー指摘解決: `DiagnosticsScope.WholeProject` と `SummaryScope.WholeProject` の定義に `analysis_targets` 限定句を追加、入力参照を requirements.md v0.4.4 に同期（v0.4.4 の requirements 変更自体はドメインモデル no-op） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: `--level` 非対象階層の報告除外を must exclude に強化し Reporting が射影 owner と明記、`ProjectConfig.targets_explicitly_specified: bool` を追加（class diagram・設計意図・用語集）、入力参照を requirements.md v0.4.3 に同期 | Claude |
 | 0.4.2 | 2026-03-22 | レビュー findings 解決: 版メタ v0.4.2 同期（入力参照を requirements.md v0.4.2 に更新）、状態図トリガを引数省略/明示指定の scope semantics に整合 | Claude |
 | 0.4.0 | 2026-03-22 | 再レビュー指摘解決: 版メタ v0.4.0 同期、入力参照更新、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加、aggregate fuel budget の diff→全解析フォールバック規約追加 | Claude |

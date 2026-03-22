@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.4 |
+| バージョン | 0.4.5 |
 | 最終更新日 | 2026-03-22 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -284,7 +284,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-012: メトリクス定義のプラグイン拡張
 
 - **説明**: ユーザーが独自のメトリクス定義を追加できる拡張機構を提供する
-- **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、SPI version `kalos-metric-spi-v1` の ABI 契約に準拠したメトリクス定義（normative ABI 仕様は ADR-0004 §host exports / §read ヘルパー戻り値契約 / §ptr/len エンコーディング契約 / §データ交換形式を参照）
+- **入力**: `.kalos.toml` で登録された WASM プラグインモジュール参照（ワークスペースルート相対 `path`, `sha256`）と、SPI version `kalos-metric-spi-v1` の ABI 契約に準拠したメトリクス定義（normative ABI 仕様は ADR-0004 §host exports / §read ヘルパー戻り値契約 / §ptr/len エンコーディング契約 / §ScopeId 直列化契約 / §線形メモリデータレイアウト / §スカラー戻り値エンコーディングを参照）
 - **処理**: Configuration は `.kalos.toml` のプラグイン登録を `workspace_relative_path` と checksum から決定論的な `plugin_manifest` へ正規化する。この段階で `WorkspaceRoot` 外 path や不正な `sha256` は設定エラー（exit code 2）とする。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録する。`metric_id` は組み込みメトリクスと先行ロード済みプラグインを含めてグローバル一意でなければならず、衝突したモジュールは deterministic なロード失敗として warning を出してスキップする。Plugin Host は登録済み `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。v1 では `participation = ReportOnly` として扱う。評価時は登録済みプラグインを Metrics パイプラインへ統合し、invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、ネットワーク・ファイル書込を禁止する。diff mode から全解析へフォールバックした場合は全解析の budget（`30_000_000 fuel`）を適用する（fuel が規範的上限であり、壁時間は参考値。上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する。ADR-0004 参照）。プラグインファイル読込失敗、checksum 不一致、SPI version 不一致、fuel budget 超過、メモリ超過は当該プラグイン評価のみを打ち切り、aggregate fuel budget 超過時は残りのプラグイン評価を warning 付きでスキップする。いずれも `stderr` と構造化ログへ運用警告を出す。失敗またはスキップしたプラグインはその実行で `MetricValue` を返さず、v1 ではプラグインメトリクスは `metrics` 出力のみに現れ、診断・総合スコア・exit code には影響させない。diff mode では、現在の実行で正常にロード・評価されなかったプラグインの baseline cache 済み `MetricValue` も `metrics` 出力から除外し、stale なプラグインメトリクスを部分的に再利用しない
 - **受け入れ基準**:
   - Given プラグイン仕様に準拠したメトリクス定義, When 解析実行, Then 当該メトリクスが `metrics` 出力へ追加され、組み込みの診断・総合スコア・exit code 契約は変化しない
@@ -453,7 +453,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
   - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に REQ-FUNC-011 に従うメトリクス集約済みの 0〜100 の整数であり、`summary` や診断件数から逆算しない。`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
-  - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は full mode で「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする
+  - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は full mode で「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする。`whole_project` は解決済み `analysis_targets` 内の全階層の診断を母集団とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
   - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` はすべて整数となる
@@ -506,7 +506,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では階層横断の依存解決や diff モード時のベースライン整合性に必要な他階層結果を追加で算出してよい。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
-  - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`
+  - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`（解決済み `analysis_targets` 内の全階層を母集団とする）
   - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）や、diff モードでベースライン整合性に必要な他階層結果は内部的に算出してよいが、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.5 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: REQ-FUNC-012 の normative ABI 参照リストを更新（ScopeId 直列化契約、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |
 | 0.4.4 | 2026-03-22 | レビュー findings 解決: REQ-FUNC-012 にSPI v1 ABI normative 参照（ADR-0004）を追加、REQ-NF-009 Preflight failure に unsupported `KALOS_LLM_PROVIDER` の設定エラー（exit code 2）を追加（ADR-0005） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: non-diff full mode のベースライン動作を write-back only に明確化、`targets_explicitly_specified: bool` による CLI path 引数の由来記録を追加、baseline 永続化判定に `targets_explicitly_specified` を使用 | Claude |
 | 0.4.2 | 2026-03-22 | レビュー findings 解決: 校正注記の provenance 修正（unsupported 出典主張を除去）、`kalos check .`（明示 `.`）と引数省略の scope semantics を整合、REQ-NF-007・REQ-FUNC-031 の例示を引数省略形に統一 | Claude |

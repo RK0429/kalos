@@ -1,5 +1,13 @@
 # ADR-0002: `ExtractorPort` の背後に初期実装として CodeQL Adapter を置く
 
+## メタ情報
+
+| 項目 | 内容 |
+|---|---|
+| 承認日 | 2026-03-18 |
+| 最終更新日 | 2026-03-22 |
+| 改訂 | v0.4.0 |
+
 ## ステータス
 
 承認済み
@@ -100,3 +108,11 @@ Python/TS/Rust/Go で最適エンジンを変える。
 ### 新言語追加時のスコープに関する注記
 
 本 ADR が保証する「新言語追加時の変更面の限定」は、CPG 抽出境界内の parser / normalizer / language profile 追加を指す（`REQ-NF-005`, `architecture.md` QA-04）。外部シンボル解決のための language-specific resolver adapter は `architecture.md` で `Dependency Symbol Resolver Port` として別ポート化されており、要件書 5 章 #3 で個別の PoC 項目として扱われる。resolver adapter の設計判断は `REQ-FUNC-007` のスコープであり、本 ADR の判断範囲外である。
+
+## 改訂履歴
+
+| 日付 | 変更概要 | 関連文書版 |
+|---|---|---|
+| 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
+| 2026-03-19 | `SourceAnalysis` 出力契約の明文化（`source_files` 含む）、Tool Cache Port の独立ポート化、PoC 失敗判定基準・再判断トリガー追記、新言語追加スコープの注記追加 | architecture.md v0.2.5 |
+| 2026-03-22 | レビュー指摘解決: ADR 間参照整合、スコープ注記の明確化 | architecture.md v0.4.0 |
