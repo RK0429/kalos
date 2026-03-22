@@ -9,7 +9,7 @@
 | 目的 | 上記 21 項のレビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 | 適用範囲 | v0.3.0–v0.4.1 の文書更新バッチ。v0.4.2 以降のレビュー起因更新は本メモの対象外であり、各文書の変更履歴を参照のこと |
 
-**注意**: 本メモは v0.3.0–v0.4.1 バッチで解決した 21 項の設計判断の履歴記録である。全判断は対象文書に適用済みである。v0.4.2 以降に行われたレビュー起因の文書更新（版メタ同期、scope semantics 整合、Plugin Host 責務表拡充等）は本メモの対象外であり、各文書の変更履歴を正本とする。本メモ内の § 参照は初回適用前の文書構成に基づくため、セクション番号の軽微なずれが生じうる。
+**注意**: 本メモは v0.3.0–v0.4.1 バッチで解決した 21 項の設計判断の履歴記録である。全判断は対象文書に適用済みである。v0.4.2 以降に行われたレビュー起因の文書更新（版メタ同期、scope semantics 整合、Plugin Host 責務表拡充、PoC 参照番号修正等）は本メモの対象外であり、各文書の変更履歴を正本とする。本メモ内の § 参照は初回適用前の文書構成に基づくため、セクション番号の軽微なずれが生じうる。v0.4.3 で本メモ内の PoC 参照番号を #6 → #3（requirements.md §5）に修正した。
 
 ---
 
@@ -576,7 +576,7 @@ ADR-0005 のネガティブ帰結に運用上の考慮事項を追加する。
 
 architecture.md では以下を更新する:
 - **QA-04 適合度関数**: スコープ注記に resolver adapter が閾値外だが必要である旨を追加
-- **§6.1 CPG 抽出エンジンの扱い**: resolver adapter が PoC 項目 #6 で追跡される旨を追加
+- **§6.1 CPG 抽出エンジンの扱い**: resolver adapter が PoC 項目 #3（requirements.md §5）で追跡される旨を追加
 
 ### 更新対象
 
@@ -584,7 +584,7 @@ architecture.md では以下を更新する:
 |---|---|
 | `requirements.md` REQ-NF-005 | 完了条件注記として `Dependency Symbol Resolver Port` の language-specific resolver adapter（`REQ-FUNC-007`）との関係を追加 |
 | `architecture.md` QA-04 適合度関数 | スコープ注記に resolver adapter（`REQ-FUNC-007`）が `adapters/dependency_resolver/` への追加であり閾値外だが完全な言語サポートには必要である旨を追加 |
-| `architecture.md` §6.1 | resolver adapter が extractor 境界内に閉じ込められ、PoC 項目 #6 で追跡される旨を追加 |
+| `architecture.md` §6.1 | resolver adapter が extractor 境界内に閉じ込められ、PoC 項目 #3（requirements.md §5）で追跡される旨を追加 |
 
 ---
 

@@ -54,8 +54,11 @@
   - `SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合（例: `.h` ファイルが C と C++ の両方のソースから include されるプロジェクトで、`source_files` のメタデータだけでは当該ファイルの言語を C か C++ か一意に判定できないケース）
   - multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合
 - **Preflight failure（request 生成前の障害処理）**: `--llm` が指定されたが `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。Preflight 条件（代表ファイルの言語解決不可、multi-file 診断の断片還元不可）に該当する診断は `LlmEnrichmentRequest` を生成せず、テンプレート提案のみ返す。Preflight 条件による request 省略は warning を出さない（正常動作）
-- **Sidecar budget（per `LlmEnrichmentRequest`）**: `connect timeout = 3s`, `overall timeout = 30s`, `retry = 0`。タイムアウトは個々の `LlmEnrichmentRequest`（= 診断単位の LLM API 呼び出し）ごとに適用する。複数診断がある場合の総所要時間は LLM Adapter の並行度に依存する（実装詳細）
-- **Aggregate sidecar budget**: 1 回の `kalos check` 実行全体で LLM sidecar に費やす**壁時間（wall-clock time）**の上限は `120s`（暫定値）とする。LLM Adapter が複数の `LlmEnrichmentRequest` を並行ディスパッチする場合でも、最初の request 送信開始から最後の response 受信完了までの経過壁時間で会計する（個々の request 所要時間の合算ではない）。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。コア診断・スコア・Exit code は不変。上限超過を `stderr` / 構造化ログへ warning として出力する。暫定値は PoC フィードバックに基づき v1 リリースまでに確定する
+- **Sidecar budget（per `LlmEnrichmentRequest`）**: `connect timeout = 3s`, `overall timeout = 30s`。タイムアウトは個々の `LlmEnrichmentRequest`（= 診断単位の LLM API 呼び出し）ごとに適用する。**v1 ディスパッチポリシー**: v1 では LLM Adapter は逐次実行（max in-flight = 1）とし、並行ディスパッチは行わない。HTTP 応答ステータスに応じた動作は以下の通り:
+  - **429 (Too Many Requests)**: `Retry-After` ヘッダーが存在し、かつ aggregate sidecar budget の残時間内に収まる場合は 1 回だけ待機・再送する。`Retry-After` がない、または待機後も 429 が返る場合は当該 request をスキップする
+  - **5xx (Server Error)**: リトライせずに当該 request をスキップする
+  - スキップされた request の診断はテンプレート提案のみ返す。コア診断・スコア・Exit code は不変
+- **Aggregate sidecar budget**: 1 回の `kalos check` 実行全体で LLM sidecar に費やす**壁時間（wall-clock time）**の上限は `120s`（暫定値）とする。v1 は逐次実行のため、各 request の所要時間（429 の Retry-After 待機を含む）が累積される。最初の request 送信開始から最後の response 受信完了（またはスキップ決定）までの経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。コア診断・スコア・Exit code は不変。上限超過を `stderr` / 構造化ログへ warning として出力する。暫定値は PoC フィードバックに基づき v1 リリースまでに確定する
 - **Post-dispatch fallback（送信後の障害処理）**: `LlmEnrichmentRequest` の送信後にタイムアウト・非応答・エラーが発生した場合、当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す。コア診断・スコア・Exit code は不変
 
 ## 帰結
