@@ -5,12 +5,12 @@
 | 項目 | 内容 |
 |---|---|
 | 作成日 | 2026-03-21 |
-| 最終更新日 | 2026-03-22 |
-| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 19 指摘 + v0.4.0 フォローアップ + v0.4.1 フォローアップ 2 件、計 21 項） |
-| 目的 | 上記 21 項のレビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
-| 適用範囲 | v0.3.0–v0.4.1 の文書更新バッチ。v0.4.2 以降のレビュー起因更新は本メモの対象外であり、各文書の変更履歴を参照のこと |
+| 最終更新日 | 2026-03-26 |
+| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 19 指摘 + v0.4.0 フォローアップ根拠 4 件（F-1–F-4）+ v0.4.1 フォローアップ 2 件、計 §1–§21 + F-1–F-4） |
+| 目的 | 上記 21 §（設計判断）および 4 F 項（v0.4.0 追加根拠）のレビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
+| 適用範囲 | v0.3.0–v0.4.1 の文書更新バッチ（§1–§21 の設計判断 + F-1–F-4 の v0.4.0 追加根拠）。v0.4.2 以降のレビュー起因更新は本メモの対象外であり、各文書の変更履歴を参照のこと |
 
-**注意**: 本メモは v0.3.0–v0.4.1 バッチで解決した 21 項の設計判断の履歴記録である。全判断は対象文書に適用済みである。v0.4.2 以降に行われたレビュー起因の文書更新（版メタ同期、scope semantics 整合、Plugin Host 責務表拡充、PoC 参照番号修正等）は本メモの対象外であり、各文書の変更履歴を正本とする。本メモ内の § 参照は初回適用前の文書構成に基づくため、セクション番号の軽微なずれが生じうる。v0.4.3 で本メモ内の PoC 参照番号を #6 → #3（requirements.md §5）に修正した。
+**注意**: 本メモは v0.3.0–v0.4.1 バッチで解決した 21 § の設計判断と、v0.4.0 フォローアップ 4 件（F-1–F-4）の追加根拠の履歴記録である。全判断は対象文書に適用済みである。v0.4.2 以降に行われたレビュー起因の文書更新（版メタ同期、scope semantics 整合、Plugin Host 責務表拡充、PoC 参照番号修正等）は本メモの対象外であり、各文書の変更履歴を正本とする。本メモ内の § 参照は初回適用前の文書構成に基づくため、セクション番号の軽微なずれが生じうる。v0.4.3 で本メモ内の PoC 参照番号を #6 → #3（requirements.md §5）に修正した。
 
 ---
 
@@ -586,6 +586,7 @@ architecture.md では以下を更新する:
 | `requirements.md` REQ-NF-005 | 完了条件注記として `Dependency Symbol Resolver Port` の language-specific resolver adapter（`REQ-FUNC-007`）との関係を追加 |
 | `architecture.md` QA-04 適合度関数 | スコープ注記に resolver adapter（`REQ-FUNC-007`）が `adapters/dependency_resolver/` への追加であり閾値外だが完全な言語サポートには必要である旨を追加 |
 | `architecture.md` §6.1 | resolver adapter が extractor 境界内に閉じ込められ、PoC 項目 #3（requirements.md §5）で追跡される旨を追加 |
+| `adr/0002-extractor-port-with-codeql-adapter.md` スコープ注記 | resolver adapter が本 ADR の判断範囲外であることの明確化（「新言語追加時のスコープに関する注記」で `Dependency Symbol Resolver Port` の境界を明示）、ADR 間参照の整合確認 |
 
 ---
 
@@ -612,24 +613,74 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 
 ---
 
+## v0.4.0 フォローアップ根拠
+
+再レビュー指摘に基づき、v0.4.0 フォローアップとして以下の更新を行った。これらは §1–§21 の設計判断を拡張するものであり、更新対象一覧で「（v0.4.0）」と表示される項目の設計根拠を提供する。
+
+### F-1. Project scope 正規形の 3-field 表記統一（§5・§13 拡張）
+
+**指摘**: `ScopeId` の project-level 表現が文書間で不統一（2-field と 3-field が混在）。
+
+**判断**: project scope の正規形を `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の 3-field 表記に統一する。domain_model.md の `ScopeId` 値オブジェクト定義が `level`, `qualified_name`, `file_path` の 3-field 構造であり、project scope もこの構造に合わせて全フィールドを明示するのが一貫性の観点から妥当である。§5（`analysis_targets` セマンティクス）および §13（`InvalidationPlan` 不変条件）で scope 表現を参照しているため、両 § の文脈における一貫性を確保する。なお、ADR-0004 が後に追加した ScopeId 直列化契約（v0.4.5、本メモ対象外）も同じ 3-field レイアウトを採用しており、本判断と整合する。
+
+**更新文書**: architecture.md、domain_model.md
+
+### F-2. `normalized_risk` の invalid-value セマンティクス（§2 拡張、ADR-0004 連動）
+
+**指摘**: WASM プラグインが返す `normalized_risk` の NaN / ±Inf / 範囲外値に対する振る舞いが未定義であり、`MetricValue` の不変条件とスコアリングパイプラインの整合性が保証されなかった。
+
+**判断**: ADR-0004 に invalid-value contract を追加する:
+- `NaN` または `±Inf` → 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない
+- 有限だが `[0.0, 1.0]` 範囲外 → `clamp(normalized_risk, 0.0, 1.0)` で補正し warning を出力
+
+requirements.md と domain_model.md にも同セマンティクスを伝播する。これにより `REQ-NF-003`（決定論性）の保護と、§2（`enabled = false` のスコアリング除外）で前提とする `MetricValue` の整合性を維持する。
+
+**更新文書**: requirements.md、domain_model.md、adr/0004-wasm-metric-plugin-runtime.md
+
+### F-3. Aggregate fuel budget の diff→全解析フォールバック規約（§5 拡張、ADR-0004 連動）
+
+**指摘**: diff 解析から全解析にフォールバックした場合（`InvalidationPlan.fallback_to_full = true`）の aggregate fuel budget の切替規則が未定義。
+
+**判断**: フォールバック時は実際の実行パスに従い全解析用 budget（`30_000_000 fuel`）を適用する。diff mode budget（`5_000_000 fuel`）のままでは全スコープ再計算に対してリソース不足のリスクがある。§5 の fallback セマンティクス（`analysis_targets` を拡張しない）と ADR-0004 の fuel budget 定義を整合させる。
+
+**更新文書**: requirements.md、architecture.md、domain_model.md、adr/0004-wasm-metric-plugin-runtime.md
+
+### F-4. ADR-0004 ランタイム契約の明文化
+
+**指摘**: ADR-0004 が WASM instance のライフサイクル（初期化・評価・破棄）、線形メモリ管理（上限・トラップ動作）を規定しておらず、Plugin Host の実行モデルが不明確だった。
+
+**判断**: Plugin Host の実行モデルを以下のように明文化した:
+- **WASM instance lifecycle**: モジュールごとに 1 instance を生成し、`kalos check` 実行スコープに限定して破棄する。実行間で instance を再利用しない
+- **線形メモリ管理**: instance ごとに独立した線形メモリ空間を持ち、`linear_memory_limit`（v1 暫定値: `64 MiB`）超過時はトラップとして扱い、当該プラグインの評価を打ち切る
+- **評価前 state リセット**: 各 `kalos_plugin_evaluate` 呼び出し前に guest state（グローバル変数、線形メモリ）を初期化完了直後のスナップショットにリセットし、pure function 契約（`CpgSubgraph + MetricConfig -> MetricValue`）を instance レベルで保証する
+
+これらは `REQ-NF-003`（決定論性）および `REQ-NF-001/002`（性能バジェット）との整合性を補強する。
+
+**更新文書**: adr/0004-wasm-metric-plugin-runtime.md
+
+---
+
 ## 更新対象文書の一覧
 
-本一覧は §1–§21 の全バッチ（v0.3.0–v0.4.1）を含む: 初回バッチ（v0.3.0、§1–§19）、再レビュー指摘に基づく v0.4.0 フォローアップ（既存 § への追記）、および追加レビューに基づく v0.4.1 フォローアップ（§20–§21）。v0.4.0 フォローアップで追加された項目には末尾に「（v0.4.0）」、v0.4.1 フォローアップで追加された項目には末尾に「（v0.4.1）」を付記する。v0.4.2 以降のレビュー起因更新は本メモの対象外である。
+本一覧は §1–§21 および F-1–F-4 の全バッチ（v0.3.0–v0.4.1）を含む: 初回バッチ（v0.3.0、§1–§19）、再レビュー指摘に基づく v0.4.0 フォローアップ（F-1–F-4 として設計根拠を文書化）、および追加レビューに基づく v0.4.1 フォローアップ（§20–§21）。v0.4.0 フォローアップで追加された項目には末尾に「（v0.4.0, F-N）」と対応する F 番号を付記する。v0.4.1 フォローアップで追加された項目には末尾に「（v0.4.1）」を付記する。v0.4.2 以降のレビュー起因更新は本メモの対象外である。
 
 | # | 文書 | 必要な更新の要約 |
 |---|---|---|
-| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0）、REQ-NF-005 完了条件に resolver adapter（`REQ-FUNC-007`）との関係を注記（v0.4.1） |
-| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化）、project scope 正規形を 3-field 表記に統一（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0）、QA-04 適合度関数・§6.1 に resolver adapter（`REQ-FUNC-007`）の位置付けを明記（v0.4.1）、LLM provider 契約（`KALOS_LLM_PROVIDER`）を §4.2・§6・§7.2 に伝播（v0.4.1） |
-| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記（fallback_to_full の定義を §5 と整合）、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope/diagnostics_scope 表記統一・値分離、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一（v0.4.0）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0） |
+| 1 | `requirements.md` | 版メタ同期、REQ-FUNC-026 拡充（enabled=false: 診断・スコアリング・exit code 抑制、内部計算・metrics 観測維持）、REQ-FUNC-011 注記、REQ-FUNC-014 受け入れ基準追加、summary_scope/diagnostics_scope 表記統一・値分離、閾値校正根拠注記、用語集コンポーネント定義追加、REQ-FUNC-034 fallback 明確化（subset targets と fallback_to_full の区別）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0, F-2）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0, F-3）、REQ-NF-005 完了条件に resolver adapter（`REQ-FUNC-007`）との関係を注記（v0.4.1） |
+| 2 | `architecture.md` | 版メタ同期、§5.3 merged dependency graph 契約追加、§4.1 Application Pipeline 行追加、§3.3 C4 名称変更 + Git Diff Adapter 追加、§5.1/5.2 baseline write-back ステップ追加、enabled=false 責務境界明記、summary_scope/diagnostics_scope 表記統一・値分離、fallback 文言修正（fallback_to_full と subset targets の関係明確化）、project scope 正規形を 3-field 表記に統一（v0.4.0, F-1）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0, F-3）、QA-04 適合度関数・§6.1 に resolver adapter（`REQ-FUNC-007`）の位置付けを明記（v0.4.1）、LLM provider 契約（`KALOS_LLM_PROVIDER`）を §4.2・§6・§7.2 に伝播（v0.4.1） |
+| 3 | `domain_model.md` | 版メタ同期、ScoreWeights 正規化不変条件追記、InvalidationPlan 集合不変条件追記（fallback_to_full の定義を §5 と整合）、SourceFile を VO に変更、Configuration 名称修正、§3.6 レポート VO 図追加、enabled=false スコアリング除外追記、merged dependency graph 統合手順追記、fallback 文言修正、summary_scope/diagnostics_scope 表記統一・値分離、`ScopeId` 用語集の project scope 正規形を 3-field 表記に統一（v0.4.0, F-1）、`normalized_risk` の `NaN`/`Inf`/out-of-range セマンティクス追加（v0.4.0, F-2）、aggregate fuel budget の diff→全解析フォールバック規約追加（v0.4.0, F-3） |
 | 4 | `adr/0001-adopt-modular-monolith.md` | 単一バイナリ保証範囲の注記追加（CodeQL managed bundle と WASM user-supplied plugin のライフサイクル責務を区別） |
 | 5 | `adr/0003-deterministic-core-and-baseline-cache.md` | subset fallback 文言修正、キャッシュ運用帰結追加 |
-| 6 | `adr/0004-wasm-metric-plugin-runtime.md` | WASM instance lifecycle（初期化・評価・破棄）の契約追加、線形メモリ管理の上限・トラップ動作追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加（v0.4.0） |
+| 6 | `adr/0004-wasm-metric-plugin-runtime.md` | WASM instance lifecycle（初期化・評価・破棄）の契約追加（v0.4.0, F-4）、線形メモリ管理の上限・トラップ動作追加（v0.4.0, F-4）、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加（v0.4.0, F-2）、diff→full フォールバック時の aggregate fuel budget 切替規則追加（v0.4.0, F-3）。ADR-0004 改訂履歴の v0.4.0–v0.4.3 に対応。v0.4.4 以降の改訂（SPI v1 ABI normative 仕様、ScopeId 直列化契約等）は本メモの対象外 |
 | 7 | `adr/0005-optional-llm-enrichment.md` | LLM 運用帰結追加 |
+| 8 | `adr/0002-extractor-port-with-codeql-adapter.md` | ADR 間参照整合、resolver adapter スコープ注記の明確化（v0.4.1）。ADR-0002 改訂履歴では v0.4.0 として記録 |
 
 ## 変更履歴
 
 | 日付 | 変更内容 |
 |---|---|
+| 2026-03-26 | 出所整合修正: ADR-0002 行の出所タグを凡例準拠の `（v0.4.1）` に修正、F-1 根拠から対象外の ADR-0004 ScopeId 直列化契約への依存を除去し domain_model.md の ScopeId 定義に差し替え |
+| 2026-03-26 | 追跡性・出所修正: v0.4.0 フォローアップ根拠セクション（F-1–F-4）追加、ADR-0004 行の出所を改訂履歴と整合（全項目を v0.4.0 に帰属）、§20 更新対象に ADR-0002 を追加、更新対象一覧に ADR-0002 行を追加 |
 | 2026-03-22 | 第2次レビュー指摘解決: 初回件数を 18→19 に修正、`SummaryScope.WholeProject` の定義に `analysis_targets` 限定句を追加、最終更新日・変更履歴を追加 |
 | 2026-03-22 | PoC 参照番号を #6 → #3 に修正（v0.4.3 対応） |
 | 2026-03-21 | 初版作成（v0.3.0–v0.4.1 バッチの 21 項設計判断を記録） |

@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.5 |
-| 最終更新日 | 2026-03-22 |
+| バージョン | 0.4.6 |
+| 最終更新日 | 2026-03-26 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
 | レビュー者 | Codex |
@@ -197,7 +197,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 
 ### 3.2 メトリクス算出
 
-v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の組で保持する。`normalized_risk` は `0.0〜1.0` の閉区間に正規化されたリスク値であり、`0.0` が最良、`1.0` が最悪を表す。`H` は底 2 の Shannon entropy、`clamp(x, 0, 1)` は 0 未満を 0、1 超を 1 に丸める操作とする。`normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し当該メトリクスの `MetricValue` を生成しない。有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する。`raw_value`, `normalized_risk`, `scope_risk`, `level_risk`, `overall_risk`, `overflow_ratio` は、それぞれ算出直後に小数第 6 位で round-half-up し、その丸め済み値をキャッシュ・比較・外部出力に用いる。
+v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の組で保持する。`normalized_risk` は `0.0〜1.0` の閉区間に正規化されたリスク値であり、`0.0` が最良、`1.0` が最悪を表す。`H` は底 2 の Shannon entropy、`clamp(x, 0, 1)` は 0 未満を 0、1 超を 1 に丸める操作とする。`raw_value` または `normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し当該メトリクスの `MetricValue` を生成しない。`normalized_risk` が有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する。`raw_value`, `normalized_risk`, `scope_risk`, `level_risk`, `overall_risk`, `overflow_ratio` は、それぞれ算出直後に小数第 6 位で round-half-up し、その丸め済み値をキャッシュ・比較・外部出力に用いる。
 
 > **校正注記**: v1 のデフォルト閾値・重大度境界・パターン検出カットオフは、一般的なソフトウェア品質メトリクスの知見を参考にした設計時判断による暫定値であり、特定の実証研究に裏付けられたものではない（設計判断の経緯は design-resolution-memo.md §8 を参照）。実プロジェクトでのフィードバックに基づき v2 以降で校正を予定する。見直し条件: (1) 偽陽性率が 30% を超える、(2) 偽陰性率が 20% を超える、(3) ユーザーフィードバックで特定の閾値に苦情が集中する。これらの見直し閾値自体も同設計判断に基づく暫定値である。
 
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加（ADR-0004・domain_model.md と同期） | Claude |
 | 0.4.5 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: REQ-FUNC-012 の normative ABI 参照リストを更新（ScopeId 直列化契約、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |
 | 0.4.4 | 2026-03-22 | レビュー findings 解決: REQ-FUNC-012 にSPI v1 ABI normative 参照（ADR-0004）を追加、REQ-NF-009 Preflight failure に unsupported `KALOS_LLM_PROVIDER` の設定エラー（exit code 2）を追加（ADR-0005） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: non-diff full mode のベースライン動作を write-back only に明確化、`targets_explicitly_specified: bool` による CLI path 引数の由来記録を追加、baseline 永続化判定に `targets_explicitly_specified` を使用 | Claude |

@@ -5,8 +5,8 @@
 | 項目 | 内容 |
 |---|---|
 | 承認日 | 2026-03-18 |
-| 最終更新日 | 2026-03-22 |
-| 改訂 | v0.4.5 |
+| 最終更新日 | 2026-03-26 |
+| 改訂 | v0.4.6 |
 
 ## ステータス
 
@@ -86,12 +86,13 @@
   - **plugin exports（プラグイン→ホスト）**: プラグインは以下の関数をエクスポートする
     - `kalos_plugin_init() -> i32` — 初期化。`metric_register` ホスト関数を呼び出して `MetricDefinition` を 1 つ以上登録する。1 モジュールが複数の `MetricDefinition` を登録できる（各登録は独立した `metric_id` を持つ）。成功時 0、失敗時非 0 を返す
     - `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。ホストは登録済みの `metric_id` のみを渡すことを保証するため、未登録の `metric_id` が渡されることは正常動作では発生しない。万一ホスト実装の不具合により未登録の `metric_id` が渡された場合、ホストは当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成せず、`stderr` / 構造化ログへ warning を出力する。プラグイン側の戻り値は無視する。**スカラー戻り値エンコーディング**（WASM 値スタック上の `i64` 値であり、線形メモリレイアウトではない）: 下位 32 ビット（ビット 0–31）が `raw_value` の IEEE 754 binary32 ビットパターン（`i32.reinterpret_f32` 相当）、上位 32 ビット（ビット 32–63）が `normalized_risk` の IEEE 754 binary32 ビットパターン。ホストは受け取った binary32 値を `f64` へ拡張したのち、以下の **invalid-value contract** を適用する:
-      - `normalized_risk` が `NaN` または `±Inf` の場合: 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない。`stderr` / 構造化ログへ warning を出力する
+      - `raw_value` が `NaN` または `±Inf` の場合: 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない。`stderr` / 構造化ログへ warning を出力する
+      - `normalized_risk` が `NaN` または `±Inf` の場合: 同上（当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない）
       - `normalized_risk` が有限だが `[0.0, 1.0]` の範囲外の場合: `clamp(normalized_risk, 0.0, 1.0)` で範囲内に収め、`stderr` / 構造化ログへ warning を出力したうえで処理を続行する
       - 上記の検証を通過した値に対し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
     - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
     - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
-  - **線形メモリデータレイアウト**: ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian の固定長バイナリレイアウトとする。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（kind は CPG ノード種別の列挙値）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]` とする。いずれも Little-Endian。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す）とする。**ScopeId レイアウト**: 前述の「ScopeId 直列化契約」で定義する。**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「スカラー戻り値エンコーディング」を参照。上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
+  - **線形メモリデータレイアウト**: ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian のバイナリレイアウトとする。エッジレコードは固定長（12 バイト）だが、ノードレコード・ScopeId・config 値は長さプレフィックス付きの可変長レイアウトである。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（kind は CPG ノード種別の列挙値、可変長）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]`（固定長 12 バイト）とする。いずれも Little-Endian。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す、可変長）とする。**ScopeId レイアウト**: 前述の「ScopeId 直列化契約」で定義する（可変長）。**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「スカラー戻り値エンコーディング」を参照。上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
   - **WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
 - ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて `kalos_plugin_evaluate(metric_id, scope)` を 1 回ずつ呼び出し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
@@ -134,7 +135,7 @@
 - SPI version `kalos-metric-spi-v1` の保守が必要であり、破壊的変更時は新 SPI version と移行計画を ADR で決定する
 - 実行性能の測定が不可欠
 - プラグインは kalos バイナリとは別に配布・管理する必要がある（v1 では `.kalos.toml` の `[[plugins]]` に path と checksum を登録し、ホストが `WorkspaceRoot` 基準の `plugin_manifest` へ正規化する）
-- fuel budget 超過、メモリ上限超過、aggregate fuel budget 超過、および評価戻り値の `normalized_risk` が `NaN` / `±Inf` の場合、当該プラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る（有限な範囲外値は `clamp` で補正し warning を出力する）。v1 の診断・スコア・Exit code は既存契約のまま維持する。diff mode では baseline 断片に残る当該プラグインの `MetricValue` も最終出力から除外する
+- fuel budget 超過、メモリ上限超過、aggregate fuel budget 超過、および評価戻り値の `raw_value` または `normalized_risk` が `NaN` / `±Inf` の場合、当該プラグインは `MetricValue` を返せず、ホストは運用警告を記録したうえで当該プラグイン評価または残り評価を打ち切る（`normalized_risk` の有限な範囲外値は `clamp` で補正し warning を出力する）。v1 の診断・スコア・Exit code は既存契約のまま維持する。diff mode では baseline 断片に残る当該プラグインの `MetricValue` も最終出力から除外する
 
 ### リスク
 
@@ -151,3 +152,4 @@
 | 2026-03-22 | レビュー指摘解決: WASM instance lifecycle（初期化・評価・破棄）追加、線形メモリ管理（上限・トラップ）追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加 | architecture.md v0.4.0–v0.4.3 |
 | 2026-03-22 | SPI v1 ABI normative 仕様追加: ptr/len エンコーディング契約、read ヘルパー戻り値契約、v1 ノード/エッジバイナリレイアウト、登録の原子性、pre-invocation budget check | architecture.md v0.4.4 |
 | 2026-03-22 | ScopeId 直列化契約追加、スカラー戻り値と線形メモリレイアウトの用語分離 | architecture.md v0.4.5 |
+| 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | architecture.md v0.4.6 |

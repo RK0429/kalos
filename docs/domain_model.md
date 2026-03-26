@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.5 |
-| 最終更新日 | 2026-03-22 |
+| バージョン | 0.4.6 |
+| 最終更新日 | 2026-03-26 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.5 |
+| 入力 | requirements.md v0.4.6 |
 
 ## 1. サブドメイン分類
 
@@ -298,13 +298,13 @@ classDiagram
 - `MetricDefinition.id` は組み込みとプラグインを横断してグローバル一意でなければならない。Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、既存 ID と衝突したプラグインを deterministic なロード失敗として warning 付きで無効化する。**登録の原子性**: `kalos_plugin_init` 完了後、初期化中のいずれかの `metric_register` が衝突（`-1`）を返したか、または `kalos_plugin_init` 自体が非 0 を返した場合、当該モジュールの全 `MetricDefinition` をロールバックし部分登録を残さない（ADR-0004 参照）
 - Plugin Host は各 plugin `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する
 - `MetricConfig` はプラグイン SPI へ渡す正規化済み設定マップ。ホストが設定ファイル由来の値を解決してから渡す
-- `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）。`normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し `MetricValue` を生成しない。有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する
+- `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）。`raw_value` または `normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し `MetricValue` を生成しない。`normalized_risk` が有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を報告に含めない（must exclude）。Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて非対象階層の射影を担う。ただし、パターンルールの入力として必要な下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出し保持する。これらは報告・スコア集約の対象にはならない。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
 - `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。project スコープの正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一値とし、スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
-- プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過、および評価戻り値の `normalized_risk` が `NaN` / `±Inf` の場合は `MetricValue` を生成しない非致命の運用イベントとして扱う（有限だが `[0.0, 1.0]` 範囲外の `normalized_risk` は `clamp` で補正し warning を出力する。fuel が規範的上限であり、diff mode から全解析へフォールバックした場合は全解析の budget を適用する。具体的な budget 数値は暫定値であり PoC で確定予定。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
+- プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過、および評価戻り値の `raw_value` または `normalized_risk` が `NaN` / `±Inf` の場合は `MetricValue` を生成しない非致命の運用イベントとして扱う（有限だが `[0.0, 1.0]` 範囲外の `normalized_risk` は `clamp` で補正し warning を出力する。fuel が規範的上限であり、diff mode から全解析へフォールバックした場合は全解析の budget を適用する。具体的な budget 数値は暫定値であり PoC で確定予定。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
 - スコアリングを独立コンテキストとせず `AnalysisMetrics` 内に配置。現在の重み付き平均は単純であり、分離のオーバーヘッドが利点を上回る
 
 ### 3.3 診断コンテキスト
@@ -495,7 +495,7 @@ classDiagram
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
 - JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`scores.overall` は `summary_scope` や診断件数の写像ではない。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
-- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てて LLM Adapter へ渡す allowlist 済み sidecar 入力である。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` / `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得するが、request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。代表ファイルの言語を一意に解決できない場合（例: `.h` ファイルが C と C++ の両方のソースから include されるプロジェクトで言語を一意に判定できないケース）、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合、その診断には `LlmSuggestion` を付与せず、`LlmEnrichmentRequest` 自体を生成しない
+- `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てて LLM Adapter へ渡す allowlist 済み sidecar 入力である。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` / `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得するが、request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。代表ファイルの言語を一意に解決できない場合（v1 の対象言語 Python/TypeScript/Rust/Go ではファイル拡張子から言語が一意に確定するため通常は該当しないが、将来の言語追加時への forward compatibility として条件を保持する）、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合、その診断には `LlmSuggestion` を付与せず、`LlmEnrichmentRequest` 自体を生成しない
 - `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`location` は抑制対象の代表位置を指し、同一行の診断または直後スコープ宣言に対応する診断へ適用される。cross-scope 診断の synthetic な代表位置には適用しない。`rule_id` が None の場合は対象位置の全診断を抑制する（REQ-FUNC-029）
 - `ExitCode` の決定ロジックは `DiagnosticReport.determine_exit_code()` の責務。`--strict` は warning を error 相当の失敗条件として扱う追加ポリシーだが、`Diagnostic.severity` 自体は変更しない（REQ-FUNC-022）
 
@@ -672,7 +672,7 @@ classDiagram
 | 同上 | SARIF 2.1.0 | REQ-FUNC-021 |
 
 - `ReportMetadata` は、`analysis_targets`（`WorkspaceRoot` 基準の正規化済み path 群で入力順を保持）、`tool_version`、`schema_version` を保持する。JSON/SARIF のルートメタデータはここを source of truth とする。`schema_version` の初期値は `"1.0.0"` とし、バンプポリシーは payload shape とセマンティクスの双方に影響しない明確化・注記追加で patch、後方互換な optional フィールド追加で minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更で major とする
-- `ReportViewOptions` は `requested_level` と `minimum_severity` を保持する。`minimum_severity` は一覧の投影だけに影響し、`DiagnosticReport.summary` と `ExitCode` の母集団は常に `DiagnosticReport.summary_scope` に従う
+- `ReportViewOptions` は `requested_level` と `minimum_severity` を保持する。`requested_level = None` は全階層（`--level all` 相当）を意味し、`minimum_severity = None` は重大度フィルタなし（全重大度を表示）を意味する。`minimum_severity` は一覧の投影だけに影響し、`DiagnosticReport.summary` と `ExitCode` の母集団は常に `DiagnosticReport.summary_scope` に従う
 - レポートコンテキストは managed bundle の状態や bootstrap 成否を保持しない。運用メッセージは application/infrastructure 側で `stderr` / 構造化ログへ出し、外部出力の `stdout` 契約とは分離する
 - SARIF writer は以下の固定写像を用いる: `Diagnostic.rule_id` → `run.tool.driver.rules[].id` と `result.ruleId` / `result.ruleIndex`、`Diagnostic.severity` → `result.level`（`error` / `warning` / `note`）、`Diagnostic.location` → `result.locations[].physicalLocation`（`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` / `endLine` は `location.start_line` / `end_line`）。`location.column` が `None` の診断では `startColumn` / `endColumn` を出力しない
 - `Diagnostic.message` は `result.message.text`、`template_suggestion` は `result.properties.kalos.template_suggestion`、`llm_suggestion`（存在する場合）は `result.properties.kalos.llm_suggestion` へ写像する
@@ -803,7 +803,7 @@ stateDiagram-v2
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
 | レポートメタデータ (ReportMetadata) | `analysis_targets`、`tool_version`、`schema_version` を束ねる値。`analysis_targets` は `WorkspaceRoot` 基準の正規化済み path 群で入力順を保持する | AnalysisTarget |
 | 解析対象 (AnalysisTarget) | レポート出力に載せる 1 つの解析対象 path。`WorkspaceRoot` 相対の正規化済み `FilePath` で表す | ReportMetadata |
-| レポート表示オプション (ReportViewOptions) | `requested_level` と `minimum_severity` を表す値。診断一覧の投影だけを制御し、summary/exit code は変更しない | DiagnosticReport |
+| レポート表示オプション (ReportViewOptions) | `requested_level`（`None` = 全階層）と `minimum_severity`（`None` = フィルタなし）を表す値。診断一覧の投影だけを制御し、summary/exit code は変更しない | DiagnosticReport |
 | LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決し、`metric` と `pattern`、`source_excerpt` と `cpg_excerpt` はそれぞれ相互排他的にどちらか一方だけを持つ。根拠を代表ファイルへ還元できない場合は生成しない | Diagnostic, SourceAnalysis |
 | ソース抜粋 (SourceExcerpt) | LLM 送信に使う、代表ファイル上の最小ソース断片。ファイルパス、行範囲、本文テキストを持つ | SourceLocation |
 | CPG抜粋 (CpgSubgraphExcerpt) | LLM 送信に使う、診断に必要な最小部分だけへ正規化した CPG 表現 | ScopeId |
@@ -862,6 +862,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、`ReportViewOptions` の None デフォルトセマンティクスを明記 | Claude |
 | 0.4.5 | 2026-03-22 | 入力参照を requirements.md v0.4.5 に同期（ドメインモデル本体の変更なし） | Claude |
 | 0.4.4 | 2026-03-22 | 第2次レビュー指摘解決: `DiagnosticsScope.WholeProject` と `SummaryScope.WholeProject` の定義に `analysis_targets` 限定句を追加、入力参照を requirements.md v0.4.4 に同期（v0.4.4 の requirements 変更自体はドメインモデル no-op） | Claude |
 | 0.4.3 | 2026-03-22 | レビュー findings 解決: `--level` 非対象階層の報告除外を must exclude に強化し Reporting が射影 owner と明記、`ProjectConfig.targets_explicitly_specified: bool` を追加（class diagram・設計意図・用語集）、入力参照を requirements.md v0.4.3 に同期 | Claude |

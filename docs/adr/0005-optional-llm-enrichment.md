@@ -5,8 +5,8 @@
 | 項目 | 内容 |
 |---|---|
 | 承認日 | 2026-03-18 |
-| 最終更新日 | 2026-03-22 |
-| 改訂 | v0.4.4 |
+| 最終更新日 | 2026-03-26 |
+| 改訂 | v0.4.5 |
 
 ## ステータス
 
@@ -56,15 +56,16 @@
 
 - `REQ-NF-008` の「LLM 非応答でも全体可用性を維持」を満たすには、テンプレート提案を正本とする必要がある
 - `REQ-NF-003` を守るため、スコア・重大度・Exit code はテンプレート側だけで確定させる
-- LLM への入力は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` と `cpg_excerpt` は request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
+- LLM への入力は Application Pipeline が `Diagnostic` と `SourceAnalysis`（ADR-0002 参照）から組み立てる allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` と `cpg_excerpt` は request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
 - LLM 出力は `DiagnosticId` ごとの `LlmSuggestionBundle` として report 層で併記し、`DiagnosticReport` 自体は変更しない
 - **Preflight（request 生成抑止）**: 以下の条件に該当する診断には `LlmEnrichmentRequest` 自体を生成しない。テンプレート提案のみ返す
-  - `SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合（例: `.h` ファイルが C と C++ の両方のソースから include されるプロジェクトで、`source_files` のメタデータだけでは当該ファイルの言語を C か C++ か一意に判定できないケース）
+  - `SourceAnalysis.source_files` から代表ファイルの言語を一意に解決できない場合（v1 の対象言語 Python/TypeScript/Rust/Go ではファイル拡張子から言語が一意に確定するため通常は該当しないが、将来の言語追加時に拡張子が複数言語で共有されるケースへの forward compatibility として条件を保持する）
   - multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合
 - **Preflight failure（request 生成前の障害処理）**: `--llm` が指定されたが `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。`KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の値に設定されている場合も設定エラー（exit code 2）とし、サポートされていないプロバイダ名とサポート済みプロバイダの一覧をエラーメッセージに含める。Preflight 条件（代表ファイルの言語解決不可、multi-file 診断の断片還元不可）に該当する診断は `LlmEnrichmentRequest` を生成せず、テンプレート提案のみ返す。Preflight 条件による request 省略は warning を出さない（正常動作）
 - **Sidecar budget（per `LlmEnrichmentRequest`）**: `connect timeout = 3s`, `overall timeout = 30s`。タイムアウトは個々の `LlmEnrichmentRequest`（= 診断単位の LLM API 呼び出し）ごとに適用する。**v1 ディスパッチポリシー**: v1 では LLM Adapter は逐次実行（max in-flight = 1）とし、並行ディスパッチは行わない。HTTP 応答ステータスに応じた動作は以下の通り:
   - **429 (Too Many Requests)**: `Retry-After` ヘッダーが存在し、かつ aggregate sidecar budget の残時間内に収まる場合は 1 回だけ待機・再送する。`Retry-After` がない、または待機後も 429 が返る場合は当該 request をスキップする
   - **5xx (Server Error)**: リトライせずに当該 request をスキップする
+  - **その他のエラー応答（4xx 等、429 を除く）**: リトライせずに当該 request をスキップする。`stderr` / 構造化ログへ warning（HTTP ステータスコードを含む）を出力する
   - スキップされた request の診断はテンプレート提案のみ返す。コア診断・スコア・Exit code は不変
 - **Aggregate sidecar budget**: 1 回の `kalos check` 実行全体で LLM sidecar に費やす**壁時間（wall-clock time）**の上限は `120s`（暫定値）とする。v1 は逐次実行のため、各 request の所要時間（429 の Retry-After 待機を含む）が累積される。最初の request 送信開始から最後の response 受信完了（またはスキップ決定）までの経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。コア診断・スコア・Exit code は不変。上限超過を `stderr` / 構造化ログへ warning として出力する。暫定値は PoC フィードバックに基づき v1 リリースまでに確定する
 - **Post-dispatch fallback（送信後の障害処理）**: `LlmEnrichmentRequest` の送信後にタイムアウト・非応答・エラーが発生した場合、当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す。コア診断・スコア・Exit code は不変
@@ -101,3 +102,4 @@
 | 2026-03-21 | レビュー指摘解決: LLM 運用帰結（API キー管理・プロバイダ選択・outbound 通信・データ機密性・監査境界）追加 | architecture.md v0.3.0–v0.3.1 |
 | 2026-03-22 | レビュー指摘解決: aggregate sidecar budget（120s 暫定値）追加、v1 ディスパッチポリシー（逐次実行・429/5xx ステータス別処理）追加、URL 秘匿化契約追加 | architecture.md v0.4.0–v0.4.3 |
 | 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | architecture.md v0.4.4 |
+| 2026-03-26 | レビュー指摘解決: 非 429/5xx HTTP エラーの no-retry+skip ポリシー明記、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、ADR-0002 相互参照追加 | architecture.md v0.4.5 |

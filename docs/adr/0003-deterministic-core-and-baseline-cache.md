@@ -5,8 +5,8 @@
 | 項目 | 内容 |
 |---|---|
 | 承認日 | 2026-03-18 |
-| 最終更新日 | 2026-03-22 |
-| 改訂 | v0.4.5 |
+| 最終更新日 | 2026-03-26 |
+| 改訂 | v0.4.6 |
 
 ## ステータス
 
@@ -72,7 +72,7 @@ kalos は同時に以下を満たす必要がある。
 - ベースラインの **永続化対象は全ワークスペース解析に限定** する。`targets_explicitly_specified = true` の実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った **non-diff 全スコープ解析** へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
-- プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。失敗またはスキップされたプラグインの `MetricValue` は baseline 断片から除外し、stale な report-only plugin metric が部分的に残ることを防ぐ
+- プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。失敗またはスキップされたプラグインの `MetricValue` は baseline 断片から除外し、stale な report-only plugin metric が部分的に残ることを防ぐ（ADR-0004 参照）
 - **用語の区別**: 本 ADR では「全ワークスペース解析」（full-workspace analysis）を「`WorkspaceRoot` 配下の全対象ファイルを解析する実行」の意味で使い、「non-diff 全スコープ解析」を「要求された `analysis_targets` 内の全スコープを diff 最適化なしで解析する実行」の意味で使う。後者は解析対象を全ワークスペースへ拡張しない
 - `targets_explicitly_specified = true` の場合は diff 最適化が**上流で**無効化され、`InvalidationPlan` は生成されない（前項参照）。`InvalidationPlan.fallback_to_full` は**全ワークスペース解析の diff フロー内**で次の場合に `true` となる: ベースライン不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない。`fallback_to_full = true` は解析対象のファイル集合自体を変更せず、diff 最適化のみを無効化して全スコープを再計算する
 - コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
@@ -111,3 +111,4 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-20 | `ScopeDiagnosticSnapshot` 保存単位、project scope 再計算規則、プラグインメトリクスのベースライン再利用ゲート追加 | architecture.md v0.2.12 |
 | 2026-03-21 | レビュー指摘解決: subset fallback 文言修正 | architecture.md v0.3.0 |
 | 2026-03-22 | レビュー指摘解決: キャッシュ運用帰結（CI / ローカル / 保存場所）追加、用語の区別（全ワークスペース解析 vs non-diff 全スコープ解析）明文化、`InvalidationPlan` 仕様・`targets_explicitly_specified` 契約追記 | architecture.md v0.4.0–v0.4.5 |
+| 2026-03-26 | レビュー指摘解決: プラグインメトリクスのベースライン再利用に ADR-0004 相互参照追加 | architecture.md v0.4.6 |

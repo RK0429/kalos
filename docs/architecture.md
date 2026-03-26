@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.7 |
-| 最終更新日 | 2026-03-22 |
+| バージョン | 0.4.8 |
+| 最終更新日 | 2026-03-26 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.5, domain_model.md v0.4.5 |
+| 入力 | requirements.md v0.4.6, domain_model.md v0.4.6 |
 
 ## 1. 設計目標
 
@@ -382,7 +382,7 @@ sequenceDiagram
 - ベースライン識別子は `workspace_root_hash + base_snapshot_hash + config_hash + analysis_targets_hash + rule_catalog_version + extractor_version + kalos_version` とする
 - `workspace_root_hash` は `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュであり、異なるチェックアウトパス間でベースラインキャッシュが誤って共有されないことを保証する
 - `analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュであり、解析対象パスが変わった場合にベースラインの不正な再利用を防ぐ。正規化規則: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出し、明示指定時は `WorkspaceRoot` 相対パスへ正規化したソート済み重複排除リストからハッシュを算出する。明示指定は網羅性を判定せず常に部分集合として扱う（ADR-0003 参照）
-- ベースラインキャッシュは `--level` に関わらず全構成要素を保存する（永続化ペイロード: `ScopeMetrics` 全階層 + `ScopeDiagnosticSnapshot` + `OverallScore` + `DependencyIndexManifest`。詳細は §5.2 保存単位を参照）。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない
+- ベースラインキャッシュは `--level` に関わらず全構成要素を保存する（永続化ペイロード: `ScopeMetrics` 全階層 + `ScopeDiagnosticSnapshot` + `OverallScore` + `DependencyIndexManifest`）。`--level` は報告対象の制限であり、キャッシュの保存範囲には影響しない
 - ベースラインキャッシュの永続化対象は全ワークスペース解析に限定する。`analysis_targets` が部分集合の実行は cache を生成せず、既存 cache も読まない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` のみを対象とした non-diff 全スコープ解析へフォールバックする（全ワークスペースへ拡張しない）
 - `base_snapshot_hash` は `--diff <base-ref>` の基準側 tree を表し、現在ワークツリーのハッシュは含めない
 - 外部シンボル解決は `Dependency Symbol Resolver Port` の責務であり、依存定義・lockfile・ローカル stub / metadata cache だけを入力に使う。解決失敗は `SourceAnalysis.warnings` として下流へ渡し、解析時の追加ネットワーク通信は行わない
@@ -601,6 +601,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.8 | 2026-03-26 | 入力参照を v0.4.6 に更新、ベースラインキャッシュ永続化ペイロードの壊れた内部参照（§5.2 保存単位）を除去しインライン記述に一本化 | Claude |
 | 0.4.7 | 2026-03-22 | 入力参照を domain_model.md v0.4.5 に同期（本体の変更なし） | Claude |
 | 0.4.6 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: Plugin Host 責務表の normative ABI 参照リストを更新（ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |
 | 0.4.5 | 2026-03-22 | 第2次レビュー指摘解決: §5.1/§5.2 シーケンス図の `APP->>R` メッセージに `AnalysisMetrics` / `LlmSuggestionBundle?` を追加、`diagnostics_scope` 定義に `analysis_targets` 限定句追加、`summary_scope` 定義に `analysis_targets` 限定句追加、入力参照を domain_model.md v0.4.4 に更新 | Claude |
