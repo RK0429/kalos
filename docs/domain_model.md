@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.6 |
+| バージョン | 0.4.7 |
 | 最終更新日 | 2026-03-26 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.6 |
+| 入力 | requirements.md v0.4.7 |
 
 ## 1. サブドメイン分類
 
@@ -299,7 +299,7 @@ classDiagram
 - Plugin Host は各 plugin `MetricDefinition` を `level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` の read-only view を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する
 - `MetricConfig` はプラグイン SPI へ渡す正規化済み設定マップ。ホストが設定ファイル由来の値を解決してから渡す
 - `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）。`raw_value` または `normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し `MetricValue` を生成しない。`normalized_risk` が有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する
-- `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある
+- `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある。`enabled = false` のルールにバインドされたメトリクスは母集団から除外する。母集団が空の場合（全メトリクスが除外された場合）、`scope_risk = 0.0`（リスクなし）とする
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を報告に含めない（must exclude）。Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて非対象階層の射影を担う。ただし、パターンルールの入力として必要な下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出し保持する。これらは報告・スコア集約の対象にはならない。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
@@ -560,7 +560,7 @@ classDiagram
 - `BaselineFingerprint.config_hash` は、除外パターンの和集合と正規化済み `plugin_manifest` を含む `ProjectConfig` 全体のハッシュ。プラグイン差し替えや設定変更はこの値で再利用可否に反映される
 - `BaselineFingerprint.analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象パスの変更によるベースラインの不正な再利用を防ぐ。**正規化規則**: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化し、ソート済み重複排除リストからハッシュを算出する。明示指定は `WorkspaceRoot` 配下の網羅性を判定せず常に部分集合として扱う（ADR-0003 参照）
 - `DiffBaseline` は `--level` に関わらず以下の全構成要素を保存する（永続化ペイロード）: (1) 全階層の `ScopeMetrics`（丸め済み `scope_risk` を含む function / module / project）、(2) `ScopeDiagnosticSnapshot`（`primary_scope_id` ごとの診断断片）、(3) `OverallScore`（丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score`）、(4) `DependencyIndexManifest`（全スコープ間の依存辺）。`--level` は報告対象の制限であり、保存範囲には影響しない。これにより、異なる `--level` での実行間でもベースラインを再利用できる
-- `InvalidationPlan` の集合不変条件: (1) `recompute_scopes ∩ reuse_scopes = ∅`（同一スコープが再計算と再利用の両方に属することはない）、(2) `fallback_to_full = false` 時は `recompute_scopes ∪ reuse_scopes = 全既知スコープ`（全スコープがいずれかに分類される）、(3) `AffectedScopeSet.scopes ⊆ recompute_scopes`（影響を受けたスコープは必ず再計算対象）、(4) `fallback_to_full = true` 時は `recompute_scopes` と `reuse_scopes` は無視され、全スコープを対象に non-diff 解析が実行される
+- `InvalidationPlan` の集合不変条件: (1) `recompute_scopes ∩ reuse_scopes = ∅`（同一スコープが再計算と再利用の両方に属することはない）、(2) `fallback_to_full = false` 時は `recompute_scopes ∪ reuse_scopes = 全既知スコープ`（全スコープがいずれかに分類される）、(3) `AffectedScopeSet.scopes ⊆ recompute_scopes`（影響を受けたスコープは必ず再計算対象）、(4) `fallback_to_full = true` 時は `recompute_scopes` と `reuse_scopes` は無視され、現在の `analysis_targets` 内の全スコープを対象に non-diff 再計算が実行される（`analysis_targets` の拡張は行わない）
 - `InvalidationPlan.recompute_scopes` は diff 最適化が有効な限り project スコープの正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` を必ず含む。`OverallScore` と project-level metrics は merged post-change snapshot から再計算し、baseline の project 断片をそのまま最終結果へ流用しない
 - `DiffBaseline` の永続化は全ワークスペース解析に限定する。`analysis_targets` が全 target 群の部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合は diff 最適化を無効化し、要求された `analysis_targets` のみを対象に `--level` を保った non-diff 全スコープ解析へフォールバックする（全ワークスペースへ拡張しない）
 - `ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id == scope_id` を満たす診断だけを保持する。これにより診断断片の永続化単位が一意に定まり、差分モードでもプロジェクト全体の重大度件数を再構成できる。完全な `DiagnosticReport` をキャッシュへ保存する必要はない
@@ -656,8 +656,8 @@ classDiagram
         +Severity severity
         +Language language
         +FilePath workspace_relative_path
-        +Option~MetricContext~ metric
-        +Option~PatternContext~ pattern
+        +Option~MetricObservation~ metric
+        +Option~PatternEvidence~ pattern
         +Option~SourceExcerpt~ source_excerpt
         +Option~CpgSubgraphExcerpt~ cpg_excerpt
     }
@@ -862,6 +862,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.7 | 2026-03-26 | レビュー指摘解決: `scope_risk` の空母集団規則（`0.0`）を設計意図に追記、`InvalidationPlan` 不変条件 (4) の `fallback_to_full` 文言を `analysis_targets` 内に限定、`LlmEnrichmentRequest` の `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 | Claude |
 | 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、`ReportViewOptions` の None デフォルトセマンティクスを明記 | Claude |
 | 0.4.5 | 2026-03-22 | 入力参照を requirements.md v0.4.5 に同期（ドメインモデル本体の変更なし） | Claude |
 | 0.4.4 | 2026-03-22 | 第2次レビュー指摘解決: `DiagnosticsScope.WholeProject` と `SummaryScope.WholeProject` の定義に `analysis_targets` 限定句を追加、入力参照を requirements.md v0.4.4 に同期（v0.4.4 の requirements 変更自体はドメインモデル no-op） | Claude |

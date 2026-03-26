@@ -475,8 +475,8 @@ classDiagram
         +Severity severity
         +Language language
         +FilePath workspace_relative_path
-        +Option~MetricContext~ metric
-        +Option~PatternContext~ pattern
+        +Option~MetricObservation~ metric
+        +Option~PatternEvidence~ pattern
         +Option~SourceExcerpt~ source_excerpt
         +Option~CpgSubgraphExcerpt~ cpg_excerpt
     }
@@ -679,6 +679,7 @@ requirements.md と domain_model.md にも同セマンティクスを伝播す�
 
 | 日付 | 変更内容 |
 |---|---|
+| 2026-03-26 | §16 の `LlmEnrichmentRequest` 図で `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 |
 | 2026-03-26 | 出所整合修正: ADR-0002 行の出所タグを凡例準拠の `（v0.4.1）` に修正、F-1 根拠から対象外の ADR-0004 ScopeId 直列化契約への依存を除去し domain_model.md の ScopeId 定義に差し替え |
 | 2026-03-26 | 追跡性・出所修正: v0.4.0 フォローアップ根拠セクション（F-1–F-4）追加、ADR-0004 行の出所を改訂履歴と整合（全項目を v0.4.0 に帰属）、§20 更新対象に ADR-0002 を追加、更新対象一覧に ADR-0002 行を追加 |
 | 2026-03-22 | 第2次レビュー指摘解決: 初回件数を 18→19 に修正、`SummaryScope.WholeProject` の定義に `analysis_targets` 限定句を追加、最終更新日・変更履歴を追加 |

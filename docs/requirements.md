@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.6 |
+| バージョン | 0.4.7 |
 | 最終更新日 | 2026-03-26 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -403,7 +403,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度
   - `--diff <base-ref>`: 変更ファイル再抽出 + ベースライン再利用による差分解析
-  - `--llm`: LLM連携による改善提案を有効化
+  - `--llm`: LLM連携による改善提案を有効化（full / diff 両モードで動作する。diff mode では `AffectedScopeSet` に属する診断のみをエンリッチ対象とする）
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
   - Given 有効なプロジェクトディレクトリ, When 位置引数なしで `kalos check` を実行, Then WorkspaceRoot（正規形 `["."]`）をデフォルト対象として全ワークスペースが解析され、診断結果が端末に表示される。この実行は全ワークスペース解析としてベースライン生成（write-back）の対象となる（ベースラインの消費は `--diff` 実行時のみ）
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.7 | 2026-03-26 | レビュー findings 解決: REQ-FUNC-018 の `--llm` に full/diff 両モード動作とエンリッチ対象スコープを明記 | Claude |
 | 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加（ADR-0004・domain_model.md と同期） | Claude |
 | 0.4.5 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: REQ-FUNC-012 の normative ABI 参照リストを更新（ScopeId 直列化契約、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |
 | 0.4.4 | 2026-03-22 | レビュー findings 解決: REQ-FUNC-012 にSPI v1 ABI normative 参照（ADR-0004）を追加、REQ-NF-009 Preflight failure に unsupported `KALOS_LLM_PROVIDER` の設定エラー（exit code 2）を追加（ADR-0005） | Claude |

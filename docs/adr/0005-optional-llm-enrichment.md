@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-26 |
-| 改訂 | v0.4.5 |
+| 改訂 | v0.4.6 |
 
 ## ステータス
 
@@ -56,6 +56,7 @@
 
 - `REQ-NF-008` の「LLM 非応答でも全体可用性を維持」を満たすには、テンプレート提案を正本とする必要がある
 - `REQ-NF-003` を守るため、スコア・重大度・Exit code はテンプレート側だけで確定させる
+- **決定論性契約との関係**: `llm_suggestion`（`LlmSuggestionBundle`）は ADR-0003 の決定論性契約の適用範囲外である。LLM 応答の非決定性、wall-clock budget の消費状況、ネットワーク状態により、同一入力・同一設定でも `llm_suggestion` の有無・内容は変動しうる。決定論性契約が保証する出力要素（`ScopeMetrics`、`Diagnostic`、`OverallScore`、`DiagnosticReport`、Exit code、評価順序）は `--llm` の有無にかかわらず不変である
 - LLM への入力は Application Pipeline が `Diagnostic` と `SourceAnalysis`（ADR-0002 参照）から組み立てる allowlist 済み `LlmEnrichmentRequest` `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }` に限定する。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` と `cpg_excerpt` は request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。必須根拠を代表ファイル断片へ還元できる場合にだけ request を生成する
 - LLM 出力は `DiagnosticId` ごとの `LlmSuggestionBundle` として report 層で併記し、`DiagnosticReport` 自体は変更しない
 - **Preflight（request 生成抑止）**: 以下の条件に該当する診断には `LlmEnrichmentRequest` 自体を生成しない。テンプレート提案のみ返す
@@ -103,3 +104,4 @@
 | 2026-03-22 | レビュー指摘解決: aggregate sidecar budget（120s 暫定値）追加、v1 ディスパッチポリシー（逐次実行・429/5xx ステータス別処理）追加、URL 秘匿化契約追加 | architecture.md v0.4.0–v0.4.3 |
 | 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | architecture.md v0.4.4 |
 | 2026-03-26 | レビュー指摘解決: 非 429/5xx HTTP エラーの no-retry+skip ポリシー明記、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、ADR-0002 相互参照追加 | architecture.md v0.4.5 |
+| 2026-03-26 | レビュー指摘解決: 決定論性契約との関係を明示し、`llm_suggestion` が ADR-0003 の適用範囲外であることを追記 | architecture.md v0.4.6 |

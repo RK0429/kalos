@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.8 |
+| バージョン | 0.4.9 |
 | 最終更新日 | 2026-03-26 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.6, domain_model.md v0.4.6 |
+| 入力 | requirements.md v0.4.7, domain_model.md v0.4.7 |
 
 ## 1. 設計目標
 
@@ -162,7 +162,7 @@ graph TB
 | Managed Tool Cache Adapter | CodeQL bundle の bootstrap、checksum 検証、ローカル cache 解決 | kalos release と一体で versioning された固定版 manifest、cache directory | 解決済み extractor bundle | `REQ-FUNC-031`, `REQ-FUNC-032`, `REQ-NF-009`, `REQ-NF-010` |
 | Metrics | メトリクス計算、正規化、階層スコア集約。`enabled = false` のルールにバインドされたメトリクスは計算・`metrics` 出力は維持するが、`scope_risk` 算術平均の母集団から除外する | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用。`enabled = false` のルールは診断を生成せず、当該ルールにバインドされたメトリクスは `scope_risk` 集約から除外される（スコアリング・summary・exit code に影響しない） | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `List<Diagnostic>` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-026`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
-| Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | 標準出力 / ファイル出力 | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
+| Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | フォーマット済み出力（stdout） | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
 | Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディング、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
@@ -321,6 +321,7 @@ sequenceDiagram
     participant Impact as Impact Analysis
     participant M as Metrics
     participant D as Diagnostics
+    participant LLM as Optional LLM
     participant R as Reporting
 
     U->>CLI: kalos check --diff <base-ref>
@@ -341,6 +342,8 @@ sequenceDiagram
         M-->>APP: 統合済み AnalysisMetrics
         APP->>D: 統合済みメトリクスで診断
         D-->>APP: 差分対象 List<Diagnostic>
+        APP->>LLM: 任意のエンリッチ要求
+        LLM-->>APP: LlmSuggestionBundle?
         APP->>R: DiagnosticReport / AnalysisMetrics / ReportMetadata / ReportViewOptions / LlmSuggestionBundle? を含めて出力変換
         APP->>Cache: ベースライン保存（全ワークスペース解析時）
         R-->>U: 差分対象診断 + diagnostics_scope=affected_only + プロジェクト全体 summary
@@ -601,6 +604,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.9 | 2026-03-26 | レビュー findings 解決: §5.2 差分解析シーケンス図に Optional LLM の participant と interaction を追加（§5.1 と整合）、Reporting 責務表の出力を「フォーマット済み出力（stdout）」に修正（未定義のファイル出力機能を排除） | Claude |
 | 0.4.8 | 2026-03-26 | 入力参照を v0.4.6 に更新、ベースラインキャッシュ永続化ペイロードの壊れた内部参照（§5.2 保存単位）を除去しインライン記述に一本化 | Claude |
 | 0.4.7 | 2026-03-22 | 入力参照を domain_model.md v0.4.5 に同期（本体の変更なし） | Claude |
 | 0.4.6 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: Plugin Host 責務表の normative ABI 参照リストを更新（ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |

@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-26 |
-| 改訂 | v0.4.6 |
+| 改訂 | v0.4.7 |
 
 ## ステータス
 
@@ -59,6 +59,7 @@ kalos は同時に以下を満たす必要がある。
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
 - `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `SummaryScope::WholeProject`（JSON wire value: `"whole_project"`）、`--level function|module|project` では `SummaryScope::ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでもこの契約は変えない
+- **決定論性契約の適用範囲**: `REQ-NF-003` のビット単位一致は、コア評価パイプライン（CPG 抽出 → メトリクス算出 → 診断生成 → レポート組立）の出力に適用する。具体的には `ScopeMetrics`、`Diagnostic`（重大度を含む）、`OverallScore`、`DiagnosticReport`、Exit code、および評価順序が対象である。`--llm` 指定時に後段で付加される `llm_suggestion`（`LlmSuggestionBundle`）は決定論性契約の適用範囲外とする（ADR-0005 参照）。LLM 応答は本質的に非決定的であり、wall-clock budget やネットワーク状態にも依存するため、同一入力でも `llm_suggestion` の有無・内容は再現性を保証しない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
   - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
@@ -112,3 +113,4 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-21 | レビュー指摘解決: subset fallback 文言修正 | architecture.md v0.3.0 |
 | 2026-03-22 | レビュー指摘解決: キャッシュ運用帰結（CI / ローカル / 保存場所）追加、用語の区別（全ワークスペース解析 vs non-diff 全スコープ解析）明文化、`InvalidationPlan` 仕様・`targets_explicitly_specified` 契約追記 | architecture.md v0.4.0–v0.4.5 |
 | 2026-03-26 | レビュー指摘解決: プラグインメトリクスのベースライン再利用に ADR-0004 相互参照追加 | architecture.md v0.4.6 |
+| 2026-03-26 | レビュー指摘解決: 決定論性契約の適用範囲を明示し、`llm_suggestion` が範囲外であることを ADR-0005 相互参照付きで追記 | architecture.md v0.4.7 |
