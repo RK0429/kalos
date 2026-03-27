@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.7 |
+| 改訂 | v0.4.8 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -126,7 +126,7 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 - リリース・配布・CI 統合が単純になる
   - **保証範囲**: 「単一バイナリ」は kalos 実行ファイル自体を指す。CodeQL bundle および WASM プラグインは kalos バイナリに同梱されない外部アーティファクトであり、責務の範囲が異なる:
     - **CodeQL bundle**（ADR-0002）: Managed Tool Cache Adapter が取得（初回 bootstrap）・checksum 検証・ローカルキャッシュの全ライフサイクルを担う。ユーザーは手動で配置する必要がない
-    - **WASM プラグイン**（ADR-0004）: ユーザーがワークスペースに配置し、`.kalos.toml` の `[[plugins]]` 配列テーブル（`path`, `sha256` キー。構文例は [requirements.md REQ-FUNC-025](../requirements.md) 参照）で登録する。kalos は `sha256` checksum 検証と SPI version 検証を行うが、取得・配布は行わない
+    - **WASM プラグイン**（ADR-0004）: ユーザーがワークスペースに配置し、`.kalos.toml` の `[[plugins]]` 配列テーブル（`path`, `sha256` キー。構文例は [requirements.md REQ-FUNC-025](../requirements.md#req-func-025-プロジェクト設定ファイルの読み込み) 参照）で登録する。kalos は `sha256` checksum 検証と SPI version 検証を行うが、取得・配布は行わない
     - 配布物としてはバイナリ単体を単位とする
 - ベンチマーク、スナップショットテスト、順序固定を一貫して適用できる
 - ドメインモデルの境界をコード構造へ直接反映しやすい
@@ -167,3 +167,4 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 | 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | レビュー指摘解決: WASM プラグイン登録の `[[plugins]]` 記述を有効な TOML 表記に修正（requirements.md REQ-FUNC-025 参照を追加）、architecture.md §4.2 リンクにセクションアンカーを追加 | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |
+| 2026-03-27 | provenance sync: REQ-FUNC-025 参照にセクションアンカーを追加、`関連文書版` を最新に同期 | arch v0.4.23 / req v0.4.14 / dm v0.4.13 |

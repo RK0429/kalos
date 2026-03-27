@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.14 |
+| 改訂 | v0.4.15 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -16,7 +16,7 @@
 
 ## コンテキスト
 
-要件では、ユーザーが独自メトリクスを追加できる拡張機構が求められている。v1 ではユーザー入力面は `.kalos.toml` の `[[plugins]]` 配列テーブル（`path`, `sha256` キー。構文例は [requirements.md REQ-FUNC-025](../requirements.md) 参照）とし、`path` は解決済み `WorkspaceRoot` 基準で解釈する。そこから解決した内部表現 `plugin_manifest` を Plugin Host の正本とする。外部の配布パッケージ形式は将来拡張へ残す。
+要件では、ユーザーが独自メトリクスを追加できる拡張機構が求められている。v1 ではユーザー入力面は `.kalos.toml` の `[[plugins]]` 配列テーブル（`path`, `sha256` キー。構文例は [requirements.md REQ-FUNC-025](../requirements.md#req-func-025-プロジェクト設定ファイルの読み込み) 参照）とし、`path` は解決済み `WorkspaceRoot` 基準で解釈する。そこから解決した内部表現 `plugin_manifest` を Plugin Host の正本とする。外部の配布パッケージ形式は将来拡張へ残す。
 
 - `REQ-FUNC-012` — メトリクス定義のプラグイン拡張
 - `REQ-NF-001` — 中規模プロジェクトの全階層解析時間（60s 以内）
@@ -170,3 +170,4 @@
 | 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | レビュー指摘解決: コンテキスト・根拠の `[[plugins]]` 記述を有効な TOML 表記に修正（requirements.md REQ-FUNC-025 参照を追加） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |
+| 2026-03-27 | provenance sync: REQ-FUNC-025 参照にセクションアンカーを追加、`関連文書版` を最新に同期 | arch v0.4.23 / req v0.4.14 / dm v0.4.13 |

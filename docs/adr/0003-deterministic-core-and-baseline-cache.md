@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.17 |
+| 改訂 | v0.4.18 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / domain_model.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -135,3 +135,4 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | レビュー指摘解決: architecture.md §5.2 リンクにセクションアンカーを追加 | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.23 / domain_model.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.23 / req v0.4.14 / dm v0.4.13 |
