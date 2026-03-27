@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.12 |
+| バージョン | 0.4.13 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.13 |
+| 入力 | requirements.md v0.4.14 |
 
 ## 1. サブドメイン分類
 
@@ -864,6 +864,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.13 | 2026-03-27 | 入力参照を requirements.md v0.4.14 に同期（本体の変更なし） | Claude |
 | 0.4.12 | 2026-03-27 | 入力参照を requirements.md v0.4.13 に同期（本体の変更なし） | Claude |
 | 0.4.11 | 2026-03-27 | §3.1 設計意図に `NodeKind` / `EdgeKind` の SPI v1 discriminant mapping の cross-reference を追加（ADR-0004 が正規定義、enum 宣言順と整数値割当ての一致制約を明記）、入力参照を requirements.md v0.4.11 に同期 | Claude |
 | 0.4.10 | 2026-03-27 | レビュー findings 解決: `AnalysisMetrics` の `--level` 契約を統一（常に全階層を算出・保持、Reporting が射影 owner）、`project_metrics = None` のセマンティクスを「スコープ不在」に修正、`ProjectConfig` に `analysis_targets` フィールドを追加しキャリア・ライフサイクルを明示、用語集 `AnalysisMetrics` / `ProjectConfig` 定義を更新、入力参照を requirements.md v0.4.10 に更新 | Claude |

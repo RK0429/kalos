@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.5 |
+| 改訂 | v0.4.6 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -130,3 +130,4 @@ Python/TS/Rust/Go で最適エンジンを変える。
 | 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する SourceAnalysis・UnifiedCpg・source_files 契約の出所を明示） | arch v0.4.16 / req v0.4.10 / dm v0.4.11 |
 | 2026-03-27 | provenance 整備: 凡例を ADR-0003..0005 と整合（単独版/範囲表記の意味論・同日エントリ順序の注記を追加） | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
 | 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |

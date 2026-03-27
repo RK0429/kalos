@@ -513,6 +513,8 @@ ADR-0001 の帰結に保証範囲の明確化を追加する。CodeQL bundle と
 >
 > 配布物としてはバイナリ単体を単位とする。
 
+※ 上記引用中の `[[plugins]] { path, sha256 }` は本メモ初版（v0.3.0）当時の簡略表記であり、現行の正式な TOML 構文ではない。現行形式は requirements.md の `.kalos.toml` 設定例（`[[plugins]]` テーブル配列形式）を参照。
+
 ### 適用先
 
 | 文書 | 更新内容 |
@@ -619,7 +621,7 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 
 再レビュー指摘に基づき、v0.4.0 フォローアップとして以下の更新を行った。これらは §1–§21 の設計判断を拡張するものであり、適用先一覧で「（v0.4.0）」と表示される項目の設計根拠を提供する。
 
-### F-1. Project scope 正規形の 3-field 表記統一（§5「Subset analysis_targets」・§13「InvalidationPlan の集合不変条件」拡張）
+### F-1. Project scope 正規形の 3-field 表記統一（§5「Subset analysis_targets のフォールバックセマンティクス」・§13「InvalidationPlan の集合不変条件」拡張）
 
 **指摘**: `ScopeId` の project-level 表現が文書間で不統一（2-field と 3-field が混在）。
 
@@ -627,7 +629,7 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 
 **更新文書**: architecture.md、domain_model.md
 
-### F-2. `normalized_risk` の invalid-value セマンティクス（§2「enabled = false のセマンティクス」拡張、ADR-0004 連動）
+### F-2. `normalized_risk` の invalid-value セマンティクス（§2「rules.<RuleId>.enabled = false のセマンティクス」拡張、ADR-0004 連動）
 
 **指摘**: WASM プラグインが返す `normalized_risk` の NaN / ±Inf / 範囲外値に対する振る舞いが未定義であり、`MetricValue` の不変条件とスコアリングパイプラインの整合性が保証されなかった。
 
@@ -635,11 +637,11 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 - `NaN` または `±Inf` → 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない
 - 有限だが `[0.0, 1.0]` 範囲外 → `clamp(normalized_risk, 0.0, 1.0)` で補正し warning を出力
 
-requirements.md と domain_model.md にも同セマンティクスを伝播する。これにより `REQ-NF-003`（決定論性）の保護と、§2「enabled = false のセマンティクス」で前提とする `MetricValue` の整合性を維持する。
+requirements.md と domain_model.md にも同セマンティクスを伝播する。これにより `REQ-NF-003`（決定論性）の保護と、§2「rules.<RuleId>.enabled = false のセマンティクス」で前提とする `MetricValue` の整合性を維持する。
 
 **更新文書**: requirements.md、domain_model.md、adr/0004-wasm-metric-plugin-runtime.md
 
-### F-3. Aggregate fuel budget の diff→全解析フォールバック規約（§5「Subset analysis_targets」拡張、ADR-0004 連動）
+### F-3. Aggregate fuel budget の diff→全解析フォールバック規約（§5「Subset analysis_targets のフォールバックセマンティクス」拡張、ADR-0004 連動）
 
 **指摘**: diff 解析から全解析にフォールバックした場合（`InvalidationPlan.fallback_to_full = true`）の aggregate fuel budget の切替規則が未定義。
 
@@ -681,6 +683,7 @@ requirements.md と domain_model.md にも同セマンティクスを伝播す�
 
 | 日付 | 変更内容 |
 |---|---|
+| 2026-03-27 | F-1/F-2/F-3 の §N 参照を実際の見出し名と一致させ §N「見出し名」方針を徹底、§17 の `[[plugins]] { path, sha256 }` 引用に歴史的表記の注記を追加 |
 | 2026-03-27 | 変更履歴修正: §8→§7、§10 の内部参照に見出し名を付与（§N「見出し名」形式への統一漏れを解消） |
 | 2026-03-27 | 役割の明確化: 目的を履歴記録に一本化、「更新対象」を「適用先」に改称、v0.4.2 以降の出所契約を追加 |
 | 2026-03-27 | レビュー指摘解決: 対象レビューの ADR 横断レビュー記述を具体化（ADR-0001〜ADR-0005 を明示）、内部 § 参照に見出し名を付与して番号ずれへの耐性を向上 |
