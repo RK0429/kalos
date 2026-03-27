@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.3 |
+| 改訂 | v0.4.5 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -118,7 +118,7 @@ Python/TS/Rust/Go で最適エンジンを変える。
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。`arch` は architecture.md、`req` は requirements.md、`dm` は domain_model.md を指す。requirements.md / domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。v0.4.0 以前の改訂では domain_model.md の版を追跡していなかったため、`dm` はそれ以降のエントリに記載する。ADR 改訂日と各文書版の作成日は一致しない場合がある。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`req` は requirements.md、`dm` は domain_model.md を指す。requirements.md / domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。v0.4.0 以前の改訂では domain_model.md の版を追跡していなかったため、`dm` はそれ以降のエントリに記載する。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
@@ -128,3 +128,5 @@ Python/TS/Rust/Go で最適エンジンを変える。
 | 2026-03-27 | レビュー指摘解決: 公開契約型の `ports` 配置を ADR-0001 参照として追記し、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
 | 2026-03-27 | レビュー指摘解決: `判断` セクションに付随判断（Tool Cache Port、CLI 主導 bootstrap、GitHub Action wrapper 限定）を明記し、判断境界を自己完結的に記述 | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
 | 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する SourceAnalysis・UnifiedCpg・source_files 契約の出所を明示） | arch v0.4.16 / req v0.4.10 / dm v0.4.11 |
+| 2026-03-27 | provenance 整備: 凡例を ADR-0003..0005 と整合（単独版/範囲表記の意味論・同日エントリ順序の注記を追加） | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
+| 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |

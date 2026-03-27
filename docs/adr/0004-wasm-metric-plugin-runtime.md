@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.10 |
+| 改訂 | v0.4.12 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -166,3 +166,5 @@
 | 2026-03-27 | レビュー指摘解決: SPI v1 `kind: u32` の規範的 discriminant mapping（NodeKind / EdgeKind）を追加、バリアント変更時の SPI version 更改義務と未知 kind 値のフィルタ規則を明記 | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
 | 2026-03-27 | レビュー指摘解決: SPI v1 列挙契約（Enumeration Contract）を追加 — フィルタ済みカウント、稠密インデックス、列挙順序、エッジの source_index/target_index 再番号付けを規範的に定義 | arch v0.4.12 / req v0.4.9 / dm v0.4.8 |
 | 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する ScopeId・MetricDefinition・MetricValue・NodeKind/EdgeKind 契約の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
+| 2026-03-27 | provenance 整備: `関連文書版` を兄弟文書の最新 traceability 強化版と照合（内容変更なし） | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
+| 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |

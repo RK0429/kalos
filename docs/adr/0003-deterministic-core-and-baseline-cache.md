@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.13 |
+| 改訂 | v0.4.15 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / domain_model.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -60,7 +60,7 @@ kalos は同時に以下を満たす必要がある。
 ## 根拠
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
-- `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `SummaryScope::WholeProject`（JSON wire value: `"whole_project"`）、`--level function|module|project` では `SummaryScope::ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでもこの契約は変えない
+- `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `SummaryScope.WholeProject`（JSON wire value: `"whole_project"`）、`--level function|module|project` では `SummaryScope.ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでもこの契約は変えない
 - **決定論性契約の適用範囲**: `REQ-NF-003` のビット単位一致は、コア評価パイプライン（CPG 抽出 → メトリクス算出 → 診断生成 → レポート組立）の出力に適用する。具体的には `ScopeMetrics`、`Diagnostic`（重大度を含む）、`List<Diagnostic>` の emission order（後述）、`OverallScore`、`DiagnosticReport`、Exit code、および評価順序が対象である。`--llm` 指定時に後段で付加される `llm_suggestion`（`LlmSuggestionBundle`）は決定論性契約の適用範囲外とする（ADR-0005 参照）。LLM 応答は本質的に非決定的であり、wall-clock budget やネットワーク状態にも依存するため、同一入力でも `llm_suggestion` の有無・内容は再現性を保証しない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
   - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する。**正規化規則**: 以下の手順を順に適用した結果の UTF-8 バイト列を SHA-256 でハッシュする
@@ -79,7 +79,7 @@ kalos は同時に以下を満たす必要がある。
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。保存範囲も変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
 - ベースラインの **write-back 契約**: 書き込み条件は全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）。書き込みタイミングは `DiagnosticReport` の assemble 完了後、exit code 返却前。一時ファイルへ書き込み後にリネームし、部分書き込みを防ぐ。kalos 自体の実行エラー（exit code 2）では書き込まない。詳細は [architecture.md §5.2](../architecture.md) の write-back 契約を参照
 - ベースラインの **永続化対象は全ワークスペース解析に限定** する。`targets_explicitly_specified = true` の実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った **non-diff 全スコープ解析** へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
-- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。コンテキスト間で共有されるこれらの型の配置は ADR-0001 の依存方向ルール（`ports` モジュール）に従う。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
+- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。コンテキスト間で共有されるこれらの型の配置は [ADR-0001](./0001-adopt-modular-monolith.md) 帰結「リスク」節の公開契約型配置ルール（`ports` モジュール。domain_model.md §2 コンテキストマップの PL として定義）に従う。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
 - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。失敗またはスキップされたプラグインの `MetricValue` は baseline 断片から除外し、stale な report-only plugin metric が部分的に残ることを防ぐ（ADR-0004 参照）
 - **用語の区別**: 本 ADR では「全ワークスペース解析」（full-workspace analysis）を「`WorkspaceRoot` 配下の全対象ファイルを解析する実行」の意味で使い、「non-diff 全スコープ解析」を「要求された `analysis_targets` 内の全スコープを diff 最適化なしで解析する実行」の意味で使う。後者は解析対象を全ワークスペースへ拡張しない
@@ -114,7 +114,7 @@ kalos は同時に以下を満たす必要がある。
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`dm` は domain_model.md、`req` は requirements.md を指す。requirements.md および domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。`dm` の追跡は v0.4.13 で導入した（本文が依拠する型定義の出典を明示するため）。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`req` は requirements.md、`dm` は domain_model.md を指す。requirements.md / domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。`dm` の追跡は v0.4.13 で導入した（本文が依拠する型定義の出典を明示するため）。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
@@ -130,4 +130,6 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-27 | レビュー指摘解決: `workspace_root_hash` の正規化規則（シンボリックリンク解決・末尾セパレータ除去・Windows 固有処理）とキャッシュ再利用スコープを明文化 | arch v0.4.12 / req v0.4.9 |
 | 2026-03-27 | レビュー指摘解決: `List<Diagnostic>` emission order を `(primary_scope_id, rule_id)` 辞書順として規範的に定義し、決定論性契約の適用範囲に追加（ADR-0005 ディスパッチ順序の根拠） | arch v0.4.12 / req v0.4.9 |
 | 2026-03-27 | 再レビュー指摘解決: `List<Diagnostic>` emission order を `(primary_scope_id, rule_id, id)` の三要素辞書順に拡張し全順序（total order）を保証（同一 `(primary_scope_id, rule_id)` の重複時の決定論的順序） | arch v0.4.16 / req v0.4.10 |
-| 2026-03-27 | provenance 整備: 本文が依拠する型定義の出典として domain_model.md を `関連文書版` の追跡対象に追加。メタ注記・凡例を更新 | arch v0.4.18 / dm v0.4.11 / req v0.4.11 |
+| 2026-03-27 | provenance 整備: 本文が依拠する型定義の出典として domain_model.md を `関連文書版` の追跡対象に追加。メタ注記・凡例を更新 | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
+| 2026-03-27 | provenance 整備: 共有契約型（`ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest`）の配置ルール traceability を強化（ADR-0001 帰結「リスク」節参照の明確化）。`SummaryScope` 表記を domain_model.md の dot 表記に統一。凡例の略称順を他 ADR と整合 | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
+| 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |

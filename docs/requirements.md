@@ -4,11 +4,11 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.11 |
+| バージョン | 0.4.13 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
-| レビュー者 | Codex |
+| レビュー者 | Codex（対象: ~v0.2.12, 2026-03-20。指摘解決は v0.3.0–v0.4.1 で適用。詳細は [design-resolution-memo.md](./design-resolution-memo.md)） |
 
 ## 1. プロジェクト概要
 
@@ -269,11 +269,11 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   4. ある階層にスコープが 0 件の場合、その階層の重みは残る階層へ比例再配分する
   5. `scope_risk`, `level_risk`, `overall_risk` は各段階の算出直後に小数第 6 位で round-half-up し、その値をキャッシュと後続計算に用いる
   6. `overall_risk = Σ(adjusted_weight[level] * level_risk[level])`
-  7. `function_score`, `module_score`, `project_score`, `overall_score` はそれぞれ `round_half_up(100 * (1 - risk))` で整数化する
-  8. `--level function|module|project` により報告対象外となった階層の `*_risk` / `*_score` は、機械可読出力では `null` に写像する（内部では全階層を算出するが、報告射影として省略する。REQ-FUNC-023 参照）
+  7. `function_score`, `module_score`, `project_score`, `overall_score` はそれぞれ `round_half_up(100 * (1 - risk))` で整数化する。ただしステップ 4 で重みが再配分された階層（スコープ 0 件）は `level_risk` が存在しないため、当該階層の `*_score` は `None`（機械可読出力では `null`）とする。`overall_score` は残存階層の再配分済み重みで算出するため常に存在する
+  8. 機械可読出力では以下の 2 つの独立した理由により `*_score` が `null` に写像される: (a) `--level function|module|project` により報告対象外となった階層（Reporting 射影として省略。内部では全階層を算出する。REQ-FUNC-023 参照）、(b) 計算可能なスコープが存在しない階層（ステップ 4 / 7 参照）。`--level all` の場合でも (b) に該当する階層は `null` となる
   9. `overall_score` と各階層スコアは常に上記メトリクス集約の結果であり、`summary_scope`・診断件数・exit code 判定から逆算しない
 
-- **出力**: 総合スコア（0〜100 の整数）および各階層の部分スコア
+- **出力**: 総合スコア（0〜100 の整数）および各階層の部分スコア（計算可能なスコープが存在する階層は 0〜100 の整数、存在しない階層は `None`）
 - **受け入れ基準**:
   - Given 全階層のメトリクス結果, When 総合スコアを算出, Then 同一入力から常に同一の総合スコアと各階層スコアが出力される
   - Given 設定ファイルで重みを変更, When 総合スコアを算出, Then 変更後の重みと再配分規則で集約される
@@ -393,7 +393,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **一覧・summary・exit code の母集団**:
   - 診断一覧: non-diff モードでは選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
-  - `--level all`（デフォルト）では、summary と exit code は解決済み `analysis_targets` 内の全階層の診断集合を母集団とする（`SummaryScope::WholeProject`）
+  - `--level all`（デフォルト）では、summary と exit code は解決済み `analysis_targets` 内の全階層の診断集合を母集団とする（`SummaryScope.WholeProject`）
   - `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
   - summary は `summary_scope` に応じて Application Pipeline が materialize する。`summary_scope = listed_diagnostics` では現在の診断一覧から、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
 - **主要オプション**:
@@ -452,14 +452,14 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含める。`--level` に従い対象階層のメトリクスのみを射影し、非対象階層のメトリクスは含めない（must exclude）。この射影は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う。各メトリクスエントリには `participation` フィールド（`"scored_and_diagnosable"` | `"report_only"`）を付与し、当該メトリクスがスコアリング・診断に参加するか report 専用かを識別可能にする。v1 のプラグインメトリクスは `participation = "report_only"` であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
-  - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に REQ-FUNC-011 に従うメトリクス集約済みの 0〜100 の整数であり、`summary` や診断件数から逆算しない。`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
+  - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は `--level all` の場合は常に 0〜100 の整数（REQ-FUNC-011 の全階層メトリクス集約）、`--level function|module|project` の場合は指定階層スコアの射影であり計算可能なスコープが存在しない場合は `null` となる。`summary` や診断件数から逆算しない。`function` / `module` / `project` は、対象階層かつ計算可能なスコープが存在する場合は 0〜100 の整数、非対象階層または計算可能なスコープが存在しない場合は `null` とする
   - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は non-diff モードで「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする。`whole_project` は解決済み `analysis_targets` 内の全階層の診断を母集団とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
-  - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` はすべて整数となる
-  - Given `--level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は整数、`scores.module` と `scores.project` は `null` となり、`metrics` には関数レベルのメトリクスのみが含まれ module / project レベルのメトリクスは含まれない
+  - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` は計算可能なスコープが存在する階層では整数、存在しない階層では `null` となる
+  - Given `--level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は計算可能な function スコープが存在する場合は整数（存在しない場合はいずれも `null`）、`scores.module` と `scores.project` は `null` となり、`metrics` には関数レベルのメトリクスのみが含まれ module / project レベルのメトリクスは含まれない
   - Given `--diff <base-ref> --level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` となる
-  - Given `--diff <base-ref> --level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は整数、`scores.module` と `scores.project` は `null` となり、`metrics` には関数レベルのメトリクスのみが含まれ module / project レベルのメトリクスは含まれない
+  - Given `--diff <base-ref> --level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は計算可能な function スコープが存在する場合は整数（存在しない場合はいずれも `null`）、`scores.module` と `scores.project` は `null` となり、`metrics` には関数レベルのメトリクスのみが含まれ module / project レベルのメトリクスは含まれない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
@@ -507,7 +507,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では常に全階層（function / module / project）のメトリクス算出・診断生成を実行する（ベースラインキャッシュの保存不変条件として全階層の結果が必要なため。ADR-0003 参照）。`--level` による非対象階層の報告除外は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`（解決済み `analysis_targets` 内の全階層を母集団とする）
-  - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。全階層は常に内部的に算出されるが、非対象階層は報告に含めない（must exclude）。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
+  - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。全階層は常に内部的に算出されるが、非対象階層は報告に含めない（must exclude）。総合スコアは指定階層の `level_risk` から算出する（指定階層に計算可能なスコープが存在しない場合は `null`）。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
@@ -668,7 +668,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - baseline cache の再利用は best-effort とし、checkout path が変わる CI や cache 未復元環境では correctness を優先して全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
   - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は変更後の解決済み `analysis_targets` 全体（`summary_scope = "whole_project"`）を母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
-  - `--level function|module|project` の場合、重大度別件数と exit code は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする。`scores.overall` は post-change 状態の指定階層メトリクスから算出した総合スコア、非対象階層の `scores.*` は `null` とする
+  - `--level function|module|project` の場合、重大度別件数と exit code は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする。`scores.overall` は post-change 状態の指定階層メトリクスから算出した総合スコア（指定階層に計算可能なスコープが存在しない場合は `null`）、非対象階層の `scores.*` は `null` とする
   - フォールバック通知や bootstrap 通知などの運用メッセージは `stderr` にのみ出力し、`stdout` は要求された形式（human/json/sarif）を保つ
 - **受け入れ基準**:
   - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後の解決済み `analysis_targets` 全体値（merged post-change）として出力される
@@ -825,6 +825,8 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.13 | 2026-03-27 | provenance 整備: レビュー者メタ情報にレビュー対象版・日付を追記、`SummaryScope::WholeProject` 表記を domain_model.md の dot 表記（`SummaryScope.WholeProject`）に統一 | Claude |
+| 0.4.12 | 2026-03-27 | `scores` nullability 契約の統一: `scores.overall` / `scores.function` / `scores.module` / `scores.project` の `null` 条件を「非対象階層」と「計算可能なスコープ不在」の 2 源に明確化し domain_model.md と整合（REQ-FUNC-011 ステップ 7/8、REQ-FUNC-020、REQ-FUNC-023、REQ-FUNC-032） | Claude |
 | 0.4.11 | 2026-03-27 | レビュー findings 解決: REQ-FUNC-012 の normative ABI 参照リストに §SPI v1 列挙契約を追加（ADR-0004 のフィルタ済みカウント/インデックス空間・再番号付けセマンティクスへのトレーサビリティ確保） | Claude |
 | 0.4.10 | 2026-03-27 | レビュー findings 解決: REQ-FUNC-023 の `--level` 内部動作を「追加で算出してよい」から「常に全階層を算出する」に強化し、Reporting が射影 owner と明記（ADR-0003 保存不変条件との整合） | Claude |
 | 0.4.9 | 2026-03-27 | レビュー findings 解決: REQ-NF-008〜010 の依存ラベルを「LLM可用性・外部通信・オフライン制約」に修正（LLM 限定表現の是正） | Claude |

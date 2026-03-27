@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.3 |
+| 改訂 | v0.4.5 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -147,12 +147,12 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
   - `adapters` → `ports`
   - `domains` → `ports`（ポートインターフェースおよび Published Language 型の参照。ドメインがポート定義に依存するのは Hexagonal Architecture の正規の依存方向である）
   - `domains` 間は公開契約（Port 経由）でのみ接続する
-  - **公開契約型の配置**: コンテキスト間で共有する Published Language 型（domain_model.md §2 の PL。例: `SourceAnalysis`、`ScopeMetrics`）は `ports` モジュールに定義する。上記 `domains` → `ports` および `adapters` → `ports` により、双方から参照可能な唯一の共有配置場所となる
+  - **公開契約型の配置**: コンテキスト間で共有する Published Language 型（domain_model.md §2 コンテキストマップの PL。例: `SourceAnalysis`、`ScopeMetrics`）は `ports` モジュールに定義する。上記 `domains` → `ports` および `adapters` → `ports` により、双方から参照可能な唯一の共有配置場所となる。この配置ルールは [architecture.md §4.2](../architecture.md)（依存方向）で実施され、ADR-0003 / ADR-0004 の共有契約型もこのルールに従う
   - `domains` → `adapters` の直接依存、`adapters` → `domains` の直接依存は禁止する
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。`arch` は architecture.md、`req` は requirements.md、`dm` は domain_model.md を指す。requirements.md / domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。v0.4.0 以前の改訂では domain_model.md の版を追跡していなかったため、`dm` はそれ以降のエントリに記載する。ADR 改訂日と各文書版の作成日は一致しない場合がある。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`req` は requirements.md、`dm` は domain_model.md を指す。requirements.md / domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。v0.4.0 以前の改訂では domain_model.md の版を追跡していなかったため、`dm` はそれ以降のエントリに記載する。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
@@ -162,4 +162,6 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 | 2026-03-22 | レビュー指摘解決: 許可する依存方向ルール追記、差分解析/ベースラインの Application Pipeline 配下での位置づけ追記 | arch v0.4.0 / req v0.4.0 / dm v0.4.0 |
 | 2026-03-27 | レビュー指摘解決: 公開契約型（Published Language）の `ports` モジュール配置ルールを依存方向ルールに追記し、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
 | 2026-03-27 | レビュー指摘解決: `domains` → `ports` を許可する依存方向に明示追加。公開契約型の配置説明を許可エッジの列挙と整合するよう修正 | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
-| 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（公開契約型が依拠する domain_model.md §2 Published Language の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
+| 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（公開契約型が依拠する domain_model.md §2（コンテキストマップ）の Published Language の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
+| 2026-03-27 | provenance 整備: 公開契約型配置ルールの cross-document traceability を強化（architecture.md §4.2 / ADR-0003 / ADR-0004 相互参照追加）。凡例を ADR-0003..0005 と整合（単独版/範囲表記の意味論・同日エントリ順序の注記を追加）。改訂履歴の節名表記を修正 | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
+| 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |

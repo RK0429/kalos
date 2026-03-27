@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.18 |
+| バージョン | 0.4.20 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.11, domain_model.md v0.4.11 |
+| 入力 | requirements.md v0.4.13, domain_model.md v0.4.12 |
 
 ## 1. 設計目標
 
@@ -610,6 +610,8 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.20 | 2026-03-27 | 入力参照を domain_model.md v0.4.12 に同期し、ADR provenance 導出規則との整合を回復（本体の変更なし） | Claude |
+| 0.4.19 | 2026-03-27 | 入力参照を requirements.md v0.4.13 に同期（本体の変更なし） | Claude |
 | 0.4.18 | 2026-03-27 | 入力参照を requirements.md v0.4.11 に同期（本体の変更なし） | Claude |
 | 0.4.17 | 2026-03-27 | レビュー findings 解決: §4.1 Plugin Host 責務表の normative ABI 参照リストに SPI v1 列挙契約（フィルタ済みカウント/インデックス空間・再番号付け）を追加（ADR-0004 へのトレーサビリティ確保） | Claude |
 | 0.4.16 | 2026-03-27 | §4.1 責務表: Application Pipeline 出力に `LlmSuggestionBundle?` を追加（Reporting 入力契約との整合） | Claude |
