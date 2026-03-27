@@ -6,9 +6,9 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.8 |
+| 改訂 | v0.4.10 |
 
-> **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
+> **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
 ## ステータス
 
@@ -95,6 +95,11 @@
     - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
     - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
   - **線形メモリデータレイアウト**: ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian のバイナリレイアウトとする。エッジレコードは固定長（12 バイト）だが、ノードレコード・ScopeId・config 値は長さプレフィックス付きの可変長レイアウトである。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（`kind` は後述の NodeKind discriminant mapping に従う `u32` 列挙値、可変長）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]`（`kind` は後述の EdgeKind discriminant mapping に従う `u32` 列挙値、固定長 12 バイト）とする。いずれも Little-Endian。**NodeKind / EdgeKind discriminant mapping**: ノードレコード・エッジレコードの `kind: u32` は以下の規範的（normative）マッピングに従う（domain_model.md §3.1 の `NodeKind` / `EdgeKind` enum 定義に対応）。この対応表は `kalos-metric-spi-v1` の一部であり、バリアントの追加・削除・値の再割当ては SPI version の更改を伴う破壊的変更として扱う。ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない（将来の SPI version で追加されたバリアントは v1 プラグインに対してフィルタされる）。NodeKind: `0` = Function, `1` = Class, `2` = Module, `3` = Variable, `4` = Parameter, `5` = ExternalSymbol。EdgeKind: `0` = Call, `1` = DataFlow, `2` = ControlFlow, `3` = Contains, `4` = TypeReference, `5` = Semantic。値は 0 始まりの連続整数で、domain_model.md §3.1 の enum 宣言順と一致する。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す、可変長）とする。**ScopeId レイアウト**: 前述の「ScopeId 直列化契約」で定義する（可変長）。**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「スカラー戻り値エンコーディング」を参照。上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
+  - **SPI v1 列挙契約（Enumeration Contract）**: 前述の NodeKind / EdgeKind discriminant mapping において「ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない」と定めている。このフィルタが `cpg_node_count` / `cpg_edge_count` / `cpg_read_node` / `cpg_read_edge` のカウント・インデックス空間に与える影響を以下に規範的（normative）に定義する:
+    - **フィルタ済みカウント**: `cpg_node_count(scope)` は `UnifiedCpg.subgraph(scope_id)` 内のノードのうち SPI v1 の NodeKind discriminant mapping に含まれる `kind` 値を持つもののみをカウントした値を返す。`cpg_edge_count(scope)` は SPI v1 の EdgeKind discriminant mapping に含まれる `kind` 値を持ち、かつ `source_index` / `target_index` が参照するノードが双方ともフィルタ後のノード集合に含まれるエッジのみをカウントした値を返す。将来の SPI version で追加された未知の `kind` 値を持つレコードはカウントに含めない
+    - **稠密インデックス**: フィルタ後のノード群 / エッジ群はそれぞれ `[0, count)` の稠密な連続整数でインデックスされる（`count` は `cpg_node_count` / `cpg_edge_count` の戻り値）。`cpg_read_node` / `cpg_read_edge` の `index` 引数がこの範囲外の場合、read ヘルパー戻り値契約に従い `-2` を返す
+    - **列挙順序**: フィルタ後のノード群は `UnifiedCpg.subgraph(scope_id)` 内の元の格納順序から未知 NodeKind のレコードを除去した相対順序を保持する。エッジ群も同様に元の格納順序から、未知 EdgeKind のレコードおよびフィルタ済みノードへの参照を持つレコードを除去した相対順序を保持する。この列挙順序は ADR-0003 の決定論性契約により同一入力・同一設定で再現可能である
+    - **エッジの `source_index` / `target_index` 再番号付け**: エッジレコード内の `source_index` / `target_index` はフィルタ後のノードインデックス空間を参照する。ホストは未知 NodeKind のフィルタにより元のインデックスから再番号付け（reindexing）を行い、フィルタ後の稠密インデックス空間との整合性を保証する
   - **WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
 - ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて `kalos_plugin_evaluate(metric_id, scope)` を 1 回ずつ呼び出し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
@@ -146,16 +151,18 @@
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`req` は requirements.md を指す。requirements.md の版は architecture.md メタ情報の `入力` フィールドから導出する。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`req` は requirements.md、`dm` は domain_model.md を指す。requirements.md / domain_model.md の版は architecture.md メタ情報の `入力` フィールドから導出する。v0.4.0 以前の改訂では domain_model.md の版を追跡していなかったため、`dm` はそれ以降のエントリに記載する。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
 | 2026-03-18 | 初版承認 | arch v0.1.0 / req v0.1.0 |
 | 2026-03-19 | SPI 設計（host/plugin exports）追加、fuel budget（per-invocation / aggregate）追加、`plugin_manifest` 正規化・SPI 互換性契約追加、`MetricDefinition` 登録契約・`metric_id` 衝突処理追加 | arch v0.2.0–v0.2.11 / req v0.2.0–v0.2.11 |
 | 2026-03-20 | 評価順序（`workspace_relative_path → metric_id → ScopeId` 辞書順）追加、aggregate fuel budget の diff mode 値追加 | arch v0.2.12 / req v0.2.11 |
-| 2026-03-22 | レビュー指摘解決: WASM instance lifecycle（初期化・評価・破棄）追加、線形メモリ管理（上限・トラップ）追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加 | arch v0.4.0–v0.4.3 / req v0.4.0–v0.4.3 |
-| 2026-03-22 | SPI v1 ABI normative 仕様追加: ptr/len エンコーディング契約、read ヘルパー戻り値契約、v1 ノード/エッジバイナリレイアウト、登録の原子性、pre-invocation budget check | arch v0.4.4 / req v0.4.4 |
-| 2026-03-22 | ScopeId 直列化契約追加、スカラー戻り値と線形メモリレイアウトの用語分離 | arch v0.4.5 / req v0.4.5 |
-| 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | arch v0.4.6 / req v0.4.6 |
-| 2026-03-27 | レビュー指摘解決: `関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
-| 2026-03-27 | レビュー指摘解決: SPI v1 `kind: u32` の規範的 discriminant mapping（NodeKind / EdgeKind）を追加、バリアント変更時の SPI version 更改義務と未知 kind 値のフィルタ規則を明記 | arch v0.4.9 / req v0.4.7 |
+| 2026-03-22 | レビュー指摘解決: WASM instance lifecycle（初期化・評価・破棄）追加、線形メモリ管理（上限・トラップ）追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加 | arch v0.4.0–v0.4.3 / req v0.4.0–v0.4.3 / dm v0.4.0–v0.4.2 |
+| 2026-03-22 | SPI v1 ABI normative 仕様追加: ptr/len エンコーディング契約、read ヘルパー戻り値契約、v1 ノード/エッジバイナリレイアウト、登録の原子性、pre-invocation budget check | arch v0.4.4 / req v0.4.4 / dm v0.4.2 |
+| 2026-03-22 | ScopeId 直列化契約追加、スカラー戻り値と線形メモリレイアウトの用語分離 | arch v0.4.5 / req v0.4.5 / dm v0.4.4 |
+| 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | arch v0.4.6 / req v0.4.6 / dm v0.4.4 |
+| 2026-03-27 | レビュー指摘解決: `関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
+| 2026-03-27 | レビュー指摘解決: SPI v1 `kind: u32` の規範的 discriminant mapping（NodeKind / EdgeKind）を追加、バリアント変更時の SPI version 更改義務と未知 kind 値のフィルタ規則を明記 | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
+| 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する ScopeId・MetricDefinition・MetricValue・NodeKind/EdgeKind 契約の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
+| 2026-03-27 | レビュー指摘解決: SPI v1 列挙契約（Enumeration Contract）を追加 — フィルタ済みカウント、稠密インデックス、列挙順序、エッジの source_index/target_index 再番号付けを規範的に定義 | arch v0.4.12 / req v0.4.9 / dm v0.4.8 |

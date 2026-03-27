@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.15 |
+| バージョン | 0.4.16 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 入力 | requirements.md v0.4.10, domain_model.md v0.4.11 |
@@ -157,7 +157,7 @@ graph TB
 | コンテキスト | 主要責務 | 入力 | 出力 | 対応要件 |
 |---|---|---|---|---|
 | CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
-| Application Pipeline | パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 | 全コンテキスト出力 + `ProjectConfig` | `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code | `REQ-FUNC-018`（パイプライン統合）, `REQ-FUNC-022`（exit code・`--strict`）, `REQ-FUNC-023`（`--level` → `summary_scope`）, `REQ-FUNC-024`（summary materialization）, `REQ-FUNC-034`（diff オーケストレーション）, `REQ-NF-001`〜`003`（性能・決定論性） |
+| Application Pipeline | パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 | 全コンテキスト出力 + `ProjectConfig` | `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + `LlmSuggestionBundle?` + exit code | `REQ-FUNC-018`（パイプライン統合）, `REQ-FUNC-022`（exit code・`--strict`）, `REQ-FUNC-023`（`--level` → `summary_scope`）, `REQ-FUNC-024`（summary materialization）, `REQ-FUNC-034`（diff オーケストレーション）, `REQ-NF-001`〜`003`（性能・決定論性） |
 | Configuration | 明示/探索ベースの設定解決、`WorkspaceRoot` 解決、`analysis_targets` 正規化・検証、`targets_explicitly_specified` 由来記録、優先順位マージ、デフォルト提供 | CLI（`--config` を含む）、CLI path 引数（省略時は `["."]`）、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot`、`analysis_targets`、`targets_explicitly_specified` を含む） | `REQ-FUNC-018`, `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
 | Git Diff Adapter | `base-ref` 解決、変更ファイル列挙、`base_snapshot_hash` 取得 | `WorkspaceRoot`、`analysis_targets`、`base-ref` | 変更対象 path 群、`base_snapshot_hash` | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、依存定義/lockfile からの外部シンボル解決、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig`、依存定義/lockfile、ローカル stub / metadata cache | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
@@ -610,6 +610,7 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.16 | 2026-03-27 | §4.1 責務表: Application Pipeline 出力に `LlmSuggestionBundle?` を追加（Reporting 入力契約との整合） | Claude |
 | 0.4.15 | 2026-03-27 | 入力参照を domain_model.md v0.4.11 に同期（本体の変更なし） | Claude |
 | 0.4.14 | 2026-03-27 | レビュー findings 解決: §4.2 ルールの `analysis_targets` ライフサイクル記述を修正（`ReportMetadata` として下流へ渡す → `ProjectConfig` に保持し Reporting 出力時に `ReportMetadata.analysis_targets` へ写像）、責務表・domain_model.md との整合を確保 | Claude |
 | 0.4.13 | 2026-03-27 | レビュー findings 解決: §4.1 Application Pipeline の対応要件を具体的な REQ-ID に置換（`大部分の REQ-FUNC-*` → 個別 ID）、Configuration 出力から `analysis_targets` を `ProjectConfig` フィールドに統合、入力参照を requirements.md v0.4.10 / domain_model.md v0.4.10 に更新 | Claude |

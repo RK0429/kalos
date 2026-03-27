@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.10 |
+| 改訂 | v0.4.12 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -61,7 +61,7 @@ kalos は同時に以下を満たす必要がある。
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
 - `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `SummaryScope::WholeProject`（JSON wire value: `"whole_project"`）、`--level function|module|project` では `SummaryScope::ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでもこの契約は変えない
-- **決定論性契約の適用範囲**: `REQ-NF-003` のビット単位一致は、コア評価パイプライン（CPG 抽出 → メトリクス算出 → 診断生成 → レポート組立）の出力に適用する。具体的には `ScopeMetrics`、`Diagnostic`（重大度を含む）、`OverallScore`、`DiagnosticReport`、Exit code、および評価順序が対象である。`--llm` 指定時に後段で付加される `llm_suggestion`（`LlmSuggestionBundle`）は決定論性契約の適用範囲外とする（ADR-0005 参照）。LLM 応答は本質的に非決定的であり、wall-clock budget やネットワーク状態にも依存するため、同一入力でも `llm_suggestion` の有無・内容は再現性を保証しない
+- **決定論性契約の適用範囲**: `REQ-NF-003` のビット単位一致は、コア評価パイプライン（CPG 抽出 → メトリクス算出 → 診断生成 → レポート組立）の出力に適用する。具体的には `ScopeMetrics`、`Diagnostic`（重大度を含む）、`List<Diagnostic>` の emission order（後述）、`OverallScore`、`DiagnosticReport`、Exit code、および評価順序が対象である。`--llm` 指定時に後段で付加される `llm_suggestion`（`LlmSuggestionBundle`）は決定論性契約の適用範囲外とする（ADR-0005 参照）。LLM 応答は本質的に非決定的であり、wall-clock budget やネットワーク状態にも依存するため、同一入力でも `llm_suggestion` の有無・内容は再現性を保証しない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
   - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する。**正規化規則**: 以下の手順を順に適用した結果の UTF-8 バイト列を SHA-256 でハッシュする
     1. **絶対パス化**: 相対パスの場合は current working directory を基準に絶対パスへ変換する
@@ -85,6 +85,7 @@ kalos は同時に以下を満たす必要がある。
 - **用語の区別**: 本 ADR では「全ワークスペース解析」（full-workspace analysis）を「`WorkspaceRoot` 配下の全対象ファイルを解析する実行」の意味で使い、「non-diff 全スコープ解析」を「要求された `analysis_targets` 内の全スコープを diff 最適化なしで解析する実行」の意味で使う。後者は解析対象を全ワークスペースへ拡張しない
 - `targets_explicitly_specified = true` の場合は diff 最適化が**上流で**無効化され、`InvalidationPlan` は生成されない（前項参照）。`InvalidationPlan.fallback_to_full` は**全ワークスペース解析の diff フロー内**で次の場合に `true` となる: ベースライン不在、`BaselineFingerprint` 不一致または版情報不一致、逆依存閉包から `AffectedScopeSet` を安全に確定できない、または project scope を安全に再計算できない。`fallback_to_full = true` は解析対象のファイル集合自体を変更せず、diff 最適化のみを無効化して全スコープを再計算する
 - コア評価順序は常に `ScopeId` の辞書順 `(<level>, <qualified_name>, <file_path>)` に固定し、`AnalysisLevel` の順序は `Function < Module < Project` とする。キャッシュヒット時も同じ comparator で統合する
+- **`List<Diagnostic>` emission order**: `Diagnostic` のリスト順序は `(Diagnostic.primary_scope_id, Diagnostic.rule_id, Diagnostic.id)` の辞書順として規範的（normative）に定義し、全順序（total order）を保証する。`primary_scope_id` の比較はコア評価順序と同じ `ScopeId` 辞書順 `(<level>, <qualified_name>, <file_path>)` に従い、`rule_id` は UTF-8 バイト辞書順に従い、`id`（`DiagnosticId`）は UTF-8 バイト辞書順に従う。`DiagnosticId` は診断ごとに一意であるため、同一 `(primary_scope_id, rule_id)` を持つ複数の診断（例: パターンルールが同一スコープで複数インスタンスを検出した場合）にも決定論的な順序を与える。この emission order は決定論性契約の一部であり、同一入力・同一設定で再現可能である。ADR-0005 の LLM ディスパッチ順序はこの emission order に依拠する
 
 ## 帰結
 
@@ -127,3 +128,5 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-27 | レビュー指摘解決: 公開契約型の `ports` 配置参照追記、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
 | 2026-03-27 | レビュー指摘解決: 選択肢 B の利点記述「変更後全体」を「変更後の解析対象全体」に明確化 | arch v0.4.11 / req v0.4.8 |
 | 2026-03-27 | レビュー指摘解決: `workspace_root_hash` の正規化規則（シンボリックリンク解決・末尾セパレータ除去・Windows 固有処理）とキャッシュ再利用スコープを明文化 | arch v0.4.12 / req v0.4.9 |
+| 2026-03-27 | レビュー指摘解決: `List<Diagnostic>` emission order を `(primary_scope_id, rule_id)` 辞書順として規範的に定義し、決定論性契約の適用範囲に追加（ADR-0005 ディスパッチ順序の根拠） | arch v0.4.12 / req v0.4.9 |
+| 2026-03-27 | 再レビュー指摘解決: `List<Diagnostic>` emission order を `(primary_scope_id, rule_id, id)` の三要素辞書順に拡張し全順序（total order）を保証（同一 `(primary_scope_id, rule_id)` の重複時の決定論的順序） | arch v0.4.16 / req v0.4.10 |
