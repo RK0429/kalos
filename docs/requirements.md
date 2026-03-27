@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.7 |
-| 最終更新日 | 2026-03-26 |
+| バージョン | 0.4.8 |
+| 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
 | レビュー者 | Codex |
@@ -83,7 +83,7 @@ AIエージェントによるコーディングの発達に伴い、生成され
 | SARIF | Static Analysis Results Interchange Format。静的解析ツールの結果を表現するJSON形式の標準規格（OASIS標準） |
 | Configuration（構成管理コンテキスト） | `.kalos.toml` の読み込み・検証・正規化を担う境界づけられたコンテキスト。集約ルートは `ProjectConfig` であり、`ProjectConfig.resolve()` が設定解決を行う。詳細は architecture.md §4.1 参照 |
 | CLI Shell | CLI 引数の解釈・バリデーションを担うコンポーネント。`--level`, `--diff`, `--format` 等のオプションを解釈し、Application Pipeline へ渡す。詳細は architecture.md §4.1 参照 |
-| Application Pipeline | パイプラインオーケストレーションを担うコンポーネント。diff/full モード選択、`DiagnosticReport` の組み立て（summary materialization を含む）、exit code 判定を行う。詳細は architecture.md §4.1 参照 |
+| Application Pipeline | パイプラインオーケストレーションを担うコンポーネント。diff/non-diff モード選択、`DiagnosticReport` の組み立て（summary materialization を含む）、exit code 判定を行う。詳細は architecture.md §4.1 参照 |
 | Plugin Host | WASM プラグインのロード・検証・実行を担うコンポーネント。`plugin_manifest` に基づくプラグインの決定論的ロードとサンドボックス実行を管理する。詳細は architecture.md §4.1 参照 |
 | DiagnosticReport | 診断コンテキストの集約ルート。診断一覧・一覧の完全性（`diagnostics_scope`）・重大度別件数サマリー（`summary`）・サマリー母集団（`summary_scope`）を束ねる。Exit code はフィールドとして保持せず `determine_exit_code(strict)` で都度導出する。レポートコンテキストでは `AnalysisMetrics`・`ReportMetadata` と組み合わせて human/JSON/SARIF 形式への写像元となる。詳細は domain_model.md §3.3、architecture.md §4.1 参照 |
 | SourceAnalysis | CPG 抽出コンテキストの集約ルート。統一 CPG・ソースファイルメタデータ・抑制コメント・解析警告を束ねる。詳細は domain_model.md §3.1 参照 |
@@ -391,9 +391,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `kalos check [<path>...]` で対象パスを解析する。CPG抽出→メトリクス算出→診断生成→結果出力の全パイプラインを統合する
 - **入力**: 0 個以上の解析対象パス（ファイルまたはディレクトリ）とオプション引数。位置引数を省略した場合は `WorkspaceRoot`（正規形 `["."]`）を暗黙の対象とし、全ワークスペース解析として扱う（ADR-0003 参照）
 - **一覧・summary・exit code の母集団**:
-  - 診断一覧: full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断のみ
+  - 診断一覧: non-diff モードでは選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
-  - `--level all`（デフォルト）では、summary と exit code は「変更後プロジェクト全体」の診断集合を母集団とする
+  - `--level all`（デフォルト）では、summary と exit code は解決済み `analysis_targets` 内の全階層の診断集合を母集団とする（`SummaryScope::WholeProject`）
   - `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
   - summary は `summary_scope` に応じて Application Pipeline が materialize する。`summary_scope = listed_diagnostics` では現在の診断一覧から、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
 - **主要オプション**:
@@ -403,7 +403,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度
   - `--diff <base-ref>`: 変更ファイル再抽出 + ベースライン再利用による差分解析
-  - `--llm`: LLM連携による改善提案を有効化（full / diff 両モードで動作する。diff mode では `AffectedScopeSet` に属する診断のみをエンリッチ対象とする）
+  - `--llm`: LLM連携による改善提案を有効化（non-diff / diff 両モードで動作する。diff mode では `AffectedScopeSet` に属する診断のみをエンリッチ対象とする）
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
   - Given 有効なプロジェクトディレクトリ, When 位置引数なしで `kalos check` を実行, Then WorkspaceRoot（正規形 `["."]`）をデフォルト対象として全ワークスペースが解析され、診断結果が端末に表示される。この実行は全ワークスペース解析としてベースライン生成（write-back）の対象となる（ベースラインの消費は `--diff` 実行時のみ）
@@ -437,14 +437,14 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given `--llm` 指定, When human形式で出力, Then `template` と `llm` の提案が別ラベルで表示される
   - Given 端末がカラー対応, When human形式で出力, Then 重大度に応じた色分けが適用される（error: 赤, warning: 黄, info: 青）
   - Given cross-scope 診断で `location.column = null`, When human形式で出力, Then synthetic な列番号は補完せず `path:line` 形式で表示される
-  - Given `--level all`（デフォルト）で解析完了, When human形式で出力, Then 末尾に変更後プロジェクト全体の総合スコアサマリーと重大度別件数が表示される
+  - Given `--level all`（デフォルト）で解析完了, When human形式で出力, Then 末尾に解決済み `analysis_targets` 全体の総合スコアサマリーと重大度別件数が表示される
   - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベルメトリクスから算出した総合スコアと、関数レベル診断のみを母集団とした重大度別件数が表示され、module/project のスコアは表示されない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
 #### REQ-FUNC-020: JSON形式での結果出力
 
-- **説明**: 解析結果を機械可読なJSON構造で出力する。`metrics` は `--level` で選択された対象階層のメトリクスのみを含み、非対象階層のメトリクスは含めない（must exclude）。`diagnostics` は full mode では選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。総合スコア・summary・`schema_version` を持つ
+- **説明**: 解析結果を機械可読なJSON構造で出力する。`metrics` は `--level` で選択された対象階層のメトリクスのみを含み、非対象階層のメトリクスは含めない（must exclude）。`diagnostics` は non-diff モードでは選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。総合スコア・summary・`schema_version` を持つ
 - **最低限のJSON契約**:
   - ルートには `schema_version`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
   - `schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
@@ -453,7 +453,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
   - `diagnostics[*].template_suggestion` は必須、`diagnostics[*].llm_suggestion` は任意とする
   - `scores` には `overall`, `function`, `module`, `project` を必須とする。`overall` は常に REQ-FUNC-011 に従うメトリクス集約済みの 0〜100 の整数であり、`summary` や診断件数から逆算しない。`function` / `module` / `project` は対象階層なら 0〜100 の整数、非対象階層なら `null` とする
-  - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は full mode で「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする。`whole_project` は解決済み `analysis_targets` 内の全階層の診断を母集団とする
+  - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は non-diff モードで「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする。`whole_project` は解決済み `analysis_targets` 内の全階層の診断を母集団とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
   - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` はすべて整数となる
@@ -485,7 +485,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-022: Exit codeによるパイプライン制御
 
 - **説明**: 解析結果に応じたexit codeを返し、CI/CDパイプラインでのpass/fail判定を可能にする
-- **判定母集団**: `--level all`（デフォルト）では exit code は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。diff mode でも同様とする
+- **判定母集団**: `--level all`（デフォルト）では exit code は解決済み `analysis_targets` 内の全階層の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。diff mode でも同様とする
 - **厳格モード**: `--strict` は exit code 判定だけを変更する追加ポリシーであり、`Diagnostic.severity`、summary 件数、JSON/SARIF に出力される重大度、`--severity` による表示フィルタの意味は変更しない
 
   | 状況 | Exit code |
@@ -519,7 +519,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-024: 総合スコアサマリーの表示
 
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
-- **サマリー母集団**: `--level all`（デフォルト）では summary は変更後プロジェクト全体の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。表示される総合スコア自体は REQ-FUNC-011 のメトリクス集約結果を用いる
+- **サマリー母集団**: `--level all`（デフォルト）では summary は解決済み `analysis_targets` 内の全階層の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。表示される総合スコア自体は REQ-FUNC-011 のメトリクス集約結果を用いる
 - **materialization 契約**: summary は `DiagnosticReport` の内部で再計算しない。Application Pipeline が `summary_scope` に応じて materialize し、`summary_scope = whole_project` の diff mode では merged post-change `ScopeDiagnosticSnapshot` から重大度別件数を再構成する
 - **受け入れ基準**:
   - Given `--level all` で解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
@@ -667,11 +667,11 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - baseline cache の保存場所は環境変数 `$KALOS_CACHE_DIR` で指定する。未設定時のプラットフォーム別既定: Linux/macOS は `$XDG_CACHE_HOME/kalos` または `~/.cache/kalos`、Windows は `%LOCALAPPDATA%\kalos`（ADR-0003 参照）
   - baseline cache の再利用は best-effort とし、checkout path が変わる CI や cache 未復元環境では correctness を優先して全解析へフォールバックする
   - 差分モードの個別診断一覧は `AffectedScopeSet` に属するスコープのみを表示する
-  - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は「変更後のプロジェクト全体」を意味し、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
+  - `--level all`（デフォルト）の場合、総合スコアと重大度別件数は変更後の解決済み `analysis_targets` 全体（`summary_scope = "whole_project"`）を母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "whole_project"` を必須とする
   - `--level function|module|project` の場合、重大度別件数と exit code は `AffectedScopeSet` 内の指定階層診断のみを母集団とし、機械可読出力では `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` を必須とする。`scores.overall` は post-change 状態の指定階層メトリクスから算出した総合スコア、非対象階層の `scores.*` は `null` とする
   - フォールバック通知や bootstrap 通知などの運用メッセージは `stderr` にのみ出力し、`stdout` は要求された形式（human/json/sarif）を保つ
 - **受け入れ基準**:
-  - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後のプロジェクト全体値として出力される
+  - Given `--diff HEAD~1` と互換なベースライン, When 解析実行, Then 直前コミットからの変更ファイルのみが再抽出され、総合スコアは変更後の解決済み `analysis_targets` 全体値（merged post-change）として出力される
   - Given `--diff HEAD~1 --level function` と互換なベースライン, When 解析実行, Then 関数レベルの影響範囲診断のみが一覧に含まれ、機械可読出力の `summary_scope` は `"listed_diagnostics"` となる
   - Given `--diff HEAD~1 src/foo.rs` のように `analysis_targets` が部分集合, When 解析実行, Then baseline は read/write されず、要求された target 群に対する non-diff 全スコープ解析へフォールバックする
   - Given `--diff HEAD~1` だがベースラインが存在しない, When 解析実行, Then 全解析にフォールバックし、その旨が `stderr` に明示される
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.8 | 2026-03-27 | レビュー findings 解決: `full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、`変更後プロジェクト全体` を `解決済み analysis_targets 内の全階層` に明確化 | Claude |
 | 0.4.7 | 2026-03-26 | レビュー findings 解決: REQ-FUNC-018 の `--llm` に full/diff 両モード動作とエンリッチ対象スコープを明記 | Claude |
 | 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加（ADR-0004・domain_model.md と同期） | Claude |
 | 0.4.5 | 2026-03-22 | ADR-0004 ABI 明確化に伴う同期: REQ-FUNC-012 の normative ABI 参照リストを更新（ScopeId 直列化契約、線形メモリデータレイアウト、スカラー戻り値エンコーディングの用語分離を反映） | Claude |

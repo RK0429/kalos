@@ -96,15 +96,15 @@
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は当該改訂が整合を確認した architecture.md の版を示す。ADR 改訂日と当該版の作成日は一致しない場合がある。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。`arch` は architecture.md、`req` は requirements.md を指す。requirements.md の版は architecture.md メタ情報の `入力` フィールドから導出する。ADR 改訂日と各文書版の作成日は一致しない場合がある。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
-| 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
-| 2026-03-19 | `LlmEnrichmentRequest` allowlist 設計追加、sidecar budget（connect/overall timeout）追加、preflight 条件（言語解決不可・multi-file 断片還元不可）追加 | architecture.md v0.2.0–v0.2.11 |
-| 2026-03-21 | レビュー指摘解決: LLM 運用帰結（API キー管理・プロバイダ選択・outbound 通信・データ機密性・監査境界）追加 | architecture.md v0.3.0–v0.3.1 |
-| 2026-03-22 | レビュー指摘解決: aggregate sidecar budget（120s 暫定値）追加、v1 ディスパッチポリシー（逐次実行・429/5xx ステータス別処理）追加、URL 秘匿化契約追加 | architecture.md v0.4.0–v0.4.3 |
-| 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | architecture.md v0.4.4 |
-| 2026-03-26 | レビュー指摘解決: 非 429/5xx HTTP エラーの no-retry+skip ポリシー明記、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、ADR-0002 相互参照追加 | architecture.md v0.4.5 |
-| 2026-03-26 | レビュー指摘解決: 決定論性契約との関係を明示し、`llm_suggestion` が ADR-0003 の適用範囲外であることを追記 | architecture.md v0.4.7 |
-| 2026-03-27 | レビュー指摘解決: 決定論性契約追記の `関連文書版` を ADR-0003 と整合（v0.4.7）、`関連文書版` の凡例追加 | architecture.md v0.4.9 |
+| 2026-03-18 | 初版承認 | arch v0.1.0 / req v0.1.0 |
+| 2026-03-19 | `LlmEnrichmentRequest` allowlist 設計追加、sidecar budget（connect/overall timeout）追加、preflight 条件（言語解決不可・multi-file 断片還元不可）追加 | arch v0.2.0–v0.2.11 / req v0.2.0–v0.2.11 |
+| 2026-03-21 | レビュー指摘解決: LLM 運用帰結（API キー管理・プロバイダ選択・outbound 通信・データ機密性・監査境界）追加 | arch v0.3.0–v0.3.1 / req v0.3.0 |
+| 2026-03-22 | レビュー指摘解決: aggregate sidecar budget（120s 暫定値）追加、v1 ディスパッチポリシー（逐次実行・429/5xx ステータス別処理）追加、URL 秘匿化契約追加 | arch v0.4.0–v0.4.3 / req v0.4.0–v0.4.3 |
+| 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | arch v0.4.4 / req v0.4.4 |
+| 2026-03-26 | レビュー指摘解決: 非 429/5xx HTTP エラーの no-retry+skip ポリシー明記、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、ADR-0002 相互参照追加 | arch v0.4.5 / req v0.4.5 |
+| 2026-03-26 | レビュー指摘解決: 決定論性契約との関係を明示し、`llm_suggestion` が ADR-0003 の適用範囲外であることを追記 | arch v0.4.7 / req v0.4.5 |
+| 2026-03-27 | レビュー指摘解決: 決定論性契約追記の `関連文書版` を ADR-0003 と整合（v0.4.7）、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |

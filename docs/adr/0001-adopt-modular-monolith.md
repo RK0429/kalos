@@ -149,12 +149,12 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は当該改訂が整合を確認した architecture.md の版を示す。ADR 改訂日と当該版の作成日は一致しない場合がある。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。`arch` は architecture.md、`req` は requirements.md を指す。requirements.md の版は architecture.md メタ情報の `入力` フィールドから導出する。ADR 改訂日と各文書版の作成日は一致しない場合がある。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
-| 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
-| 2026-03-19 | 内部構成パターン（A-1/A-2/A-3）の検討追加、選択肢 A-2（Ports & Adapters + Pipe-and-Filter）の採用根拠明確化 | architecture.md v0.2.0 |
-| 2026-03-21 | レビュー指摘解決: 帰結の保証範囲（CodeQL bundle / WASM プラグイン配布責務）明確化 | architecture.md v0.3.0 |
-| 2026-03-22 | レビュー指摘解決: 許可する依存方向ルール追記、差分解析/ベースラインの Application Pipeline 配下での位置づけ追記 | architecture.md v0.4.0 |
-| 2026-03-27 | レビュー指摘解決: 公開契約型（Published Language）の `ports` モジュール配置ルールを依存方向ルールに追記し、`関連文書版` の凡例を追加 | architecture.md v0.4.9 |
+| 2026-03-18 | 初版承認 | arch v0.1.0 / req v0.1.0 |
+| 2026-03-19 | 内部構成パターン（A-1/A-2/A-3）の検討追加、選択肢 A-2（Ports & Adapters + Pipe-and-Filter）の採用根拠明確化 | arch v0.2.0 / req v0.2.0 |
+| 2026-03-21 | レビュー指摘解決: 帰結の保証範囲（CodeQL bundle / WASM プラグイン配布責務）明確化 | arch v0.3.0 / req v0.3.0 |
+| 2026-03-22 | レビュー指摘解決: 許可する依存方向ルール追記、差分解析/ベースラインの Application Pipeline 配下での位置づけ追記 | arch v0.4.0 / req v0.4.0 |
+| 2026-03-27 | レビュー指摘解決: 公開契約型（Published Language）の `ports` モジュール配置ルールを依存方向ルールに追記し、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |

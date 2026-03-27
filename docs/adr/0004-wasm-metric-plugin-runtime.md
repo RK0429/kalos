@@ -144,15 +144,15 @@
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は当該改訂が整合を確認した architecture.md の版を示す。ADR 改訂日と当該版の作成日は一致しない場合がある。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。`arch` は architecture.md、`req` は requirements.md を指す。requirements.md の版は architecture.md メタ情報の `入力` フィールドから導出する。ADR 改訂日と各文書版の作成日は一致しない場合がある。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
-| 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
-| 2026-03-19 | SPI 設計（host/plugin exports）追加、fuel budget（per-invocation / aggregate）追加、`plugin_manifest` 正規化・SPI 互換性契約追加、`MetricDefinition` 登録契約・`metric_id` 衝突処理追加 | architecture.md v0.2.0–v0.2.11 |
-| 2026-03-20 | 評価順序（`workspace_relative_path → metric_id → ScopeId` 辞書順）追加、aggregate fuel budget の diff mode 値追加 | architecture.md v0.2.12 |
-| 2026-03-22 | レビュー指摘解決: WASM instance lifecycle（初期化・評価・破棄）追加、線形メモリ管理（上限・トラップ）追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加 | architecture.md v0.4.0–v0.4.3 |
-| 2026-03-22 | SPI v1 ABI normative 仕様追加: ptr/len エンコーディング契約、read ヘルパー戻り値契約、v1 ノード/エッジバイナリレイアウト、登録の原子性、pre-invocation budget check | architecture.md v0.4.4 |
-| 2026-03-22 | ScopeId 直列化契約追加、スカラー戻り値と線形メモリレイアウトの用語分離 | architecture.md v0.4.5 |
-| 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | architecture.md v0.4.6 |
-| 2026-03-27 | レビュー指摘解決: `関連文書版` の凡例追加 | architecture.md v0.4.9 |
+| 2026-03-18 | 初版承認 | arch v0.1.0 / req v0.1.0 |
+| 2026-03-19 | SPI 設計（host/plugin exports）追加、fuel budget（per-invocation / aggregate）追加、`plugin_manifest` 正規化・SPI 互換性契約追加、`MetricDefinition` 登録契約・`metric_id` 衝突処理追加 | arch v0.2.0–v0.2.11 / req v0.2.0–v0.2.11 |
+| 2026-03-20 | 評価順序（`workspace_relative_path → metric_id → ScopeId` 辞書順）追加、aggregate fuel budget の diff mode 値追加 | arch v0.2.12 / req v0.2.11 |
+| 2026-03-22 | レビュー指摘解決: WASM instance lifecycle（初期化・評価・破棄）追加、線形メモリ管理（上限・トラップ）追加、invalid-value contract（NaN/±Inf 拒否・範囲外 clamp）追加、diff→full フォールバック時の aggregate fuel budget 切替規則追加 | arch v0.4.0–v0.4.3 / req v0.4.0–v0.4.3 |
+| 2026-03-22 | SPI v1 ABI normative 仕様追加: ptr/len エンコーディング契約、read ヘルパー戻り値契約、v1 ノード/エッジバイナリレイアウト、登録の原子性、pre-invocation budget check | arch v0.4.4 / req v0.4.4 |
+| 2026-03-22 | ScopeId 直列化契約追加、スカラー戻り値と線形メモリレイアウトの用語分離 | arch v0.4.5 / req v0.4.5 |
+| 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | arch v0.4.6 / req v0.4.6 |
+| 2026-03-27 | レビュー指摘解決: `関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |

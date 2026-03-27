@@ -5,7 +5,7 @@
 | 項目 | 内容 |
 |---|---|
 | 作成日 | 2026-03-21 |
-| 最終更新日 | 2026-03-26 |
+| 最終更新日 | 2026-03-27 |
 | 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 19 指摘 + v0.4.0 フォローアップ根拠 4 件（F-1–F-4）+ v0.4.1 フォローアップ 2 件、計 §1–§21 + F-1–F-4） |
 | 目的 | 上記 21 §（設計判断）および 4 F 項（v0.4.0 追加根拠）のレビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 | 適用範囲 | v0.3.0–v0.4.1 の文書更新バッチ（§1–§21 の設計判断 + F-1–F-4 の v0.4.0 追加根拠）。v0.4.2 以降のレビュー起因更新は本メモの対象外であり、各文書の変更履歴を参照のこと |
@@ -248,7 +248,7 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
 |---|---|---|---|
 | `SummaryScope` | `WholeProject` | `"whole_project"` | summary の母集団が解決済み `analysis_targets` 内の全階層の診断（`--level all` 時、または diff mode の merged post-change） |
 | `SummaryScope` | `ListedDiagnostics` | `"listed_diagnostics"` | summary の母集団が `diagnostics` リストに含まれる指定階層の診断のみ（`--level` で階層限定時） |
-| `DiagnosticsScope` | `WholeProject` | `"whole_project"` | `diagnostics` 一覧が選択された `--level` に関して完全（full mode） |
+| `DiagnosticsScope` | `WholeProject` | `"whole_project"` | `diagnostics` 一覧が選択された `--level` に関して完全（non-diff モード） |
 | `DiagnosticsScope` | `AffectedOnly` | `"affected_only"` | `diagnostics` 一覧が影響範囲のみ（diff mode） |
 
 **注意**: `"whole_project"` は両 enum に存在するが意味が異なる。`"listed_diagnostics"` は `SummaryScope` 専用、`"affected_only"` は `DiagnosticsScope` 専用である。
@@ -313,7 +313,7 @@ architecture.md §4.1 の責務表に `Application Pipeline` がなく、実質�
 
 | 文書 | 更新内容 |
 |---|---|
-| `architecture.md` §4.1 責務表 | 以下の行を追加: `Application Pipeline` / パイプラインオーケストレーション、diff/full モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 / 全コンテキスト出力 + `ProjectConfig` / `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code / 大部分の REQ-FUNC-* を横断 |
+| `architecture.md` §4.1 責務表 | 以下の行を追加: `Application Pipeline` / パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 / 全コンテキスト出力 + `ProjectConfig` / `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code / 大部分の REQ-FUNC-* を横断 |
 
 ---
 
@@ -679,6 +679,7 @@ requirements.md と domain_model.md にも同セマンティクスを伝播す�
 
 | 日付 | 変更内容 |
 |---|---|
+| 2026-03-27 | レビュー findings 解決: §8 enum 一覧と §10 更新対象表の `full mode` を `non-diff モード` に統一 |
 | 2026-03-26 | §16 の `LlmEnrichmentRequest` 図で `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 |
 | 2026-03-26 | 出所整合修正: ADR-0002 行の出所タグを凡例準拠の `（v0.4.1）` に修正、F-1 根拠から対象外の ADR-0004 ScopeId 直列化契約への依存を除去し domain_model.md の ScopeId 定義に差し替え |
 | 2026-03-26 | 追跡性・出所修正: v0.4.0 フォローアップ根拠セクション（F-1–F-4）追加、ADR-0004 行の出所を改訂履歴と整合（全項目を v0.4.0 に帰属）、§20 更新対象に ADR-0002 を追加、更新対象一覧に ADR-0002 行を追加 |

@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.8 |
+| バージョン | 0.4.9 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 入力 | requirements.md v0.4.7 |
@@ -40,7 +40,7 @@ graph LR
     CE -- "PL: 統一CPG" --> MC
     CE -- "PL: SourceAnalysis" --> DC
     CE -- "PL: SourceAnalysis" --> IA
-    IA -- "PL: AffectedScopeSet + 再利用断片" --> MC
+    IA -- "PL: AffectedScopeSet + InvalidationPlan + 再利用断片" --> MC
     IA -- "PL: AffectedScopeSet" --> DC
     MC -- "PL: メトリクス値" --> DC
     DC -- "ACL" --> RC
@@ -775,9 +775,9 @@ stateDiagram-v2
 
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
-| 差分ベースライン (DiffBaseline) | 差分解析の再利用に必要な断片を束ねる集約ルート。メトリクス断片、診断断片、依存インデックス、フィンガープリントを持つ | BaselineFingerprint, DependencyIndexManifest |
+| 差分ベースライン (DiffBaseline) | 差分解析の再利用に必要な断片を束ねる集約ルート。メトリクス断片、診断断片、`OverallScore`（`--level` に影響されず全階層を保持）、依存インデックス、フィンガープリントを持つ。永続化は全ワークスペース解析に限定し、`analysis_targets` が部分集合の実行では生成も読み込みも行わない | BaselineFingerprint, DependencyIndexManifest, OverallScore |
 | 影響範囲集合 (AffectedScopeSet) | 差分再計算が必要な `ScopeId` の集合 | ScopeId |
-| 無効化計画 (InvalidationPlan) | 再計算対象、再利用対象、全解析フォールバック要否を表す値 | AffectedScopeSet |
+| 無効化計画 (InvalidationPlan) | 再計算対象、再利用対象、全解析フォールバック要否を表す値。`recompute_scopes` は diff 最適化が有効な限り project スコープを必ず含み `OverallScore` の再計算を保証する。`fallback_to_full` が `true` の場合は現在の `analysis_targets` 内の全スコープを対象に non-diff 再計算を行う（`analysis_targets` の拡張は行わない） | AffectedScopeSet |
 | 依存インデックス manifest (DependencyIndexManifest) | `ScopeId` 間の逆依存関係を永続化した値 | ScopeId |
 | ベースライン識別子 (BaselineFingerprint) | 差分ベースラインの互換性判定に使う版情報とハッシュ集合。`workspace_root_hash`、`base_snapshot_hash`、正規化済み `ProjectConfig` を反映した `config_hash`、`analysis_targets_hash` を含む | DiffBaseline |
 | ワークスペースルートハッシュ (workspace_root_hash) | `BaselineFingerprint` の構成要素。`ProjectConfig.resolve()` が解決した `WorkspaceRoot` の正規化済み絶対パスから算出したハッシュ値。異なるワークスペース間でベースラインキャッシュが衝突しないことを保証する | BaselineFingerprint |
@@ -862,6 +862,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.9 | 2026-03-27 | レビュー findings 解決: コンテキストマップの IA→MC エッジに `InvalidationPlan` を追加し公開言語の記述と整合、用語集 `DiffBaseline` 定義に `OverallScore` 永続化と全ワークスペース限定を反映、用語集 `InvalidationPlan` 定義に project スコープ再計算保証と `fallback_to_full` の `analysis_targets` 内限定セマンティクスを反映 | Claude |
 | 0.4.8 | 2026-03-27 | レビュー findings 解決: `OverallScore` の `None` セマンティクスを「スコープ不在」と明確化し `--level` 報告射影との混同を排除、JSON `scores.overall` の `requested_level` 射影規則を明文化、`DiffBaseline` 永続化 `OverallScore` が `--level` に影響されない旨を補足、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合） | Claude |
 | 0.4.7 | 2026-03-26 | レビュー指摘解決: `scope_risk` の空母集団規則（`0.0`）を設計意図に追記、`InvalidationPlan` 不変条件 (4) の `fallback_to_full` 文言を `analysis_targets` 内に限定、`LlmEnrichmentRequest` の `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 | Claude |
 | 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、`ReportViewOptions` の None デフォルトセマンティクスを明記 | Claude |

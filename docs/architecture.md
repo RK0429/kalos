@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.10 |
+| バージョン | 0.4.11 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.7, domain_model.md v0.4.8 |
+| 入力 | requirements.md v0.4.8, domain_model.md v0.4.8 |
 
 ## 1. 設計目標
 
@@ -328,7 +328,7 @@ sequenceDiagram
     CLI->>APP: 実行要求
     APP->>APP: analysis_targets が全ワークスペースか判定
     alt analysis_targets が部分集合
-        APP->>APP: diff 最適化を無効化し non-diff 全スコープ解析へフォールバック（§5.3 参照）
+        APP->>APP: diff 最適化を無効化し non-diff 解析へフォールバック（対象は要求された analysis_targets のみ、§5.3 参照）
     else analysis_targets が全ワークスペース
         APP->>GIT: base-ref 解決 + analysis_targets との交差
         GIT-->>APP: changed paths + base_snapshot_hash
@@ -604,6 +604,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.11 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図の non-diff フォールバックラベルに `analysis_targets` 限定を明示、入力参照を requirements.md v0.4.8 に更新 | Claude |
 | 0.4.10 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図に `--level` オプションと `summary_scope` 分岐を明示、`scores.overall` の `requested_level` 射影規則を明文化、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、入力参照を domain_model.md v0.4.8 に更新 | Claude |
 | 0.4.9 | 2026-03-26 | レビュー findings 解決: §5.2 差分解析シーケンス図に Optional LLM の participant と interaction を追加（§5.1 と整合）、Reporting 責務表の出力を「フォーマット済み出力（stdout）」に修正（未定義のファイル出力機能を排除） | Claude |
 | 0.4.8 | 2026-03-26 | 入力参照を v0.4.6 に更新、ベースラインキャッシュ永続化ペイロードの壊れた内部参照（§5.2 保存単位）を除去しインライン記述に一本化 | Claude |
