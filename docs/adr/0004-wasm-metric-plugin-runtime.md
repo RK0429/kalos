@@ -63,44 +63,96 @@
 ## 根拠
 
 - kalos 本体は ADR-0001 に従い単一バイナリとして配布する。ユーザー定義メトリクスプラグインは **kalos バイナリとは別に配布される外部 WASM モジュール** であり、`.kalos.toml` の `[[plugins]]` 配列テーブル（`path`, `sha256` キー）へ登録することでバイナリ再ビルドなしに追加できる。ホストはこれを `WorkspaceRoot` 基準の決定論的な内部表現 `plugin_manifest` へ正規化して扱う。WASM はクロスプラットフォームなバイトコード形式のため、プラグイン作成者は OS/arch ごとのビルドを持つ必要がない
-- **v1 モジュール ABI / ホスト契約**: v1 で受け入れるプラグインモジュールは以下の条件を満たすこと
-  - **target**: `wasm32-unknown-unknown`（WASI 不使用）。ファイルシステム・ネットワーク・クロック等の WASI API は一切インポートを許可しない。これにより `REQ-NF-003` の決定論性を保証し、サンドボックス面を最小化する
-  - **ptr/len エンコーディング契約**: ホスト⇔プラグイン間で `_ptr`/`_len` サフィックスを持つ引数ペアは、プラグインの線形メモリ上のバイトオフセット（`_ptr`: `u32`）とバイト長（`_len`: `u32`）を表す。ホストは `_len` バイトだけを読み書きし、範囲外アクセスはトラップとする。引数が指すデータの形式は以下の 2 種に分かれる:
-    - **文字列パラメータ**（`id`, `name`, `desc`, `key`, `metric_id`）: UTF-8 エンコードされた文字列。NUL ターミネータは含めない
-    - **ScopeId パラメータ**（`scope`）: 後述の「ScopeId 直列化契約」に従うバイナリレイアウト（UTF-8 文字列ではない）
-  - **ScopeId 直列化契約**: `scope_ptr`/`scope_len` が指す領域は、`ScopeId`（domain_model.md §3.2）の以下の Little-Endian バイナリレイアウトである。`scope_len` はレイアウト全体のバイト長（`= 4 + 4 + qn_len + 4 + fp_len`）を表す:
-    - レイアウト: `[level: u32, qn_len: u32, qn_bytes: [u8; qn_len], fp_len: u32, fp_bytes: [u8; fp_len]]`
-    - `level`: `AnalysisLevel` 列挙値（`0` = Function, `1` = Module, `2` = Project）。`metric_register` の `level` 引数と同じ値域
-    - `qn_bytes`: `ScopeId.qualified_name` の UTF-8 バイト列（長さは `qn_len`）
-    - `fp_bytes`: `ScopeId.file_path` の UTF-8 バイト列（`WorkspaceRoot` 相対、長さは `fp_len`）
-    - ホストは `kalos_plugin_evaluate` 呼び出し前に `kalos_plugin_alloc` でプラグインの線形メモリ上に `metric_id`（UTF-8 文字列）と `scope`（本バイナリレイアウト）を書き込み、それぞれのポインタと長さを引数として渡す。プラグインは受け取った `scope_ptr`/`scope_len` をホスト関数（`cpg_node_count` 等）にそのまま引き渡す。ホストは各ホスト関数呼び出し時に本レイアウトから `ScopeId` を復元する
-  - **read ヘルパー戻り値契約**: `cpg_read_node`、`cpg_read_edge`、`config_read` の `i32` 戻り値は以下の共通セマンティクスに従う
-    - `>= 0`: 成功。戻り値は `buf_ptr` から書き込まれた実バイト数を表す
-    - `-1`: バッファ不足。`buf_len` が必要なデータサイズより小さい場合に返す。`buf_ptr` の内容は未定義とする。プラグインはより大きなバッファを `kalos_plugin_alloc` で確保して再呼び出しできる
-    - `-2`: 範囲外インデックスまたは存在しないキー。`cpg_read_node`/`cpg_read_edge` で `index >= count` の場合、または `config_read` で未定義のキーの場合に返す。`buf_ptr` の内容は未定義とする
-  - **host exports（ホスト→プラグイン）**: ホストは以下の関数をプラグインにエクスポートする
-    - `cpg_node_count(scope_ptr, scope_len) -> u32` — 対象スコープのノード数を返す
-    - `cpg_edge_count(scope_ptr, scope_len) -> u32` — 対象スコープのエッジ数を返す
-    - `cpg_read_node(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — ノードデータを線形メモリへ書き込む。戻り値は read ヘルパー戻り値契約に従う
-    - `cpg_read_edge(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — エッジデータを線形メモリへ書き込む。戻り値は read ヘルパー戻り値契約に従う
-    - `config_read(key_ptr, key_len, buf_ptr, buf_len) -> i32` — `MetricConfig` のキーに対応する値を線形メモリへ書き込む。戻り値は read ヘルパー戻り値契約に従う
-    - `metric_register(id_ptr, id_len, level: u32, name_ptr, name_len, desc_ptr, desc_len) -> i32` — `MetricDefinition` を登録する。`id` は `MetricDefinition.id`（グローバル一意）、`level` は `AnalysisLevel`（0=Function, 1=Module, 2=Project）、`name`/`desc` は人間可読な名前と説明。v1 では `participation = ReportOnly`, `rule_binding = None` が暗黙に設定される（domain_model.md §3.2 参照）。成功時 0、重複 ID 時 -1 を返す
-  - **plugin exports（プラグイン→ホスト）**: プラグインは以下の関数をエクスポートする
-    - `kalos_plugin_init() -> i32` — 初期化。`metric_register` ホスト関数を呼び出して `MetricDefinition` を 1 つ以上登録する。1 モジュールが複数の `MetricDefinition` を登録できる（各登録は独立した `metric_id` を持つ）。成功時 0、失敗時非 0 を返す
-    - `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。ホストは登録済みの `metric_id` のみを渡すことを保証するため、未登録の `metric_id` が渡されることは正常動作では発生しない。万一ホスト実装の不具合により未登録の `metric_id` が渡された場合、ホストは当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成せず、`stderr` / 構造化ログへ warning を出力する。プラグイン側の戻り値は無視する。**スカラー戻り値エンコーディング**（WASM 値スタック上の `i64` 値であり、線形メモリレイアウトではない）: 下位 32 ビット（ビット 0–31）が `raw_value` の IEEE 754 binary32 ビットパターン（`i32.reinterpret_f32` 相当）、上位 32 ビット（ビット 32–63）が `normalized_risk` の IEEE 754 binary32 ビットパターン。ホストは受け取った binary32 値を `f64` へ拡張したのち、以下の **invalid-value contract** を適用する:
-      - `raw_value` が `NaN` または `±Inf` の場合: 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない。`stderr` / 構造化ログへ warning を出力する
-      - `normalized_risk` が `NaN` または `±Inf` の場合: 同上（当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない）
-      - `normalized_risk` が有限だが `[0.0, 1.0]` の範囲外の場合: `clamp(normalized_risk, 0.0, 1.0)` で範囲内に収め、`stderr` / 構造化ログへ warning を出力したうえで処理を続行する
-      - 上記の検証を通過した値に対し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
-    - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
-    - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
-  - **線形メモリデータレイアウト**: ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian のバイナリレイアウトとする。エッジレコードは固定長（12 バイト）だが、ノードレコード・ScopeId・config 値は長さプレフィックス付きの可変長レイアウトである。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（`kind` は後述の NodeKind discriminant mapping に従う `u32` 列挙値、可変長）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]`（`kind` は後述の EdgeKind discriminant mapping に従う `u32` 列挙値、固定長 12 バイト）とする。いずれも Little-Endian。**NodeKind / EdgeKind discriminant mapping**: ノードレコード・エッジレコードの `kind: u32` は以下の規範的（normative）マッピングに従う（domain_model.md §3.1 の `NodeKind` / `EdgeKind` enum 定義に対応）。この対応表は `kalos-metric-spi-v1` の一部であり、バリアントの追加・削除・値の再割当ては SPI version の更改を伴う破壊的変更として扱う。ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない（将来の SPI version で追加されたバリアントは v1 プラグインに対してフィルタされる）。NodeKind: `0` = Function, `1` = Class, `2` = Module, `3` = Variable, `4` = Parameter, `5` = ExternalSymbol。EdgeKind: `0` = Call, `1` = DataFlow, `2` = ControlFlow, `3` = Contains, `4` = TypeReference, `5` = Semantic。値は 0 始まりの連続整数で、domain_model.md §3.1 の enum 宣言順と一致する。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す、可変長）とする。**ScopeId レイアウト**: 前述の「ScopeId 直列化契約」で定義する（可変長）。**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「スカラー戻り値エンコーディング」を参照。上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
-  - **SPI v1 列挙契約（Enumeration Contract）**: 前述の NodeKind / EdgeKind discriminant mapping において「ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない」と定めている。このフィルタが `cpg_node_count` / `cpg_edge_count` / `cpg_read_node` / `cpg_read_edge` のカウント・インデックス空間に与える影響を以下に規範的（normative）に定義する:
-    - **フィルタ済みカウント**: `cpg_node_count(scope)` は `UnifiedCpg.subgraph(scope_id)` 内のノードのうち SPI v1 の NodeKind discriminant mapping に含まれる `kind` 値を持つもののみをカウントした値を返す。`cpg_edge_count(scope)` は SPI v1 の EdgeKind discriminant mapping に含まれる `kind` 値を持ち、かつ `source_index` / `target_index` が参照するノードが双方ともフィルタ後のノード集合に含まれるエッジのみをカウントした値を返す。将来の SPI version で追加された未知の `kind` 値を持つレコードはカウントに含めない
-    - **稠密インデックス**: フィルタ後のノード群 / エッジ群はそれぞれ `[0, count)` の稠密な連続整数でインデックスされる（`count` は `cpg_node_count` / `cpg_edge_count` の戻り値）。`cpg_read_node` / `cpg_read_edge` の `index` 引数がこの範囲外の場合、read ヘルパー戻り値契約に従い `-2` を返す
-    - **列挙順序**: フィルタ後のノード群は `UnifiedCpg.subgraph(scope_id)` 内の元の格納順序から未知 NodeKind のレコードを除去した相対順序を保持する。エッジ群も同様に元の格納順序から、未知 EdgeKind のレコードおよびフィルタ済みノードへの参照を持つレコードを除去した相対順序を保持する。この列挙順序は ADR-0003 の決定論性契約により同一入力・同一設定で再現可能である
-    - **エッジの `source_index` / `target_index` 再番号付け**: エッジレコード内の `source_index` / `target_index` はフィルタ後のノードインデックス空間を参照する。ホストは未知 NodeKind のフィルタにより元のインデックスから再番号付け（reindexing）を行い、フィルタ後の稠密インデックス空間との整合性を保証する
-  - **WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる
+
+### v1 モジュール ABI / ホスト契約
+
+v1 で受け入れるプラグインモジュールは以下の条件を満たすこと。
+
+- **target**: `wasm32-unknown-unknown`（WASI 不使用）。ファイルシステム・ネットワーク・クロック等の WASI API は一切インポートを許可しない。これにより `REQ-NF-003` の決定論性を保証し、サンドボックス面を最小化する
+
+#### ptr/len エンコーディング契約
+
+ホスト⇔プラグイン間で `_ptr`/`_len` サフィックスを持つ引数ペアは、プラグインの線形メモリ上のバイトオフセット（`_ptr`: `u32`）とバイト長（`_len`: `u32`）を表す。ホストは `_len` バイトだけを読み書きし、範囲外アクセスはトラップとする。引数が指すデータの形式は以下の 2 種に分かれる:
+
+- **文字列パラメータ**（`id`, `name`, `desc`, `key`, `metric_id`）: UTF-8 エンコードされた文字列。NUL ターミネータは含めない
+- **ScopeId パラメータ**（`scope`）: 「[ScopeId 直列化契約](#scopeid-直列化契約)」に従うバイナリレイアウト（UTF-8 文字列ではない）
+
+#### ScopeId 直列化契約
+
+`scope_ptr`/`scope_len` が指す領域は、`ScopeId`（domain_model.md §3.2）の以下の Little-Endian バイナリレイアウトである。`scope_len` はレイアウト全体のバイト長（`= 4 + 4 + qn_len + 4 + fp_len`）を表す:
+
+- レイアウト: `[level: u32, qn_len: u32, qn_bytes: [u8; qn_len], fp_len: u32, fp_bytes: [u8; fp_len]]`
+- `level`: `AnalysisLevel` 列挙値（`0` = Function, `1` = Module, `2` = Project）。`metric_register` の `level` 引数と同じ値域
+- `qn_bytes`: `ScopeId.qualified_name` の UTF-8 バイト列（長さは `qn_len`）
+- `fp_bytes`: `ScopeId.file_path` の UTF-8 バイト列（`WorkspaceRoot` 相対、長さは `fp_len`）
+- ホストは `kalos_plugin_evaluate` 呼び出し前に `kalos_plugin_alloc` でプラグインの線形メモリ上に `metric_id`（UTF-8 文字列）と `scope`（本バイナリレイアウト）を書き込み、それぞれのポインタと長さを引数として渡す。プラグインは受け取った `scope_ptr`/`scope_len` をホスト関数（`cpg_node_count` 等）にそのまま引き渡す。ホストは各ホスト関数呼び出し時に本レイアウトから `ScopeId` を復元する
+
+#### read ヘルパー戻り値契約
+
+`cpg_read_node`、`cpg_read_edge`、`config_read` の `i32` 戻り値は以下の共通セマンティクスに従う:
+
+- `>= 0`: 成功。戻り値は `buf_ptr` から書き込まれた実バイト数を表す
+- `-1`: バッファ不足。`buf_len` が必要なデータサイズより小さい場合に返す。`buf_ptr` の内容は未定義とする。プラグインはより大きなバッファを `kalos_plugin_alloc` で確保して再呼び出しできる
+- `-2`: 範囲外インデックスまたは存在しないキー。`cpg_read_node`/`cpg_read_edge` で `index >= count` の場合、または `config_read` で未定義のキーの場合に返す。`buf_ptr` の内容は未定義とする
+
+#### host exports
+
+ホストは以下の関数をプラグインにエクスポートする（ホスト→プラグイン）:
+
+- `cpg_node_count(scope_ptr, scope_len) -> u32` — 対象スコープのノード数を返す
+- `cpg_edge_count(scope_ptr, scope_len) -> u32` — 対象スコープのエッジ数を返す
+- `cpg_read_node(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — ノードデータを線形メモリへ書き込む。戻り値は [read ヘルパー戻り値契約](#read-ヘルパー戻り値契約)に従う
+- `cpg_read_edge(scope_ptr, scope_len, index: u32, buf_ptr, buf_len) -> i32` — エッジデータを線形メモリへ書き込む。戻り値は [read ヘルパー戻り値契約](#read-ヘルパー戻り値契約)に従う
+- `config_read(key_ptr, key_len, buf_ptr, buf_len) -> i32` — `MetricConfig` のキーに対応する値を線形メモリへ書き込む。戻り値は [read ヘルパー戻り値契約](#read-ヘルパー戻り値契約)に従う
+- `metric_register(id_ptr, id_len, level: u32, name_ptr, name_len, desc_ptr, desc_len) -> i32` — `MetricDefinition` を登録する。`id` は `MetricDefinition.id`（グローバル一意）、`level` は `AnalysisLevel`（0=Function, 1=Module, 2=Project）、`name`/`desc` は人間可読な名前と説明。v1 では `participation = ReportOnly`, `rule_binding = None` が暗黙に設定される（domain_model.md §3.2 参照）。成功時 0、重複 ID 時 -1 を返す
+
+#### plugin exports
+
+プラグインは以下の関数をエクスポートする（プラグイン→ホスト）:
+
+- `kalos_plugin_init() -> i32` — 初期化。`metric_register` ホスト関数を呼び出して `MetricDefinition` を 1 つ以上登録する。1 モジュールが複数の `MetricDefinition` を登録できる（各登録は独立した `metric_id` を持つ）。成功時 0、失敗時非 0 を返す
+- `kalos_plugin_evaluate(metric_id_ptr, metric_id_len, scope_ptr, scope_len) -> i64` — 指定メトリクスを指定スコープに対して評価し `MetricValue` を返す。`metric_id` は `kalos_plugin_init` 内の `metric_register` で登録済みの `MetricDefinition.id` でなければならない。ホストは登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて本関数を 1 回ずつ呼び出す。ホストは登録済みの `metric_id` のみを渡すことを保証するため、未登録の `metric_id` が渡されることは正常動作では発生しない。万一ホスト実装の不具合により未登録の `metric_id` が渡された場合、ホストは当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成せず、`stderr` / 構造化ログへ warning を出力する。プラグイン側の戻り値は無視する。戻り値のエンコーディングは「[スカラー戻り値エンコーディング](#スカラー戻り値エンコーディング)」を参照
+- `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
+- `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
+
+#### スカラー戻り値エンコーディング
+
+`kalos_plugin_evaluate` の戻り値は WASM 値スタック上の `i64` 値であり、線形メモリレイアウトではない。下位 32 ビット（ビット 0–31）が `raw_value` の IEEE 754 binary32 ビットパターン（`i32.reinterpret_f32` 相当）、上位 32 ビット（ビット 32–63）が `normalized_risk` の IEEE 754 binary32 ビットパターン。ホストは受け取った binary32 値を `f64` へ拡張したのち、以下の **invalid-value contract** を適用する:
+
+- `raw_value` が `NaN` または `±Inf` の場合: 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない。`stderr` / 構造化ログへ warning を出力する
+- `normalized_risk` が `NaN` または `±Inf` の場合: 同上（当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない）
+- `normalized_risk` が有限だが `[0.0, 1.0]` の範囲外の場合: `clamp(normalized_risk, 0.0, 1.0)` で範囲内に収め、`stderr` / 構造化ログへ warning を出力したうえで処理を続行する
+- 上記の検証を通過した値に対し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
+
+#### 線形メモリデータレイアウト
+
+ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian のバイナリレイアウトとする。エッジレコードは固定長（12 バイト）だが、ノードレコード・ScopeId・config 値は長さプレフィックス付きの可変長レイアウトである。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。
+
+**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（`kind` は後述の NodeKind discriminant mapping に従う `u32` 列挙値、可変長）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]`（`kind` は後述の EdgeKind discriminant mapping に従う `u32` 列挙値、固定長 12 バイト）とする。いずれも Little-Endian。
+
+**NodeKind / EdgeKind discriminant mapping**: ノードレコード・エッジレコードの `kind: u32` は以下の規範的（normative）マッピングに従う（domain_model.md §3.1 の `NodeKind` / `EdgeKind` enum 定義に対応）。この対応表は `kalos-metric-spi-v1` の一部であり、バリアントの追加・削除・値の再割当ては SPI version の更改を伴う破壊的変更として扱う。ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない（将来の SPI version で追加されたバリアントは v1 プラグインに対してフィルタされる）。NodeKind: `0` = Function, `1` = Class, `2` = Module, `3` = Variable, `4` = Parameter, `5` = ExternalSymbol。EdgeKind: `0` = Call, `1` = DataFlow, `2` = ControlFlow, `3` = Contains, `4` = TypeReference, `5` = Semantic。値は 0 始まりの連続整数で、domain_model.md §3.1 の enum 宣言順と一致する。
+
+`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す、可変長）とする。
+
+**ScopeId レイアウト**: 前述の「[ScopeId 直列化契約](#scopeid-直列化契約)」で定義する（可変長）。
+
+**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「[スカラー戻り値エンコーディング](#スカラー戻り値エンコーディング)」を参照。
+
+上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う。
+
+#### SPI v1 列挙契約
+
+前述の NodeKind / EdgeKind discriminant mapping において「ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない」と定めている。このフィルタが `cpg_node_count` / `cpg_edge_count` / `cpg_read_node` / `cpg_read_edge` のカウント・インデックス空間に与える影響を以下に規範的（normative）に定義する:
+
+- **フィルタ済みカウント**: `cpg_node_count(scope)` は `UnifiedCpg.subgraph(scope_id)` 内のノードのうち SPI v1 の NodeKind discriminant mapping に含まれる `kind` 値を持つもののみをカウントした値を返す。`cpg_edge_count(scope)` は SPI v1 の EdgeKind discriminant mapping に含まれる `kind` 値を持ち、かつ `source_index` / `target_index` が参照するノードが双方ともフィルタ後のノード集合に含まれるエッジのみをカウントした値を返す。将来の SPI version で追加された未知の `kind` 値を持つレコードはカウントに含めない
+- **稠密インデックス**: フィルタ後のノード群 / エッジ群はそれぞれ `[0, count)` の稠密な連続整数でインデックスされる（`count` は `cpg_node_count` / `cpg_edge_count` の戻り値）。`cpg_read_node` / `cpg_read_edge` の `index` 引数がこの範囲外の場合、[read ヘルパー戻り値契約](#read-ヘルパー戻り値契約)に従い `-2` を返す
+- **列挙順序**: フィルタ後のノード群は `UnifiedCpg.subgraph(scope_id)` 内の元の格納順序から未知 NodeKind のレコードを除去した相対順序を保持する。エッジ群も同様に元の格納順序から、未知 EdgeKind のレコードおよびフィルタ済みノードへの参照を持つレコードを除去した相対順序を保持する。この列挙順序は ADR-0003 の決定論性契約により同一入力・同一設定で再現可能である
+- **エッジの `source_index` / `target_index` 再番号付け**: エッジレコード内の `source_index` / `target_index` はフィルタ後のノードインデックス空間を参照する。ホストは未知 NodeKind のフィルタにより元のインデックスから再番号付け（reindexing）を行い、フィルタ後の稠密インデックス空間との整合性を保証する
+
+**WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる。
+
+### プラグインランタイム動作
+
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
 - ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて `kalos_plugin_evaluate(metric_id, scope)` を 1 回ずつ呼び出し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
 - Plugin Host は `plugin_manifest` を `workspace_relative_path` 昇順でロードし、`metric_id` のグローバル一意性を検証する。組み込みメトリクスまたは先行ロード済みプラグインと `metric_id` が衝突したモジュールは deterministic なロード失敗として扱い、warning を出してスキップする
@@ -147,7 +199,7 @@
 ### リスク
 
 - WASM オーバーヘッドが大きい場合、初期リリースでは組み込みメトリクス中心で運用し、外部プラグインを experimental 扱いにする可能性がある
-- fuel budget の暫定値（500K / 30M / 5M fuel, 64MiB）は `REQ-NF-001/002` の性能バジェットの 5% 目安から導出したが、実ワークロードで厳しすぎる、または緩すぎる可能性がある。PoC ベンチマークで検証し v1 リリースまでに確定する
+- fuel budget の暫定値（500K / 30M / 5M fuel, 64 MiB）は `REQ-NF-001/002` の性能バジェットの 5% 目安から導出したが、実ワークロードで厳しすぎる、または緩すぎる可能性がある。PoC ベンチマークで検証し v1 リリースまでに確定する
 
 ## 改訂履歴
 
