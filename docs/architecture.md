@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.23 |
+| バージョン | 0.4.24 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 入力 | requirements.md v0.4.14, domain_model.md v0.4.13 |
@@ -169,6 +169,57 @@ graph TB
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
 | Observability Adapter | 構造化ログ、スパン、性能メトリクス | 実行イベント | ログ、内部計測 | `REQ-NF-001`, `REQ-NF-002` |
+
+#### 補助: 個別 REQ-ID トレーサビリティ
+
+上記責務表の「対応要件」列では範囲記法（例: `REQ-FUNC-001`〜`007`）を用いている箇所がある。変更影響確認や監査で個別 REQ-ID を追えるよう、以下に展開した対応表を示す。
+
+| REQ-ID | 主担当コンテキスト | 備考 |
+|---|---|---|
+| `REQ-FUNC-001` | CPG Extraction | Python CPG 生成 |
+| `REQ-FUNC-002` | CPG Extraction | TypeScript CPG 生成 |
+| `REQ-FUNC-003` | CPG Extraction | Rust CPG 生成 |
+| `REQ-FUNC-004` | CPG Extraction | Go CPG 生成 |
+| `REQ-FUNC-005` | CPG Extraction | 複数ファイル一括解析 |
+| `REQ-FUNC-006` | CPG Extraction | 除外パターン |
+| `REQ-FUNC-007` | CPG Extraction | 外部依存シンボル解決 |
+| `REQ-FUNC-008` | Metrics | 関数レベルメトリクス |
+| `REQ-FUNC-009` | Metrics | モジュールレベルメトリクス |
+| `REQ-FUNC-010` | Metrics | プロジェクトレベルメトリクス |
+| `REQ-FUNC-011` | Metrics | 総合スコア算出 |
+| `REQ-FUNC-012` | Metrics, Plugin Host | プラグイン拡張 |
+| `REQ-FUNC-013` | Diagnostics | 閾値違反の診断 |
+| `REQ-FUNC-014` | Diagnostics | 構造的パターン検出 |
+| `REQ-FUNC-015` | Diagnostics | 改善提案テキスト生成 |
+| `REQ-FUNC-016` | Diagnostics | 重大度付与 |
+| `REQ-FUNC-017` | Diagnostics | コード例付与 |
+| `REQ-FUNC-018` | CLI Shell, Application Pipeline, Configuration | `kalos check` コマンド |
+| `REQ-FUNC-019` | Reporting | 人間可読表示 |
+| `REQ-FUNC-020` | Reporting | JSON 出力 |
+| `REQ-FUNC-021` | Reporting | SARIF 出力 |
+| `REQ-FUNC-022` | CLI Shell, Application Pipeline | Exit code 制御 |
+| `REQ-FUNC-023` | CLI Shell, Application Pipeline | 解析階層選択（`--level`） |
+| `REQ-FUNC-024` | Application Pipeline, Reporting | 総合スコアサマリー |
+| `REQ-FUNC-025` | Configuration | 設定ファイル読み込み |
+| `REQ-FUNC-026` | Configuration, Diagnostics | ルール有効/無効切り替え |
+| `REQ-FUNC-027` | Configuration | 閾値カスタマイズ |
+| `REQ-FUNC-028` | Configuration | 除外パターン設定 |
+| `REQ-FUNC-029` | CPG Extraction（抽出）, Diagnostics（適用） | インライン抑制 |
+| `REQ-FUNC-030` | CLI Shell, Configuration | デフォルト設定生成 |
+| `REQ-FUNC-031` | CPG Extraction, Managed Tool Cache Adapter | 配布バイナリ |
+| `REQ-FUNC-032` | Managed Tool Cache Adapter | GitHub Actions Action |
+| `REQ-FUNC-033` | Reporting | Code Scanning 連携 |
+| `REQ-FUNC-034` | Application Pipeline, Git Diff Adapter, Impact Analysis Service, Baseline Cache Adapter | 差分解析モード |
+| `REQ-NF-001` | Application Pipeline, Observability Adapter | 全解析性能 |
+| `REQ-NF-002` | Application Pipeline, Git Diff Adapter, Impact Analysis Service, Baseline Cache Adapter, Observability Adapter | 差分解析性能 |
+| `REQ-NF-003` | Application Pipeline, Git Diff Adapter, Metrics, Plugin Host, Impact Analysis Service | 決定論的評価 |
+| `REQ-NF-006` | Metrics, Plugin Host | メトリクス追加 |
+| `REQ-NF-007` | Configuration | ゼロコンフィグ初回実行 |
+| `REQ-NF-008` | Diagnostics | LLM フォールバック |
+| `REQ-NF-009` | Managed Tool Cache Adapter | 外部通信の安全性 |
+| `REQ-NF-010` | Managed Tool Cache Adapter | オフライン実行 |
+
+> **注**: `REQ-NF-004`（対応プラットフォーム）と `REQ-NF-005`（言語サポート追加）は個別コンポーネントではなくアーキテクチャ選択（§3.1）と適合度関数（§8）で対処しているため、本表からは除外している。
 
 ### 4.2 依存方向
 
@@ -610,6 +661,7 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.24 | 2026-03-27 | §4.1 責務表の直後に個別 REQ-ID トレーサビリティ補助表を追加（範囲記法で隠れていた REQ-FUNC-001〜007, 008〜012, 013〜017, 019〜021, 025〜028, REQ-NF-001〜003 を個別展開し、各 REQ-ID から主担当コンテキストを直接追えるようにした） | Claude |
 | 0.4.23 | 2026-03-27 | 入力参照を domain_model.md v0.4.13 に同期、ADR-0001〜0005 の関連文書版を arch v0.4.23 / req v0.4.14 / dm v0.4.13 に更新（本体の変更なし） | Claude |
 | 0.4.22 | 2026-03-27 | 入力参照を requirements.md v0.4.14 に同期（本体の変更なし） | Claude |
 | 0.4.21 | 2026-03-27 | §4.1 Reporting 責務表の `--level` 射影記述に「診断」を追加（メトリクス・スコアだけでなく診断も射影対象であることを明示。REQ-FUNC-023・REQ-FUNC-020 との整合） | Claude |
