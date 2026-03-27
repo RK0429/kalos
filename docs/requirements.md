@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.8 |
+| バージョン | 0.4.9 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -270,7 +270,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   5. `scope_risk`, `level_risk`, `overall_risk` は各段階の算出直後に小数第 6 位で round-half-up し、その値をキャッシュと後続計算に用いる
   6. `overall_risk = Σ(adjusted_weight[level] * level_risk[level])`
   7. `function_score`, `module_score`, `project_score`, `overall_score` はそれぞれ `round_half_up(100 * (1 - risk))` で整数化する
-  8. `--level function|module|project` により非対象階層が未計算の場合、対応する `*_risk` / `*_score` は省略可能とし、機械可読出力では `null` に写像する
+  8. `--level function|module|project` により報告対象外となった階層の `*_risk` / `*_score` は、機械可読出力では `null` に写像する（内部では全階層を算出するが、報告射影として省略する。REQ-FUNC-023 参照）
   9. `overall_score` と各階層スコアは常に上記メトリクス集約の結果であり、`summary_scope`・診断件数・exit code 判定から逆算しない
 
 - **出力**: 総合スコア（0〜100 の整数）および各階層の部分スコア
@@ -806,7 +806,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - REQ-FUNC-008〜010 は REQ-FUNC-001〜004（CPG生成）に依存
 - REQ-FUNC-013 は REQ-FUNC-008〜010（メトリクス算出）に依存
-- REQ-FUNC-015 は REQ-FUNC-013（診断報告）, REQ-FUNC-001〜004（該当コード断片取得）, REQ-NF-008〜010（LLM連携制約）に依存
+- REQ-FUNC-015 は REQ-FUNC-013（診断報告）, REQ-FUNC-001〜004（該当コード断片取得）, REQ-NF-008〜010（LLM可用性・外部通信・オフライン制約）に依存
 - REQ-FUNC-011 は REQ-FUNC-008〜010 に依存
 - REQ-FUNC-019, 020, 021 は REQ-FUNC-013, 015 に依存
 - REQ-FUNC-022 は REQ-FUNC-016（重大度）に依存
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.9 | 2026-03-27 | レビュー findings 解決: REQ-NF-008〜010 の依存ラベルを「LLM可用性・外部通信・オフライン制約」に修正（LLM 限定表現の是正） | Claude |
 | 0.4.8 | 2026-03-27 | レビュー findings 解決: `full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、`変更後プロジェクト全体` を `解決済み analysis_targets 内の全階層` に明確化 | Claude |
 | 0.4.7 | 2026-03-26 | レビュー findings 解決: REQ-FUNC-018 の `--llm` に full/diff 両モード動作とエンリッチ対象スコープを明記 | Claude |
 | 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加（ADR-0004・domain_model.md と同期） | Claude |

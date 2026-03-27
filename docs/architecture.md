@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.11 |
+| バージョン | 0.4.12 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.8, domain_model.md v0.4.8 |
+| 入力 | requirements.md v0.4.9, domain_model.md v0.4.9 |
 
 ## 1. 設計目標
 
@@ -91,6 +91,8 @@ graph TB
     Kalos -->|任意の改善提案要求| LLM
     Kalos -->|JSON / SARIF / exit code| CI
 ```
+
+> **C4 レベル2（コンテナ図）の省略**: kalos は単一 Rust バイナリのモジュラーモノリスであり、デプロイ可能なコンテナは kalos CLI バイナリのみである。レベル1 のシステムコンテキスト図から直接レベル3 のコンポーネント図へ進むことで、自明なレベル2 の重複を避ける。
 
 ### 3.3 C4 レベル3: コンポーネント図
 
@@ -583,12 +585,16 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 ### 9.1 PoC 項目
 
-1. CodeQL Adapter で 10k LOC / 4 言語混在コーパスを 60 秒以内に処理できるか
-2. `--diff` 実行でベースライン再利用込み 10 秒以内を達成できるか
-3. 同一入力 10 回実行で全出力ハッシュが一致するか
-4. 新言語追加を CPG 抽出境界内の `Extractor Adapter + UnifiedCpg mapper + language profile` だけで実現できるか
-5. 新しい report-only plugin metric を `MetricDefinition` 実装と `.kalos.toml` 登録だけで差し込めるか
-6. 各言語の dependency symbol resolver adapter が lockfile / stub / local metadata だけで外部公開 API を解決し、解析時ネットワーク不要を守れるか
+requirements.md §5 の検証項目を設計観点で具体化したリストである。§5 に対応がない項目はアーキテクチャ固有の検証である。
+
+| # | 検証内容 | requirements.md §5 対応 |
+|---|---|---|
+| 1 | CodeQL Adapter で 10k LOC / 4 言語混在コーパスを 60 秒以内に処理できるか | §5 #1, #4 |
+| 2 | `--diff` 実行でベースライン再利用込み 10 秒以内を達成できるか | —（アーキテクチャ固有） |
+| 3 | 同一入力 10 回実行で全出力ハッシュが一致するか | —（アーキテクチャ固有） |
+| 4 | 新言語追加を CPG 抽出境界内の `Extractor Adapter + UnifiedCpg mapper + language profile` だけで実現できるか | —（アーキテクチャ固有） |
+| 5 | 新しい report-only plugin metric を `MetricDefinition` 実装と `.kalos.toml` 登録だけで差し込めるか | §5 #5 |
+| 6 | 各言語の dependency symbol resolver adapter が lockfile / stub / local metadata だけで外部公開 API を解決し、解析時ネットワーク不要を守れるか | §5 #3 |
 
 ## 10. ADR 一覧
 
@@ -604,6 +610,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.12 | 2026-03-27 | レビュー findings 解決: §9.1 PoC 項目を表形式に変換し requirements.md §5 との対応を明示（番号不一致の解消） | Claude |
 | 0.4.11 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図の non-diff フォールバックラベルに `analysis_targets` 限定を明示、入力参照を requirements.md v0.4.8 に更新 | Claude |
 | 0.4.10 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図に `--level` オプションと `summary_scope` 分岐を明示、`scores.overall` の `requested_level` 射影規則を明文化、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、入力参照を domain_model.md v0.4.8 に更新 | Claude |
 | 0.4.9 | 2026-03-26 | レビュー findings 解決: §5.2 差分解析シーケンス図に Optional LLM の participant と interaction を追加（§5.1 と整合）、Reporting 責務表の出力を「フォーマット済み出力（stdout）」に修正（未定義のファイル出力機能を排除） | Claude |
