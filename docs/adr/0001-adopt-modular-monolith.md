@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.8 |
+| 改訂 | v0.4.9 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -168,3 +168,4 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 | 2026-03-27 | レビュー指摘解決: WASM プラグイン登録の `[[plugins]]` 記述を有効な TOML 表記に修正（requirements.md REQ-FUNC-025 参照を追加）、architecture.md §4.2 リンクにセクションアンカーを追加 | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
 | 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |
 | 2026-03-27 | provenance sync: REQ-FUNC-025 参照にセクションアンカーを追加、`関連文書版` を最新に同期 | arch v0.4.23 / req v0.4.14 / dm v0.4.13 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.24 に同期（ADR 本文の変更なし） | arch v0.4.24 / req v0.4.14 / dm v0.4.13 |
