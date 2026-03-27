@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.16 |
+| バージョン | 0.4.18 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.10, domain_model.md v0.4.11 |
+| 入力 | requirements.md v0.4.11, domain_model.md v0.4.11 |
 
 ## 1. 設計目標
 
@@ -165,7 +165,7 @@ graph TB
 | Metrics | メトリクス計算、正規化、階層スコア集約。`enabled = false` のルールにバインドされたメトリクスは計算・`metrics` 出力は維持するが、`scope_risk` 算術平均の母集団から除外する | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用。`enabled = false` のルールは診断を生成せず、当該ルールにバインドされたメトリクスは `scope_risk` 集約から除外される（スコアリング・summary・exit code に影響しない） | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `List<Diagnostic>` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-026`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
 | Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | フォーマット済み出力（stdout） | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
-| Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディング、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
+| Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディング、SPI v1 列挙契約〈フィルタ済みカウント/インデックス空間・再番号付け〉、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
 | Observability Adapter | 構造化ログ、スパン、性能メトリクス | 実行イベント | ログ、内部計測 | `REQ-NF-001`, `REQ-NF-002` |
@@ -610,6 +610,8 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.18 | 2026-03-27 | 入力参照を requirements.md v0.4.11 に同期（本体の変更なし） | Claude |
+| 0.4.17 | 2026-03-27 | レビュー findings 解決: §4.1 Plugin Host 責務表の normative ABI 参照リストに SPI v1 列挙契約（フィルタ済みカウント/インデックス空間・再番号付け）を追加（ADR-0004 へのトレーサビリティ確保） | Claude |
 | 0.4.16 | 2026-03-27 | §4.1 責務表: Application Pipeline 出力に `LlmSuggestionBundle?` を追加（Reporting 入力契約との整合） | Claude |
 | 0.4.15 | 2026-03-27 | 入力参照を domain_model.md v0.4.11 に同期（本体の変更なし） | Claude |
 | 0.4.14 | 2026-03-27 | レビュー findings 解決: §4.2 ルールの `analysis_targets` ライフサイクル記述を修正（`ReportMetadata` として下流へ渡す → `ProjectConfig` に保持し Reporting 出力時に `ReportMetadata.analysis_targets` へ写像）、責務表・domain_model.md との整合を確保 | Claude |

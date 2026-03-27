@@ -164,5 +164,5 @@
 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | arch v0.4.6 / req v0.4.6 / dm v0.4.4 |
 | 2026-03-27 | レビュー指摘解決: `関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
 | 2026-03-27 | レビュー指摘解決: SPI v1 `kind: u32` の規範的 discriminant mapping（NodeKind / EdgeKind）を追加、バリアント変更時の SPI version 更改義務と未知 kind 値のフィルタ規則を明記 | arch v0.4.9 / req v0.4.7 / dm v0.4.6 |
-| 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する ScopeId・MetricDefinition・MetricValue・NodeKind/EdgeKind 契約の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
 | 2026-03-27 | レビュー指摘解決: SPI v1 列挙契約（Enumeration Contract）を追加 — フィルタ済みカウント、稠密インデックス、列挙順序、エッジの source_index/target_index 再番号付けを規範的に定義 | arch v0.4.12 / req v0.4.9 / dm v0.4.8 |
+| 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する ScopeId・MetricDefinition・MetricValue・NodeKind/EdgeKind 契約の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
