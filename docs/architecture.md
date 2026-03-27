@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.9 |
-| 最終更新日 | 2026-03-26 |
+| バージョン | 0.4.10 |
+| 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.7, domain_model.md v0.4.7 |
+| 入力 | requirements.md v0.4.7, domain_model.md v0.4.8 |
 
 ## 1. 設計目標
 
@@ -155,7 +155,7 @@ graph TB
 | コンテキスト | 主要責務 | 入力 | 出力 | 対応要件 |
 |---|---|---|---|---|
 | CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
-| Application Pipeline | パイプラインオーケストレーション、diff/full モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 | 全コンテキスト出力 + `ProjectConfig` | `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code | 大部分の `REQ-FUNC-*` を横断 |
+| Application Pipeline | パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 | 全コンテキスト出力 + `ProjectConfig` | `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code | 大部分の `REQ-FUNC-*` を横断 |
 | Configuration | 明示/探索ベースの設定解決、`WorkspaceRoot` 解決、`analysis_targets` 正規化・検証、`targets_explicitly_specified` 由来記録、優先順位マージ、デフォルト提供 | CLI（`--config` を含む）、CLI path 引数（省略時は `["."]`）、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot`、`targets_explicitly_specified` を含む）、正規化済み `analysis_targets` | `REQ-FUNC-018`, `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
 | Git Diff Adapter | `base-ref` 解決、変更ファイル列挙、`base_snapshot_hash` 取得 | `WorkspaceRoot`、`analysis_targets`、`base-ref` | 変更対象 path 群、`base_snapshot_hash` | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、依存定義/lockfile からの外部シンボル解決、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig`、依存定義/lockfile、ローカル stub / metadata cache | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
@@ -308,7 +308,7 @@ sequenceDiagram
 
 ### 5.2 差分解析フロー
 
-以下のシーケンス図は `analysis_targets` が全ワークスペースである場合の差分解析フローを示す。`analysis_targets` が部分集合の場合は diff 最適化を適用せず、ベースラインの読み書きも行わない（§5.3 参照）。
+以下のシーケンス図は `analysis_targets` が全ワークスペースである場合の差分解析フローを示す。`analysis_targets` が部分集合の場合は diff 最適化を適用せず、ベースラインの読み書きも行わない（§5.3 参照）。`--level` はフロー自体を変えないが、Reporting の出力射影と `summary_scope` の選択に影響する（後述の不変条件を参照）。
 
 ```mermaid
 sequenceDiagram
@@ -324,7 +324,7 @@ sequenceDiagram
     participant LLM as Optional LLM
     participant R as Reporting
 
-    U->>CLI: kalos check --diff <base-ref>
+    U->>CLI: kalos check --diff <base-ref> [--level <level>]
     CLI->>APP: 実行要求
     APP->>APP: analysis_targets が全ワークスペースか判定
     alt analysis_targets が部分集合
@@ -346,18 +346,18 @@ sequenceDiagram
         LLM-->>APP: LlmSuggestionBundle?
         APP->>R: DiagnosticReport / AnalysisMetrics / ReportMetadata / ReportViewOptions / LlmSuggestionBundle? を含めて出力変換
         APP->>Cache: ベースライン保存（全ワークスペース解析時）
-        R-->>U: 差分対象診断 + diagnostics_scope=affected_only + プロジェクト全体 summary
+        R-->>U: 差分対象診断 + diagnostics_scope=affected_only + summary（--level all: summary_scope=whole_project / --level 限定: summary_scope=listed_diagnostics）
     end
 ```
 
 差分解析では、以下を不変条件とする。
 
-- `scores.overall` は常に `AnalysisMetrics.OverallScore` の写像であり、診断件数から逆算しない。`--level all`（デフォルト）では変更後のプロジェクト全体メトリクス、`--level` で階層を限定した場合は変更後の指定階層メトリクスを意味する
+- `scores.overall` は常に `AnalysisMetrics.OverallScore` から導出され、診断件数から逆算しない。`--level all`（デフォルト）では `OverallScore.overall_score` を、`--level function|module|project` では対応する `function_score` / `module_score` / `project_score` を写像し、変更後の指定階層メトリクスを意味する
 - `--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。ベースラインキャッシュの保存不変条件（§5.3、ADR-0003）として全階層の結果が必要なためである。`--level` で選択されなかった階層のメトリクス・診断・スコアは報告に含めない（must exclude）。この射影は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する。ただし、プラグインメトリクスの再利用は当該プラグインが現在の実行で正常にロード・評価された場合に限り、失敗またはスキップされたプラグインの cache 済み `MetricValue` は除外する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
 - `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `whole_project`（解決済み `analysis_targets` 内の全階層を母集団とする）、`--level` で階層を限定した場合は `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
-- full mode の `diagnostics_scope = whole_project` は「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
+- non-diff モードの `diagnostics_scope = whole_project` は「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
 - `ReportMetadata.schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
@@ -604,6 +604,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.10 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図に `--level` オプションと `summary_scope` 分岐を明示、`scores.overall` の `requested_level` 射影規則を明文化、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、入力参照を domain_model.md v0.4.8 に更新 | Claude |
 | 0.4.9 | 2026-03-26 | レビュー findings 解決: §5.2 差分解析シーケンス図に Optional LLM の participant と interaction を追加（§5.1 と整合）、Reporting 責務表の出力を「フォーマット済み出力（stdout）」に修正（未定義のファイル出力機能を排除） | Claude |
 | 0.4.8 | 2026-03-26 | 入力参照を v0.4.6 に更新、ベースラインキャッシュ永続化ペイロードの壊れた内部参照（§5.2 保存単位）を除去しインライン記述に一本化 | Claude |
 | 0.4.7 | 2026-03-22 | 入力参照を domain_model.md v0.4.5 に同期（本体の変更なし） | Claude |

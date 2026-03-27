@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.7 |
-| 最終更新日 | 2026-03-26 |
+| バージョン | 0.4.8 |
+| 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 入力 | requirements.md v0.4.7 |
 
@@ -301,7 +301,7 @@ classDiagram
 - `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）。`raw_value` または `normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し `MetricValue` を生成しない。`normalized_risk` が有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある。`enabled = false` のルールにバインドされたメトリクスは母集団から除外する。母集団が空の場合（全メトリクスが除外された場合）、`scope_risk = 0.0`（リスクなし）とする
 - `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を報告に含めない（must exclude）。Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて非対象階層の射影を担う。ただし、パターンルールの入力として必要な下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出し保持する。これらは報告・スコア集約の対象にはならない。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
-- `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは対象階層のみ `Some`、非対象階層は `None` を許容する。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
+- `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは計算可能なスコープが存在する階層のみ `Some`、スコープが存在しない階層は `None` を許容する（`--level` による報告対象の制限とは無関係であり、`DiffBaseline` に永続化される `OverallScore` も同じ規則に従う）。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
 - `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。project スコープの正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一値とし、スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
 - プラグインのロード失敗、checksum 不一致、fuel budget 超過、メモリ超過、aggregate fuel budget 超過、および評価戻り値の `raw_value` または `normalized_risk` が `NaN` / `±Inf` の場合は `MetricValue` を生成しない非致命の運用イベントとして扱う（有限だが `[0.0, 1.0]` 範囲外の `normalized_risk` は `clamp` で補正し warning を出力する。fuel が規範的上限であり、diff mode から全解析へフォールバックした場合は全解析の budget を適用する。具体的な budget 数値は暫定値であり PoC で確定予定。ADR-0004 参照）。`AnalysisMetrics` は成功したメトリクスだけを束ね、失敗通知は `stderr` / 構造化ログ側へ分離する
@@ -490,10 +490,10 @@ classDiagram
 - `PatternRule.detect(..., config)` は解決済み `RuleConfig` を値として受け取る。`config.enabled = Some(false)` の場合は空リストを返し、診断生成後は `config.severity` を最終 `Diagnostic.severity` に上書きできる
 - `RuleConfig.enabled = false` は **ルールの全効果を抑制する**。メトリクスルールの場合、メトリクス計算と `metrics` 出力は維持するが、診断生成を抑制し、当該メトリクスを `scope_risk` 算術平均の母集団から除外する（スコアリング除外）。パターンルールの場合、パターン検出自体を実行しない。いずれの場合も `summary` 件数・`exit code` 判定への影響はなくなる
 - `FileLocation` は全診断で必須とする。cross-scope 診断では、根拠 scope 群のうち辞書順最小 `file_path` の `start_line = 1`, `end_line = 1`, `column = None` を代表位置として使う。human 形式では `path:line`（`line` には `location.start_line` の値を使う）と表示し、SARIF では column を出力しない
-- `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。full mode では「選択された `--level` に関して、解決済み `analysis_targets` 内で完全」であることを `WholeProject`（JSON 値: `"whole_project"`）で表し、diff mode では `AffectedOnly`（JSON 値: `"affected_only"`）を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
+- `DiagnosticReport.diagnostics_scope` は `diagnostics` 一覧の完全性を表す。non-diff モードでは「選択された `--level` に関して、解決済み `analysis_targets` 内で完全」であることを `WholeProject`（JSON 値: `"whole_project"`）で表し、diff mode では `AffectedOnly`（JSON 値: `"affected_only"`）を取る。reporting が JSON/SARIF の completeness 契約を確定する source of truth になる
 - `DiagnosticReport.summary_scope` は summary と exit code がどの母集団に対する集計かを表す。`SummaryScope.WholeProject`（JSON 値: `"whole_project"`）は summary の母集団が解決済み `analysis_targets` 内の全階層の診断であることを表す。`DiagnosticReport.summary` は materialized value であり、`SummaryScope.ListedDiagnostics`（JSON 値: `"listed_diagnostics"`）では現在の `diagnostics` 一覧から、diff mode かつ `summary_scope = WholeProject` では merged post-change `ScopeDiagnosticSnapshot` から Application Pipeline が再構成してから `DiagnosticReport` へ束ねる
 - `SummaryScope.ListedDiagnostics` は `--level` で解析階層が限定された場合に使用され、summary は `diagnostics` リストに含まれる指定階層の診断のみを母集団とする（REQ-FUNC-023）
-- JSON `scores` への写像では `OverallScore.overall_score` を `scores.overall` に対応付ける。`scores.overall` は `summary_scope` や診断件数の写像ではない。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
+- JSON `scores` への写像では、`ReportViewOptions.requested_level = all` のとき `OverallScore.overall_score` を `scores.overall` に対応付ける。`requested_level = function|module|project` のときは対応する `function_score` / `module_score` / `project_score` を `scores.overall` へ射影する。`scores.overall` は `summary_scope` や診断件数の写像ではない。`function_score` / `module_score` / `project_score` が `None` の場合、対応する `scores.*` は `null` になる
 - `TemplateSuggestion` は決定論的コアの出力として `Diagnostic.template_suggestion` に保持する。LLM による補助提案は `LlmSuggestionBundle` として report 境界で `DiagnosticId` ごとに併記し、外部出力では `template_suggestion` / `llm_suggestion` として区別して表現する（REQ-FUNC-015, REQ-NF-008）
 - `LlmEnrichmentRequest` は Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てて LLM Adapter へ渡す allowlist 済み sidecar 入力である。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`source_excerpt` / `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得するが、request ごとに相互排他的であり、どちらか一方だけを持つ。`metric` と `pattern` は `Diagnostic.kind` に応じて排他的に設定される。代表ファイルの言語を一意に解決できない場合（v1 の対象言語 Python/TypeScript/Rust/Go ではファイル拡張子から言語が一意に確定するため通常は該当しないが、将来の言語追加時への forward compatibility として条件を保持する）、または multi-file / multi-language 診断の必須根拠を代表ファイル断片へ還元できない場合、その診断には `LlmSuggestion` を付与せず、`LlmEnrichmentRequest` 自体を生成しない
 - `InlineSuppression` は CPG 抽出コンテキストの `SuppressionComment` を変換したもの。`location` は抑制対象の代表位置を指し、同一行の診断または直後スコープ宣言に対応する診断へ適用される。cross-scope 診断の synthetic な代表位置には適用しない。`rule_id` が None の場合は対象位置の全診断を抑制する（REQ-FUNC-029）
@@ -559,7 +559,7 @@ classDiagram
 - `BaselineFingerprint.base_snapshot_hash` は「現在のワークスペース」ではなく `base-ref` 側のスナップショットを表す。これにより、同じ基準コミットに対する差分実行でベースラインを再利用できる
 - `BaselineFingerprint.config_hash` は、除外パターンの和集合と正規化済み `plugin_manifest` を含む `ProjectConfig` 全体のハッシュ。プラグイン差し替えや設定変更はこの値で再利用可否に反映される
 - `BaselineFingerprint.analysis_targets_hash` は `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象パスの変更によるベースラインの不正な再利用を防ぐ。**正規化規則**: 位置引数省略時（デフォルト）は正規形 `["."]` からハッシュを算出する。位置引数が明示的に指定された場合は、`WorkspaceRoot` 相対パスへ正規化し、ソート済み重複排除リストからハッシュを算出する。明示指定は `WorkspaceRoot` 配下の網羅性を判定せず常に部分集合として扱う（ADR-0003 参照）
-- `DiffBaseline` は `--level` に関わらず以下の全構成要素を保存する（永続化ペイロード）: (1) 全階層の `ScopeMetrics`（丸め済み `scope_risk` を含む function / module / project）、(2) `ScopeDiagnosticSnapshot`（`primary_scope_id` ごとの診断断片）、(3) `OverallScore`（丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score`）、(4) `DependencyIndexManifest`（全スコープ間の依存辺）。`--level` は報告対象の制限であり、保存範囲には影響しない。これにより、異なる `--level` での実行間でもベースラインを再利用できる
+- `DiffBaseline` は `--level` に関わらず以下の全構成要素を保存する（永続化ペイロード）: (1) 全階層の `ScopeMetrics`（丸め済み `scope_risk` を含む function / module / project）、(2) `ScopeDiagnosticSnapshot`（`primary_scope_id` ごとの診断断片）、(3) `OverallScore`（丸め済み `function_risk` / `module_risk` / `project_risk` / `overall_risk` と整数 `*_score`。`--level` は報告対象の制限であり、永続化される `OverallScore` の各階層フィールドには影響しない）、(4) `DependencyIndexManifest`（全スコープ間の依存辺）。`--level` は報告対象の制限であり、保存範囲には影響しない。これにより、異なる `--level` での実行間でもベースラインを再利用できる
 - `InvalidationPlan` の集合不変条件: (1) `recompute_scopes ∩ reuse_scopes = ∅`（同一スコープが再計算と再利用の両方に属することはない）、(2) `fallback_to_full = false` 時は `recompute_scopes ∪ reuse_scopes = 全既知スコープ`（全スコープがいずれかに分類される）、(3) `AffectedScopeSet.scopes ⊆ recompute_scopes`（影響を受けたスコープは必ず再計算対象）、(4) `fallback_to_full = true` 時は `recompute_scopes` と `reuse_scopes` は無視され、現在の `analysis_targets` 内の全スコープを対象に non-diff 再計算が実行される（`analysis_targets` の拡張は行わない）
 - `InvalidationPlan.recompute_scopes` は diff 最適化が有効な限り project スコープの正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` を必ず含む。`OverallScore` と project-level metrics は merged post-change snapshot から再計算し、baseline の project 断片をそのまま最終結果へ流用しない
 - `DiffBaseline` の永続化は全ワークスペース解析に限定する。`analysis_targets` が全 target 群の部分集合である実行は baseline を生成せず、既存 baseline も読み込まない。この場合は diff 最適化を無効化し、要求された `analysis_targets` のみを対象に `--level` を保った non-diff 全スコープ解析へフォールバックする（全ワークスペースへ拡張しない）
@@ -687,7 +687,7 @@ stateDiagram-v2
     Initialized --> CollectingFiles: start()
     CollectingFiles --> ExtractingCpg: files collected
     ExtractingCpg --> ResolvingDiffImpact: CPG extracted [diff mode]
-    ExtractingCpg --> ComputingMetrics: CPG extracted [full mode]
+    ExtractingCpg --> ComputingMetrics: CPG extracted [non-diff モード]
     ResolvingDiffImpact --> ComputingMetrics: affected scopes resolved
     ComputingMetrics --> GeneratingDiagnostics: metrics computed
     GeneratingDiagnostics --> Completed: report generated
@@ -747,7 +747,7 @@ stateDiagram-v2
 | メトリクス値 (MetricValue) | 算出された生値と0〜1の正規化リスク値のペア | MetricDefinition |
 | スコープメトリクス (ScopeMetrics) | 特定のスコープ（関数、モジュール等）に対する全メトリクス値の集合。丸め済み `scope_risk` を保持し、階層は `scope_id.level` から導出する | ScopeId |
 | 解析メトリクス (AnalysisMetrics) | 全階層または `--level` 指定で選択された階層のメトリクス結果と総合スコアを束ねる集約ルート | ScopeMetrics, OverallScore |
-| 総合スコア (OverallScore) | 選択された階層群のメトリクスを重み付き集約した丸め済みリスク値と、0〜100の整数評価値。非対象階層の部分スコアは `None` を許容する | ScoreWeights |
+| 総合スコア (OverallScore) | 全階層のメトリクスを重み付き集約した内部保持用の丸め済みリスク値と、0〜100の整数評価値。計算可能なスコープが存在しない階層の部分スコアは `None` を許容する（`--level` による報告射影とは無関係）。外部出力の `scores.overall` は `requested_level` に応じてこの値または対応階層スコアを射影する。`DiffBaseline` に永続化される場合も同じ規則に従う | ScoreWeights |
 | スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成し、`AnalysisLevel.Module` では言語ごとの owner scope（Python/TypeScript の class、Rust の module/file root module、Go の package）を表す。project は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一正規形を取る | AnalysisLevel |
 | スコア重み (ScoreWeights) | 総合スコア算出時の各階層の重み。デフォルト: function 0.4, module 0.35, project 0.25 | — |
 | 解析階層 (AnalysisLevel) | メトリクス算出の粒度: Function / Module / Project | — |
@@ -767,7 +767,7 @@ stateDiagram-v2
 | ルールID (RuleId) | ルールの一意識別子。`KAL-F001`, `KAL-M001`, `KAL-P001`, `KAL-PAT001` 形式 | — |
 | 重大度 (Severity) | 診断の深刻さ: Error（品質基準を明確に逸脱）/ Warning（改善を強く推奨）/ Info（許容範囲内だが改善の余地あり） | — |
 | インライン抑制 (InlineSuppression) | `kalos-ignore` コメントによる診断抑制。ルールID指定で個別抑制、省略で全抑制 | RuleId |
-| 診断一覧スコープ (DiagnosticsScope) | `diagnostics` 一覧の完全性を表す値。`WholeProject` は full mode で「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」であることを意味し、未選択階層の診断欠落を意味しない。`AffectedOnly` は diff mode で影響範囲の診断のみを含むことを表す | DiagnosticReport |
+| 診断一覧スコープ (DiagnosticsScope) | `diagnostics` 一覧の完全性を表す値。`WholeProject` は non-diff モードで「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」であることを意味し、未選択階層の診断欠落を意味しない。`AffectedOnly` は diff mode で影響範囲の診断のみを含むことを表す | DiagnosticReport |
 | 診断サマリー (DiagnosticSummary) | 重大度別の診断件数集計 | — |
 | Exit code | 解析結果のプロセス終了コード: Success(0) / DiagnosticFailure(1) / ToolError(2) | — |
 
@@ -862,6 +862,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.8 | 2026-03-27 | レビュー findings 解決: `OverallScore` の `None` セマンティクスを「スコープ不在」と明確化し `--level` 報告射影との混同を排除、JSON `scores.overall` の `requested_level` 射影規則を明文化、`DiffBaseline` 永続化 `OverallScore` が `--level` に影響されない旨を補足、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合） | Claude |
 | 0.4.7 | 2026-03-26 | レビュー指摘解決: `scope_risk` の空母集団規則（`0.0`）を設計意図に追記、`InvalidationPlan` 不変条件 (4) の `fallback_to_full` 文言を `analysis_targets` 内に限定、`LlmEnrichmentRequest` の `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 | Claude |
 | 0.4.6 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/Inf 検査を追加、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、`ReportViewOptions` の None デフォルトセマンティクスを明記 | Claude |
 | 0.4.5 | 2026-03-22 | 入力参照を requirements.md v0.4.5 に同期（ドメインモデル本体の変更なし） | Claude |

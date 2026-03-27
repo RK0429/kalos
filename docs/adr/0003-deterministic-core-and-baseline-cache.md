@@ -5,8 +5,8 @@
 | 項目 | 内容 |
 |---|---|
 | 承認日 | 2026-03-18 |
-| 最終更新日 | 2026-03-26 |
-| 改訂 | v0.4.7 |
+| 最終更新日 | 2026-03-27 |
+| 改訂 | v0.4.8 |
 
 ## ステータス
 
@@ -71,7 +71,7 @@ kalos は同時に以下を満たす必要がある。
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。保存範囲も変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
 - ベースラインの **write-back 契約**: 書き込み条件は全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）。書き込みタイミングは `DiagnosticReport` の assemble 完了後、exit code 返却前。一時ファイルへ書き込み後にリネームし、部分書き込みを防ぐ。kalos 自体の実行エラー（exit code 2）では書き込まない。詳細は [architecture.md §5.2](../architecture.md) の write-back 契約を参照
 - ベースラインの **永続化対象は全ワークスペース解析に限定** する。`targets_explicitly_specified = true` の実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った **non-diff 全スコープ解析** へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
-- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
+- 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。コンテキスト間で共有されるこれらの型の配置は ADR-0001 の依存方向ルール（`ports` モジュール）に従う。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
 - プラグインメトリクスのベースライン再利用は、当該プラグインが現在の実行で正常にロード・評価された場合に限る。失敗またはスキップされたプラグインの `MetricValue` は baseline 断片から除外し、stale な report-only plugin metric が部分的に残ることを防ぐ（ADR-0004 参照）
 - **用語の区別**: 本 ADR では「全ワークスペース解析」（full-workspace analysis）を「`WorkspaceRoot` 配下の全対象ファイルを解析する実行」の意味で使い、「non-diff 全スコープ解析」を「要求された `analysis_targets` 内の全スコープを diff 最適化なしで解析する実行」の意味で使う。後者は解析対象を全ワークスペースへ拡張しない
@@ -105,6 +105,8 @@ kalos は同時に以下を満たす必要がある。
 
 ## 改訂履歴
 
+> **凡例**: `関連文書版` は当該改訂が整合を確認した architecture.md の版を示す。ADR 改訂日と当該版の作成日は一致しない場合がある。
+
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
 | 2026-03-18 | 初版承認 | architecture.md v0.1.0 |
@@ -114,3 +116,4 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-22 | レビュー指摘解決: キャッシュ運用帰結（CI / ローカル / 保存場所）追加、用語の区別（全ワークスペース解析 vs non-diff 全スコープ解析）明文化、`InvalidationPlan` 仕様・`targets_explicitly_specified` 契約追記 | architecture.md v0.4.0–v0.4.5 |
 | 2026-03-26 | レビュー指摘解決: プラグインメトリクスのベースライン再利用に ADR-0004 相互参照追加 | architecture.md v0.4.6 |
 | 2026-03-26 | レビュー指摘解決: 決定論性契約の適用範囲を明示し、`llm_suggestion` が範囲外であることを ADR-0005 相互参照付きで追記 | architecture.md v0.4.7 |
+| 2026-03-27 | レビュー指摘解決: 公開契約型の `ports` 配置参照追記、`関連文書版` の凡例追加 | architecture.md v0.4.9 |
