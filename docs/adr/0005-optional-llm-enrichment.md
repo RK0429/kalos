@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.11 |
+| 改訂 | v0.4.13 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -115,3 +115,5 @@
 | 2026-03-27 | レビュー指摘解決: per-request timeout と 429 Retry-After の budget 会計を明確化（ラウンドトリップ単位のタイムアウト適用・リトライ判定条件）、ディスパッチ順序の ADR-0003 emission order 参照を規範化 | arch v0.4.12 / req v0.4.9 / dm v0.4.8 |
 | 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（本 ADR が依拠する Diagnostic・LlmSuggestionBundle・LlmEnrichmentRequest 契約の出所を明示） | arch v0.4.16 / req v0.4.10 / dm v0.4.11 |
 | 2026-03-27 | 再レビュー指摘解決: `List<Diagnostic>` emission order 参照を ADR-0003 と整合し `(primary_scope_id, rule_id, id)` の三要素辞書順（全順序）に更新 | arch v0.4.16 / req v0.4.10 / dm v0.4.11 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.20 / requirements.md v0.4.13 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |

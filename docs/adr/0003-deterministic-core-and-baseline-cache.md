@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.15 |
+| 改訂 | v0.4.17 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / domain_model.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -77,7 +77,7 @@ kalos は同時に以下を満たす必要がある。
   - `extractor_version`: 抽出エンジン（CodeQL bundle 等）の版
   - `kalos_version`: kalos バイナリ自体の版
 - ベースラインの **保存不変条件**: ベースラインは常に全ワークスペース（`config_hash` に含まれる除外パターン適用後の全対象ファイル）かつ全階層の解析結果を保存する。`--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。保存範囲も変えない。そのため `requested_level` は `BaselineFingerprint` に含めず、異なる `--level` 間でも同じ完全ベースラインを再利用できる
-- ベースラインの **write-back 契約**: 書き込み条件は全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）。書き込みタイミングは `DiagnosticReport` の assemble 完了後、exit code 返却前。一時ファイルへ書き込み後にリネームし、部分書き込みを防ぐ。kalos 自体の実行エラー（exit code 2）では書き込まない。詳細は [architecture.md §5.2](../architecture.md) の write-back 契約を参照
+- ベースラインの **write-back 契約**: 書き込み条件は全ワークスペース解析が正常完了した場合のみ（exit code 0 または 1）。書き込みタイミングは `DiagnosticReport` の assemble 完了後、exit code 返却前。一時ファイルへ書き込み後にリネームし、部分書き込みを防ぐ。kalos 自体の実行エラー（exit code 2）では書き込まない。詳細は [architecture.md §5.2](../architecture.md#52-差分解析フロー) の write-back 契約を参照
 - ベースラインの **永続化対象は全ワークスペース解析に限定** する。`targets_explicitly_specified = true` の実行は、新たなベースラインを **生成せず**、既存の全ワークスペース baseline も **消費しない**。`analysis_targets_hash` を含む完全一致互換を保つことで、部分 target と全ワークスペースの意味論を混同しない。この場合 `--diff` 最適化は無効化し、要求された `analysis_targets` / `--level` を保った **non-diff 全スコープ解析** へフォールバックする（全ワークスペースへは拡張しない。フォールバック対象は要求された `analysis_targets` のみである）。`--level` は報告対象の制限であり、ベースラインの生成・消費の判定には影響しない
 - 差分モードの summary を再構成するため、保存単位は `ScopeMetrics` だけでなく `ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest` を含む。コンテキスト間で共有されるこれらの型の配置は [ADR-0001](./0001-adopt-modular-monolith.md) 帰結「リスク」節の公開契約型配置ルール（`ports` モジュール。domain_model.md §2 コンテキストマップの PL として定義）に従う。`ScopeDiagnosticSnapshot` は `Diagnostic.primary_scope_id` ごとに診断断片を一意に束ねる
 - diff 最適化が有効な限り project スコープは常に再計算対象に含める。project-level metrics と `OverallScore` は merged post-change snapshot から再構成し、baseline の project 断片を最終結果へそのまま流用しない
@@ -133,3 +133,5 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-27 | provenance 整備: 本文が依拠する型定義の出典として domain_model.md を `関連文書版` の追跡対象に追加。メタ注記・凡例を更新 | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
 | 2026-03-27 | provenance 整備: 共有契約型（`ScopeDiagnosticSnapshot`、`OverallScore`、`DependencyIndexManifest`）の配置ルール traceability を強化（ADR-0001 帰結「リスク」節参照の明確化）。`SummaryScope` 表記を domain_model.md の dot 表記に統一。凡例の略称順を他 ADR と整合 | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
 | 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
+| 2026-03-27 | レビュー指摘解決: architecture.md §5.2 リンクにセクションアンカーを追加 | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |

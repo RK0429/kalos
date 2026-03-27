@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.13 |
+| バージョン | 0.4.14 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -825,8 +825,9 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.14 | 2026-03-27 | 変更履歴修正: v0.4.12 エントリの誤った REQ-ID 参照を訂正（REQ-FUNC-032 → REQ-FUNC-024。scores nullability は総合スコアサマリー要件に関連） | Claude |
 | 0.4.13 | 2026-03-27 | provenance 整備: レビュー者メタ情報にレビュー対象版・日付を追記、`SummaryScope::WholeProject` 表記を domain_model.md の dot 表記（`SummaryScope.WholeProject`）に統一 | Claude |
-| 0.4.12 | 2026-03-27 | `scores` nullability 契約の統一: `scores.overall` / `scores.function` / `scores.module` / `scores.project` の `null` 条件を「非対象階層」と「計算可能なスコープ不在」の 2 源に明確化し domain_model.md と整合（REQ-FUNC-011 ステップ 7/8、REQ-FUNC-020、REQ-FUNC-023、REQ-FUNC-032） | Claude |
+| 0.4.12 | 2026-03-27 | `scores` nullability 契約の統一: `scores.overall` / `scores.function` / `scores.module` / `scores.project` の `null` 条件を「非対象階層」と「計算可能なスコープ不在」の 2 源に明確化し domain_model.md と整合（REQ-FUNC-011 ステップ 7/8、REQ-FUNC-020、REQ-FUNC-023、REQ-FUNC-024） | Claude |
 | 0.4.11 | 2026-03-27 | レビュー findings 解決: REQ-FUNC-012 の normative ABI 参照リストに §SPI v1 列挙契約を追加（ADR-0004 のフィルタ済みカウント/インデックス空間・再番号付けセマンティクスへのトレーサビリティ確保） | Claude |
 | 0.4.10 | 2026-03-27 | レビュー findings 解決: REQ-FUNC-023 の `--level` 内部動作を「追加で算出してよい」から「常に全階層を算出する」に強化し、Reporting が射影 owner と明記（ADR-0003 保存不変条件との整合） | Claude |
 | 0.4.9 | 2026-03-27 | レビュー findings 解決: REQ-NF-008〜010 の依存ラベルを「LLM可用性・外部通信・オフライン制約」に修正（LLM 限定表現の是正） | Claude |

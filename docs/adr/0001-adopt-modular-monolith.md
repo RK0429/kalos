@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.5 |
+| 改訂 | v0.4.7 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md / domain_model.md の版番号とは独立したバージョニング体系である。
 
@@ -126,7 +126,7 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 - リリース・配布・CI 統合が単純になる
   - **保証範囲**: 「単一バイナリ」は kalos 実行ファイル自体を指す。CodeQL bundle および WASM プラグインは kalos バイナリに同梱されない外部アーティファクトであり、責務の範囲が異なる:
     - **CodeQL bundle**（ADR-0002）: Managed Tool Cache Adapter が取得（初回 bootstrap）・checksum 検証・ローカルキャッシュの全ライフサイクルを担う。ユーザーは手動で配置する必要がない
-    - **WASM プラグイン**（ADR-0004）: ユーザーがワークスペースに配置し、`.kalos.toml` の `[[plugins]] { path, sha256 }` で登録する。kalos は `sha256` checksum 検証と SPI version 検証を行うが、取得・配布は行わない
+    - **WASM プラグイン**（ADR-0004）: ユーザーがワークスペースに配置し、`.kalos.toml` の `[[plugins]]` 配列テーブル（`path`, `sha256` キー。構文例は [requirements.md REQ-FUNC-025](../requirements.md) 参照）で登録する。kalos は `sha256` checksum 検証と SPI version 検証を行うが、取得・配布は行わない
     - 配布物としてはバイナリ単体を単位とする
 - ベンチマーク、スナップショットテスト、順序固定を一貫して適用できる
 - ドメインモデルの境界をコード構造へ直接反映しやすい
@@ -147,7 +147,7 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
   - `adapters` → `ports`
   - `domains` → `ports`（ポートインターフェースおよび Published Language 型の参照。ドメインがポート定義に依存するのは Hexagonal Architecture の正規の依存方向である）
   - `domains` 間は公開契約（Port 経由）でのみ接続する
-  - **公開契約型の配置**: コンテキスト間で共有する Published Language 型（domain_model.md §2 コンテキストマップの PL。例: `SourceAnalysis`、`ScopeMetrics`）は `ports` モジュールに定義する。上記 `domains` → `ports` および `adapters` → `ports` により、双方から参照可能な唯一の共有配置場所となる。この配置ルールは [architecture.md §4.2](../architecture.md)（依存方向）で実施され、ADR-0003 / ADR-0004 の共有契約型もこのルールに従う
+  - **公開契約型の配置**: コンテキスト間で共有する Published Language 型（domain_model.md §2 コンテキストマップの PL。例: `SourceAnalysis`、`ScopeMetrics`）は `ports` モジュールに定義する。上記 `domains` → `ports` および `adapters` → `ports` により、双方から参照可能な唯一の共有配置場所となる。この配置ルールは [architecture.md §4.2](../architecture.md#42-依存方向)（依存方向）で実施され、ADR-0003 / ADR-0004 の共有契約型もこのルールに従う
   - `domains` → `adapters` の直接依存、`adapters` → `domains` の直接依存は禁止する
 
 ## 改訂履歴
@@ -165,3 +165,5 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 | 2026-03-27 | `関連文書版` に domain_model.md（`dm`）追跡を追加（公開契約型が依拠する domain_model.md §2（コンテキストマップ）の Published Language の出所を明示） | arch v0.4.15 / req v0.4.10 / dm v0.4.11 |
 | 2026-03-27 | provenance 整備: 公開契約型配置ルールの cross-document traceability を強化（architecture.md §4.2 / ADR-0003 / ADR-0004 相互参照追加）。凡例を ADR-0003..0005 と整合（単独版/範囲表記の意味論・同日エントリ順序の注記を追加）。改訂履歴の節名表記を修正 | arch v0.4.18 / req v0.4.11 / dm v0.4.11 |
 | 2026-03-27 | `関連文書版` を requirements.md v0.4.13 に同期（ADR 本文の変更なし） | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
+| 2026-03-27 | レビュー指摘解決: WASM プラグイン登録の `[[plugins]]` 記述を有効な TOML 表記に修正（requirements.md REQ-FUNC-025 参照を追加）、architecture.md §4.2 リンクにセクションアンカーを追加 | arch v0.4.20 / req v0.4.13 / dm v0.4.12 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |
