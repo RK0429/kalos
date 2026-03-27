@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.13 |
+| バージョン | 0.4.14 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 入力 | requirements.md v0.4.14 |
@@ -805,7 +805,7 @@ stateDiagram-v2
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
 | レポートメタデータ (ReportMetadata) | `analysis_targets`、`tool_version`、`schema_version` を束ねる値。`analysis_targets` は `WorkspaceRoot` 基準の正規化済み path 群で入力順を保持する | AnalysisTarget |
 | 解析対象 (AnalysisTarget) | レポート出力に載せる 1 つの解析対象 path。`WorkspaceRoot` 相対の正規化済み `FilePath` で表す | ReportMetadata |
-| レポート表示オプション (ReportViewOptions) | `requested_level`（`None` = 全階層）と `minimum_severity`（`None` = フィルタなし）を表す値。診断一覧の投影だけを制御し、summary/exit code は変更しない | DiagnosticReport |
+| レポート表示オプション (ReportViewOptions) | `requested_level`（`None` = 全階層）と `minimum_severity`（`None` = フィルタなし）を保持する値。`requested_level` はメトリクス・診断・スコアの報告対象階層を射影し、`minimum_severity` は診断一覧のフィルタだけを担う。いずれも summary/exit code は変更しない | DiagnosticReport |
 | LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決し、`metric` と `pattern`、`source_excerpt` と `cpg_excerpt` はそれぞれ相互排他的にどちらか一方だけを持つ。根拠を代表ファイルへ還元できない場合は生成しない | Diagnostic, SourceAnalysis |
 | ソース抜粋 (SourceExcerpt) | LLM 送信に使う、代表ファイル上の最小ソース断片。ファイルパス、行範囲、本文テキストを持つ | SourceLocation |
 | CPG抜粋 (CpgSubgraphExcerpt) | LLM 送信に使う、診断に必要な最小部分だけへ正規化した CPG 表現 | ScopeId |
@@ -864,6 +864,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.14 | 2026-03-27 | §5.6 用語集 `ReportViewOptions` の定義を本文契約と整合（`requested_level` がメトリクス・診断・スコアの射影を担い、`minimum_severity` が診断一覧フィルタのみを担うことを明記） | Claude |
 | 0.4.13 | 2026-03-27 | 入力参照を requirements.md v0.4.14 に同期（本体の変更なし） | Claude |
 | 0.4.12 | 2026-03-27 | 入力参照を requirements.md v0.4.13 に同期（本体の変更なし） | Claude |
 | 0.4.11 | 2026-03-27 | §3.1 設計意図に `NodeKind` / `EdgeKind` の SPI v1 discriminant mapping の cross-reference を追加（ADR-0004 が正規定義、enum 宣言順と整数値割当ての一致制約を明記）、入力参照を requirements.md v0.4.11 に同期 | Claude |

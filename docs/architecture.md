@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.24 |
+| バージョン | 0.4.26 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.14, domain_model.md v0.4.13 |
+| 入力 | requirements.md v0.4.14, domain_model.md v0.4.14 |
 
 ## 1. 設計目標
 
@@ -119,7 +119,7 @@ graph TB
         GIT[Git Diff Adapter<br>base-ref 解決 + 変更ファイル列挙]
         CachePort[Baseline Cache Port<br>保存・読み戻し契約]
         Cache[Baseline Cache Adapter<br>差分解析と再計算支援]
-        LlmAdapter[Optional LLM Adapter<br>HTTP + timeout]
+        LlmAdapter[LLM Adapter<br>HTTP + timeout]
         Obs[Observability Adapter<br>logs / metrics / spans]
     end
 
@@ -165,6 +165,7 @@ graph TB
 | Metrics | メトリクス計算、正規化、階層スコア集約。`enabled = false` のルールにバインドされたメトリクスは計算・`metrics` 出力は維持するが、`scope_risk` 算術平均の母集団から除外する | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用。`enabled = false` のルールは診断を生成せず、当該ルールにバインドされたメトリクスは `scope_risk` 集約から除外される（スコアリング・summary・exit code に影響しない） | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `List<Diagnostic>` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-026`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
 | Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・診断・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | フォーマット済み出力（stdout） | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
+| LLM Adapter | allowlist 済み `LlmEnrichmentRequest` の HTTP 送信、プロバイダ別 request/endpoint 解決、timeout・429 単発リトライ・5xx skip の適用 | `LlmEnrichmentRequest`、`KALOS_LLM_PROVIDER`、`KALOS_LLM_ENDPOINT_URL`、`KALOS_LLM_API_KEY` | `LlmSuggestionBundle?` | `REQ-FUNC-015`, `REQ-NF-008`, `REQ-NF-009` |
 | Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディング、SPI v1 列挙契約〈フィルタ済みカウント/インデックス空間・再番号付け〉、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | Baseline Cache Adapter | 差分解析用ベースラインの保存と読み戻し | `DiffBaseline`、`BaselineFingerprint` | `DiffBaseline?` | `REQ-FUNC-034`, `REQ-NF-002` |
@@ -216,7 +217,7 @@ graph TB
 | `REQ-NF-006` | Metrics, Plugin Host | メトリクス追加 |
 | `REQ-NF-007` | Configuration | ゼロコンフィグ初回実行 |
 | `REQ-NF-008` | Diagnostics | LLM フォールバック |
-| `REQ-NF-009` | Managed Tool Cache Adapter | 外部通信の安全性 |
+| `REQ-NF-009` | Managed Tool Cache Adapter, Application Pipeline, LLM Adapter | 外部通信の安全性 |
 | `REQ-NF-010` | Managed Tool Cache Adapter | オフライン実行 |
 
 > **注**: `REQ-NF-004`（対応プラットフォーム）と `REQ-NF-005`（言語サポート追加）は個別コンポーネントではなくアーキテクチャ選択（§3.1）と適合度関数（§8）で対処しているため、本表からは除外している。
@@ -243,7 +244,7 @@ Application Pipeline
 
 Application Pipeline
   -> LLM Enrichment Port
-      -> Optional LLM Adapter
+      -> LLM Adapter
 
 CPG Extraction
   -> Tool Cache Port
@@ -266,6 +267,7 @@ CPG Extraction
 ルール:
 
 - ドメインコンテキスト同士は公開契約でのみ接続する
+- コンテキスト間で共有する Published Language（公開契約型）は `ports` モジュールに配置する（[ADR-0001](./adr/0001-adopt-modular-monolith.md) 参照）
 - `Reporting` は ACL（Anti-Corruption Layer — 外部出力スキーマからドメインを隔離する境界）としてのみ存在し、ドメインへ逆流しない
 - `Configuration` が `--config` を含む CLI 入力から `WorkspaceRoot` を一意に確定し、CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化する。同時に `targets_explicitly_specified: bool`（CLI path 引数が明示指定された場合 `true`、省略時 `false`）を `ProjectConfig` に記録し、ベースライン生成可否の判定と `analysis_targets_hash` 正規化に使用する。正規化済み `analysis_targets` は入力順を保持したまま `ProjectConfig` に保持し、Reporting 出力時に `ReportMetadata.analysis_targets` へ写像する
 - `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
@@ -283,7 +285,7 @@ CPG Extraction
 - `Impact Analysis Service` が「どの `ScopeId` を再計算すべきか」の唯一の owner である
 - `Plugin Host` は additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけを SPI 入力として渡し、`MetricDefinition` 登録と `compute(subgraph, config) -> MetricValue` の pure function 契約のみを許容する。各 plugin metric は `MetricDefinition.level` に一致する各 `ScopeId` ごとに 1 回ずつ評価し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。**評価順序**: プラグイン評価は `workspace_relative_path → metric_id → ScopeId` の辞書順で決定論的に実行する。各 invocation の開始前に aggregate fuel budget の残量を確認し（pre-invocation budget check）、残量不足の場合はその invocation 以降をスキップする（ADR-0004 参照）。`plugin_manifest` は `workspace_relative_path` 昇順でロードし、乱数・時刻・ネットワーク・ファイル書込を禁止し、`metric_id` 衝突は deterministic なロード失敗として扱い、当該モジュールが初期化中に登録した全 `MetricDefinition` をロールバックする（登録の原子性。ADR-0004 参照）。per-invocation fuel budget と aggregate fuel budget はいずれも WASM fuel metering で制御し（fuel が規範的上限、壁時間は参考値。ADR-0004 参照）、diff mode では現在の実行で失敗またはスキップされたプラグインの baseline cache 済み `MetricValue` を最終出力から除外する
 - `Configuration` は `--config` 指定時の `WorkspaceRoot` 解決、CLI path 引数から `analysis_targets` への正規化（省略時は `["."]`）、`analysis_targets` と plugin `path` の `WorkspaceRoot` 内包性検証、`sha256` 構文検証を行い、違反時は設定/入力エラー（exit code 2）として処理する。`Plugin Host` は解決済み `plugin_manifest` だけを受け取り、ファイル読込失敗・checksum 不一致・SPI 不一致・`metric_id` 衝突・fuel budget 超過・メモリ超過・aggregate fuel budget 超過を warning + skip として扱う
-- `Plugin Host` は WASM プラグイン invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。fuel が規範的（normative）な上限であり、壁時間は環境により変動する参考値である。**上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する**（ADR-0004 参照）。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
+- `Plugin Host` は WASM プラグイン invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64 MiB`、実行全体では Metrics stage budget の内数として `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用し、超過時は当該プラグイン評価または残り評価を失敗/skip として打ち切る。fuel が規範的（normative）な上限であり、壁時間は環境により変動する参考値である。**上記の具体的数値は暫定値であり、PoC ベンチマークで検証のうえ v1 リリースまでに確定する**（ADR-0004 参照）。失敗は運用警告として `stderr` / 構造化ログへ出し、v1 の診断・スコア・Exit code 契約には影響させない
 
 ### 4.3 推奨コード構成
 
@@ -519,7 +521,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
 | 出力データ | SARIF/JSON に機密情報を埋め込まない。ファイルパスの正規化を行う |
-| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。diff mode から全解析へフォールバックした場合は全解析の budget（`30_000_000 fuel`）を適用する。fuel が規範的上限。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照） |
+| プラグイン | WASM 実行時はネットワーク・ファイル書込を禁止し、plugin invocation ごとに `per-invocation fuel budget = 500_000 fuel`（参考: ~50ms）、`linear_memory_limit = 64 MiB`、Metrics stage 内数の `aggregate fuel budget = 30_000_000 fuel`（全解析、参考: ~3s）/ `5_000_000 fuel`（diff mode、参考: ~0.5s）を適用する。diff mode から全解析へフォールバックした場合は全解析の budget（`30_000_000 fuel`）を適用する。fuel が規範的上限。具体的数値は暫定値であり PoC で確定予定（ADR-0004 参照） |
 
 ### 7.3 デプロイ / 配布
 
@@ -661,6 +663,8 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.26 | 2026-03-27 | レビュー派生残件の整合修正: 先頭メタを v0.4.26 に同期し入力参照を domain_model.md v0.4.14 へ更新、§3.1 図・§4.1 責務表・個別 REQ-ID トレーサビリティ・§4.2 本文の LLM Adapter 名称を統一、§4.1 に LLM Adapter の責務行を追加 | Claude |
+| 0.4.25 | 2026-03-27 | レビュー findings 解決: §4.1 REQ-NF-009 トレーサビリティ表に LLM outbound 安全性担当コンポーネントを追加、§4.2 依存方向ルールに Published Language の `ports` 配置規則を追記（ADR-0001 参照）、§4.2・§7.2 の `linear_memory_limit` 表記を `64 MiB` に統一 | Claude |
 | 0.4.24 | 2026-03-27 | §4.1 責務表の直後に個別 REQ-ID トレーサビリティ補助表を追加（範囲記法で隠れていた REQ-FUNC-001〜007, 008〜012, 013〜017, 019〜021, 025〜028, REQ-NF-001〜003 を個別展開し、各 REQ-ID から主担当コンテキストを直接追えるようにした） | Claude |
 | 0.4.23 | 2026-03-27 | 入力参照を domain_model.md v0.4.13 に同期、ADR-0001〜0005 の関連文書版を arch v0.4.23 / req v0.4.14 / dm v0.4.13 に更新（本体の変更なし） | Claude |
 | 0.4.22 | 2026-03-27 | 入力参照を requirements.md v0.4.14 に同期（本体の変更なし） | Claude |

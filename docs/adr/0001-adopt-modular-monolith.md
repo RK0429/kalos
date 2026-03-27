@@ -169,3 +169,4 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 | 2026-03-27 | `関連文書版` を architecture.md v0.4.22 / requirements.md v0.4.14 / domain_model.md v0.4.12 に同期（ADR 本文の変更なし） | arch v0.4.22 / req v0.4.14 / dm v0.4.12 |
 | 2026-03-27 | provenance sync: REQ-FUNC-025 参照にセクションアンカーを追加、`関連文書版` を最新に同期 | arch v0.4.23 / req v0.4.14 / dm v0.4.13 |
 | 2026-03-27 | `関連文書版` を architecture.md v0.4.24 に同期（ADR 本文の変更なし） | arch v0.4.24 / req v0.4.14 / dm v0.4.13 |
+| 2026-03-27 | `関連文書版` を architecture.md v0.4.26 / domain_model.md v0.4.14 に同期（ADR 本文の変更なし） | arch v0.4.26 / req v0.4.14 / dm v0.4.14 |
