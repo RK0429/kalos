@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.9 |
+| 改訂 | v0.4.10 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -63,7 +63,13 @@ kalos は同時に以下を満たす必要がある。
 - `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `SummaryScope::WholeProject`（JSON wire value: `"whole_project"`）、`--level function|module|project` では `SummaryScope::ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでもこの契約は変えない
 - **決定論性契約の適用範囲**: `REQ-NF-003` のビット単位一致は、コア評価パイプライン（CPG 抽出 → メトリクス算出 → 診断生成 → レポート組立）の出力に適用する。具体的には `ScopeMetrics`、`Diagnostic`（重大度を含む）、`OverallScore`、`DiagnosticReport`、Exit code、および評価順序が対象である。`--llm` 指定時に後段で付加される `llm_suggestion`（`LlmSuggestionBundle`）は決定論性契約の適用範囲外とする（ADR-0005 参照）。LLM 応答は本質的に非決定的であり、wall-clock budget やネットワーク状態にも依存するため、同一入力でも `llm_suggestion` の有無・内容は再現性を保証しない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
-  - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する
+  - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する。**正規化規則**: 以下の手順を順に適用した結果の UTF-8 バイト列を SHA-256 でハッシュする
+    1. **絶対パス化**: 相対パスの場合は current working directory を基準に絶対パスへ変換する
+    2. **シンボリックリンク解決**: 全構成要素のシンボリックリンクを物理パスに解決する（POSIX `realpath` / Rust `std::fs::canonicalize` 相当）。これにより、同一ディレクトリへの異なるシンボリックリンク経由アクセスは同一ハッシュとなる
+    3. **`.` / `..` 除去**: 手順 2 で暗黙に除去される
+    4. **末尾セパレータ除去**: ルートディレクトリ（`/` または `C:\`）を除き、末尾のパス区切り文字を除去する
+    5. **Windows 固有**: ドライブレターを大文字に正規化し、拡張長パスプレフィクス（`\\?\`）を除去する。パス区切り文字はネイティブ `\` を使用する
+    - **キャッシュ再利用スコープ**: 正規化の結果、再利用の判定基準は**物理ディレクトリの同一性**となる。同一物理ディレクトリへの異なるシンボリックリンクはキャッシュを共有し、異なる物理ディレクトリ（同一リポジトリの別クローンを含む）はキャッシュを分離する
   - `base_snapshot_hash`: `--diff <base-ref>` の基準側 tree hash。現在ワークツリーのハッシュは含めない
   - `config_hash`: `ProjectConfig`（マージ済み設定）のハッシュ。除外パターンの和集合と正規化済み `plugin_manifest` を含む
   - `analysis_targets_hash`: `analysis_targets` の正規化済み path 群から算出したハッシュ。解析対象 path が変わった場合の誤再利用を防ぐ。**全ワークスペース判定と正規化**: `ProjectConfig.resolve()` は位置引数の省略/明示を `targets_explicitly_specified: bool` として記録する。`targets_explicitly_specified = false`（位置引数省略、デフォルト `["."]`）の場合は全ワークスペースとして扱い、`analysis_targets_hash` は正規形 `["."]` から算出する。`targets_explicitly_specified = true`（位置引数が明示的に指定された場合）は、`WorkspaceRoot` 相対パスへ正規化したうえでソート済み重複排除リストからハッシュを算出する。明示的指定が `WorkspaceRoot` 配下の全対象ファイルを網羅するかどうかは判定しない（明示指定は常に部分集合として扱う）。**`targets_explicitly_specified` は全ワークスペース判定・ベースライン生成/消費・diff 最適化の適用可否を決定する唯一の権威的信号である**（ファイル集合の網羅性比較は行わない）
@@ -120,3 +126,4 @@ kalos は同時に以下を満たす必要がある。
 | 2026-03-26 | レビュー指摘解決: 決定論性契約の適用範囲を明示し、`llm_suggestion` が範囲外であることを ADR-0005 相互参照付きで追記 | arch v0.4.7 / req v0.4.5 |
 | 2026-03-27 | レビュー指摘解決: 公開契約型の `ports` 配置参照追記、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
 | 2026-03-27 | レビュー指摘解決: 選択肢 B の利点記述「変更後全体」を「変更後の解析対象全体」に明確化 | arch v0.4.11 / req v0.4.8 |
+| 2026-03-27 | レビュー指摘解決: `workspace_root_hash` の正規化規則（シンボリックリンク解決・末尾セパレータ除去・Windows 固有処理）とキャッシュ再利用スコープを明文化 | arch v0.4.12 / req v0.4.9 |

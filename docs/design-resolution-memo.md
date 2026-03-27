@@ -313,7 +313,7 @@ architecture.md §4.1 の責務表に `Application Pipeline` がなく、実質�
 
 | 文書 | 更新内容 |
 |---|---|
-| `architecture.md` §4.1 責務表 | 以下の行を追加: `Application Pipeline` / パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 / 全コンテキスト出力 + `ProjectConfig` / `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code / 大部分の REQ-FUNC-* を横断 |
+| `architecture.md` §4.1 責務表 | 以下の行を追加: `Application Pipeline` / パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 / 全コンテキスト出力 + `ProjectConfig` / `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code / `REQ-FUNC-018`, `REQ-FUNC-022`〜`024`, `REQ-FUNC-034`, `REQ-NF-001`〜`003` |
 
 ---
 
@@ -679,6 +679,7 @@ requirements.md と domain_model.md にも同セマンティクスを伝播す�
 
 | 日付 | 変更内容 |
 |---|---|
+| 2026-03-27 | レビュー findings 解決: §10 の Application Pipeline 対応要件を具体的な REQ-ID に置換（`大部分の REQ-FUNC-*` → 個別 ID） |
 | 2026-03-27 | レビュー findings 解決: §8 enum 一覧と §10 更新対象表の `full mode` を `non-diff モード` に統一 |
 | 2026-03-26 | §16 の `LlmEnrichmentRequest` 図で `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 |
 | 2026-03-26 | 出所整合修正: ADR-0002 行の出所タグを凡例準拠の `（v0.4.1）` に修正、F-1 根拠から対象外の ADR-0004 ScopeId 直列化契約への依存を除去し domain_model.md の ScopeId 定義に差し替え |

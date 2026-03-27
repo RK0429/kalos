@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.9 |
+| バージョン | 0.4.11 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.9 |
+| 入力 | requirements.md v0.4.10 |
 
 ## 1. サブドメイン分類
 
@@ -195,6 +195,7 @@ classDiagram
 - managed CodeQL bundle の bootstrap / verify / cache やオフライン成功条件は `Managed Tool Cache Adapter` の責務であり、CPG 抽出ドメインモデルには持ち込まない。抽出ドメインが扱うのは解決済み bundle を使って生成された `SourceAnalysis` だけである
 - `LanguageExtension` はノードと semantic edge の両方に付与でき、言語固有概念（Rust の ownership / borrow / lifetime relation、Go の goroutine、owner/public semantics を決める language profile 等）を保持する。共通構造を汚さずに拡張可能（REQ-NF-005）
 - `ExternalSymbol`（NodeKind）で外部依存の解決済みシンボルを表現（REQ-FUNC-007）
+- `NodeKind` / `EdgeKind` の SPI v1 における `u32` discriminant mapping（バリアント→整数値の規範的対応）は ADR-0004 の「NodeKind / EdgeKind discriminant mapping」で定義する。ドメインモデル上の enum 宣言順が SPI の整数値割当てと一致するため、バリアントの追加・削除・順序変更は SPI 破壊的変更を伴う
 - `SourceFile` は Value Object である。`SourceAnalysis.source_files` マップで `FilePath` をキーとして管理されており、`path` は Entity としての同一性ではなくマップキーとして機能する。可変状態を持たず（`path` と `language` は解析実行ごとに決定され変更されない）、`SourceAnalysis` 集約の外で独立に追跡・参照されることはない
 - `SuppressionComment` はソース解析時に `kalos-ignore` コメントから抽出され、診断コンテキストの `InlineSuppression` に変換される。ルール指定は exact `RuleId` のみを許可する（REQ-FUNC-029）
 
@@ -300,7 +301,7 @@ classDiagram
 - `MetricConfig` はプラグイン SPI へ渡す正規化済み設定マップ。ホストが設定ファイル由来の値を解決してから渡す
 - `MetricValue.raw_value` と `MetricValue.normalized_risk` は算出直後に小数第 6 位で round-half-up した値を保持する。`MetricObservation.overflow_ratio` も同じく算出直後に round-half-up し、その丸め済み値を重大度判定と外部出力に使う。正規化は MetricDefinition の責務（REQ-FUNC-008〜010）。`raw_value` または `normalized_risk` の算出結果が `NaN` または `Inf` の場合は評価失敗として扱い、warning を出力し `MetricValue` を生成しない。`normalized_risk` が有限だが `[0.0, 1.0]` 範囲外の場合は warning を出力したうえで `[0.0, 1.0]` にクランプし、クランプ後の値に対して round-half-up する
 - `ScopeMetrics.scope_risk` は、そのスコープに属する `participation = ScoredAndDiagnosable` な `normalized_risk` の算術平均を小数第 6 位で round-half-up した値。差分キャッシュの再利用単位でもある。`enabled = false` のルールにバインドされたメトリクスは母集団から除外する。母集団が空の場合（全メトリクスが除外された場合）、`scope_risk = 0.0`（リスクなし）とする
-- `AnalysisMetrics` は `--level all` では全階層を保持し、`--level function|module|project` では非対象階層の `ScopeMetrics` を報告に含めない（must exclude）。Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて非対象階層の射影を担う。ただし、パターンルールの入力として必要な下位階層メトリクス（例: `KAL-PAT001` が参照する `M-F002`）は内部的に算出し保持する。これらは報告・スコア集約の対象にはならない。`project_metrics = None` は「未計算」を意味し、project スコープが存在しないことを意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
+- `AnalysisMetrics` は `--level` の指定に関わらず常に全階層（function / module / project）の `ScopeMetrics` を算出し保持する（ADR-0003 保存不変条件、architecture.md §5.2 不変条件参照）。`--level` による非対象階層のメトリクス・診断・スコアの報告除外（must exclude）は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う射影であり、`AnalysisMetrics` 自体のデータ保持には影響しない（REQ-FUNC-011 ステップ 8、REQ-FUNC-023 参照）。`project_metrics = None` は project スコープが存在しないことを意味し、`--level` による除外や未計算を意味しない。plugin metric は `values` へ保持されるが、v1 のスコア・診断契約には参加しない
 - `OverallScore` は ScoreWeights による重み付き集約の結果。`overall_risk` と `overall_score` は常に存在し、`function_risk` / `module_risk` / `project_risk` と各階層スコアは計算可能なスコープが存在する階層のみ `Some`、スコープが存在しない階層は `None` を許容する（`--level` による報告対象の制限とは無関係であり、`DiffBaseline` に永続化される `OverallScore` も同じ規則に従う）。`overall_score` は常にメトリクス集約の写像であり、summary 件数や exit code 判定から逆算しない。デフォルト重み: function 0.4, module 0.35, project 0.25（REQ-FUNC-011, REQ-FUNC-023）。`OverallScore` 算出時の計算不変条件: (1) **re-normalization** — 合計 ≠ 1.0 の場合、`adjusted_weight[l] = weight[l] / Σ(weights)` で比例再正規化する、(2) **empty-level redistribution** — 対象スコープが 0 件の階層（disabled ルールにより全メトリクスが除外された場合を含む）の重みを残存階層へ比例再配分する。詳細は requirements.md REQ-FUNC-011 ステップ 3–4 を参照
 - `ScopeMetrics` の階層は `scope_id.level` から導出する。ドメインモデル上で `level` を別フィールドとして重複保持しない
 - `ScopeId` の決定論的順序は `(level, qualified_name, file_path)` の辞書順とし、`AnalysisLevel` の順序は `Function < Module < Project` に固定する。project スコープの正規形は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一値とし、スコア集約・診断生成・差分キャッシュ統合はこの comparator を共通で用いる
@@ -572,6 +573,7 @@ classDiagram
     class ProjectConfig {
         <<Aggregate Root>>
         +WorkspaceRoot workspace_root
+        +List~AnalysisTarget~ analysis_targets
         +Map~RuleId_RuleConfig~ rules
         +List~GlobPattern~ exclude_patterns
         +ScoreWeights score_weights
@@ -622,7 +624,7 @@ classDiagram
 
 - `ProjectConfig.resolve()` が設定の優先順位（CLI > ファイル > デフォルト）をカプセル化し、`WorkspaceRoot`（`--config <path>` 指定時はその `.kalos.toml` の親、未指定時は最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory）を解決する（REQ-FUNC-025）
 - ドメイン内の `FilePath` はすべて `WorkspaceRoot` 相対の正規化パスであり、絶対パスを保持するのは `WorkspaceRoot.abs_path` だけ
-- `ProjectConfig.resolve()` は CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化し、`WorkspaceRoot` 内包性を検証する。正規化済み `analysis_targets` は `ReportMetadata` の一部として下流に渡す
+- `ProjectConfig.resolve()` は CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化し、`WorkspaceRoot` 内包性を検証する。正規化済み `analysis_targets` は `ProjectConfig` のフィールドとして保持され、Application Pipeline を通じて以下の下流コンテキストで参照される: CPG Extraction（ファイル収集対象の決定）、Git Diff Adapter（変更ファイルとの交差）、Impact Analysis（影響範囲のスコープ決定）、Baseline Cache（`BaselineFingerprint.analysis_targets_hash` の算出）、Reporting（`ReportMetadata.analysis_targets` として出力に含める）
 - `targets_explicitly_specified` は CLI path 引数の由来を記録する。位置引数が省略されデフォルト `["."]` が適用された場合は `false`、位置引数が明示的に指定された場合は `true` となる。この区別により、正規化後の `analysis_targets` が同一の `["."]` であっても、省略と明示指定を区別できる（ADR-0003: 明示指定は常に部分集合として扱い、ベースラインを生成も消費もしない）
 - `exclude_patterns` は `.gitignore` の既定除外、設定ファイル `exclude`、CLI `--exclude` の正規化済み和集合。v1 では negation による除外解除を許可しない
 - `plugin_manifest` は `.kalos.toml` のプラグイン登録を workspace-relative path と checksum の組へ正規化した決定論的な正本。`WorkspaceRoot` 外 path、不正な `sha256`、または `analysis_targets` の `WorkspaceRoot` 外参照は `ProjectConfig.resolve()` の段階で設定/入力エラーにする。Plugin Host と差分キャッシュは、この検証を通過した解決済み manifest だけを参照する
@@ -746,7 +748,7 @@ stateDiagram-v2
 | メトリクス設定 (MetricConfig) | `MetricDefinition.compute()` に渡す正規化済み設定マップ。plugin host が SPI 入力として供給する | MetricDefinition |
 | メトリクス値 (MetricValue) | 算出された生値と0〜1の正規化リスク値のペア | MetricDefinition |
 | スコープメトリクス (ScopeMetrics) | 特定のスコープ（関数、モジュール等）に対する全メトリクス値の集合。丸め済み `scope_risk` を保持し、階層は `scope_id.level` から導出する | ScopeId |
-| 解析メトリクス (AnalysisMetrics) | 全階層または `--level` 指定で選択された階層のメトリクス結果と総合スコアを束ねる集約ルート | ScopeMetrics, OverallScore |
+| 解析メトリクス (AnalysisMetrics) | `--level` に関わらず常に全階層のメトリクス結果と総合スコアを束ねる集約ルート。非対象階層の報告除外は Reporting の射影が担う | ScopeMetrics, OverallScore |
 | 総合スコア (OverallScore) | 全階層のメトリクスを重み付き集約した内部保持用の丸め済みリスク値と、0〜100の整数評価値。計算可能なスコープが存在しない階層の部分スコアは `None` を許容する（`--level` による報告射影とは無関係）。外部出力の `scores.overall` は `requested_level` に応じてこの値または対応階層スコアを射影する。`DiffBaseline` に永続化される場合も同じ規則に従う | ScoreWeights |
 | スコープID (ScopeId) | メトリクス算出対象を一意に識別する値。階層・修飾名・ファイルパスで構成し、`AnalysisLevel.Module` では言語ごとの owner scope（Python/TypeScript の class、Rust の module/file root module、Go の package）を表す。project は `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の単一正規形を取る | AnalysisLevel |
 | スコア重み (ScoreWeights) | 総合スコア算出時の各階層の重み。デフォルト: function 0.4, module 0.35, project 0.25 | — |
@@ -787,7 +789,7 @@ stateDiagram-v2
 
 | 用語 | 定義 | 関連概念 |
 |---|---|---|
-| プロジェクト設定 (ProjectConfig) | `WorkspaceRoot`、ルール設定・除外パターン・スコア重み・解決済み `plugin_manifest`、`targets_explicitly_specified`（CLI path 引数の由来）をマージした最終的な設定。スカラー値は CLI > ファイル > デフォルト、`exclude` は和集合で解決する | WorkspaceRoot, RuleConfig, GlobPattern, ResolvedPluginManifest |
+| プロジェクト設定 (ProjectConfig) | `WorkspaceRoot`、正規化済み `analysis_targets`、ルール設定・除外パターン・スコア重み・解決済み `plugin_manifest`、`targets_explicitly_specified`（CLI path 引数の由来）をマージした最終的な設定。スカラー値は CLI > ファイル > デフォルト、`exclude` は和集合で解決する。`analysis_targets` は Application Pipeline を通じて CPG Extraction・Git Diff・Impact Analysis・Baseline Cache・Reporting の各コンテキストに供給される | WorkspaceRoot, AnalysisTarget, RuleConfig, GlobPattern, ResolvedPluginManifest |
 | ワークスペースルート (WorkspaceRoot) | `ProjectConfig.resolve()` が解決した絶対パスの基準ディレクトリ。`--config <path>` 指定時はその `.kalos.toml` の親、未指定時は最初に見つかった `.kalos.toml` の親、なければ最初に見つかった `.git` の親、どちらもなければ current working directory | ProjectConfig |
 | ルール設定 (RuleConfig) | 個別ルールの有効/無効・閾値・重大度のオーバーライド。各フィールドは Option で、None は「デフォルト値を使用」 | RuleId |
 | 除外パターン (GlobPattern) | 解析対象から除外するファイル/ディレクトリのglobパターン | — |
@@ -862,6 +864,8 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.11 | 2026-03-27 | §3.1 設計意図に `NodeKind` / `EdgeKind` の SPI v1 discriminant mapping の cross-reference を追加（ADR-0004 が正規定義、enum 宣言順と整数値割当ての一致制約を明記） | Claude |
+| 0.4.10 | 2026-03-27 | レビュー findings 解決: `AnalysisMetrics` の `--level` 契約を統一（常に全階層を算出・保持、Reporting が射影 owner）、`project_metrics = None` のセマンティクスを「スコープ不在」に修正、`ProjectConfig` に `analysis_targets` フィールドを追加しキャリア・ライフサイクルを明示、用語集 `AnalysisMetrics` / `ProjectConfig` 定義を更新、入力参照を requirements.md v0.4.10 に更新 | Claude |
 | 0.4.9 | 2026-03-27 | レビュー findings 解決: コンテキストマップの IA→MC エッジに `InvalidationPlan` を追加し公開言語の記述と整合、用語集 `DiffBaseline` 定義に `OverallScore` 永続化と全ワークスペース限定を反映、用語集 `InvalidationPlan` 定義に project スコープ再計算保証と `fallback_to_full` の `analysis_targets` 内限定セマンティクスを反映 | Claude |
 | 0.4.8 | 2026-03-27 | レビュー findings 解決: `OverallScore` の `None` セマンティクスを「スコープ不在」と明確化し `--level` 報告射影との混同を排除、JSON `scores.overall` の `requested_level` 射影規則を明文化、`DiffBaseline` 永続化 `OverallScore` が `--level` に影響されない旨を補足、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合） | Claude |
 | 0.4.7 | 2026-03-26 | レビュー指摘解決: `scope_risk` の空母集団規則（`0.0`）を設計意図に追記、`InvalidationPlan` 不変条件 (4) の `fallback_to_full` 文言を `analysis_targets` 内に限定、`LlmEnrichmentRequest` の `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 | Claude |

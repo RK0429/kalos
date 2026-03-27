@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.1 |
+| 改訂 | v0.4.2 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -145,8 +145,9 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
   - `application` → `domains`, `ports`
   - `application` → `adapters`（コンポジションルートとしての具象アダプタ選択・初期化に限定。ドメインロジックからアダプタへの直接依存ではない）
   - `adapters` → `ports`
+  - `domains` → `ports`（ポートインターフェースおよび Published Language 型の参照。ドメインがポート定義に依存するのは Hexagonal Architecture の正規の依存方向である）
   - `domains` 間は公開契約（Port 経由）でのみ接続する
-  - **公開契約型の配置**: コンテキスト間で共有する Published Language 型（domain_model.md §2 の PL。例: `SourceAnalysis`、`ScopeMetrics`）は `ports` モジュールに定義する。Hexagonal 依存方向において `domains` と `adapters` の双方から参照可能な唯一の共有配置場所である
+  - **公開契約型の配置**: コンテキスト間で共有する Published Language 型（domain_model.md §2 の PL。例: `SourceAnalysis`、`ScopeMetrics`）は `ports` モジュールに定義する。上記 `domains` → `ports` および `adapters` → `ports` により、双方から参照可能な唯一の共有配置場所となる
   - `domains` → `adapters` の直接依存、`adapters` → `domains` の直接依存は禁止する
 
 ## 改訂履歴
@@ -160,3 +161,4 @@ Ports & Adapters は採用するが、パイプライン構成は Application �
 | 2026-03-21 | レビュー指摘解決: 帰結の保証範囲（CodeQL bundle / WASM プラグイン配布責務）明確化 | arch v0.3.0 / req v0.3.0 |
 | 2026-03-22 | レビュー指摘解決: 許可する依存方向ルール追記、差分解析/ベースラインの Application Pipeline 配下での位置づけ追記 | arch v0.4.0 / req v0.4.0 |
 | 2026-03-27 | レビュー指摘解決: 公開契約型（Published Language）の `ports` モジュール配置ルールを依存方向ルールに追記し、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
+| 2026-03-27 | レビュー指摘解決: `domains` → `ports` を許可する依存方向に明示追加。公開契約型の配置説明を許可エッジの列挙と整合するよう修正 | arch v0.4.9 / req v0.4.7 |

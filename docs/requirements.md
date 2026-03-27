@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.9 |
+| バージョン | 0.4.10 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
@@ -504,10 +504,10 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-023: 解析階層の選択
 
-- **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では階層横断の依存解決や diff モード時のベースライン整合性に必要な他階層結果を追加で算出してよい。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
+- **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では常に全階層（function / module / project）のメトリクス算出・診断生成を実行する（ベースラインキャッシュの保存不変条件として全階層の結果が必要なため。ADR-0003 参照）。`--level` による非対象階層の報告除外は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
   - `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`（解決済み `analysis_targets` 内の全階層を母集団とする）
-  - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。ただし、パターンルールが入力として依存する下位階層メトリクス（例: `KAL-PAT001` が参照する配下関数の `M-F002`）や、diff モードでベースライン整合性に必要な他階層結果は内部的に算出してよいが、報告対象にはしない。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
+  - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。全階層は常に内部的に算出されるが、非対象階層は報告に含めない（must exclude）。総合スコアは指定階層の `level_risk` から算出する。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
   - Given `--level function` 指定, When 解析実行, Then 関数レベルのメトリクスと診断のみが出力される
@@ -825,6 +825,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.10 | 2026-03-27 | レビュー findings 解決: REQ-FUNC-023 の `--level` 内部動作を「追加で算出してよい」から「常に全階層を算出する」に強化し、Reporting が射影 owner と明記（ADR-0003 保存不変条件との整合） | Claude |
 | 0.4.9 | 2026-03-27 | レビュー findings 解決: REQ-NF-008〜010 の依存ラベルを「LLM可用性・外部通信・オフライン制約」に修正（LLM 限定表現の是正） | Claude |
 | 0.4.8 | 2026-03-27 | レビュー findings 解決: `full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、`変更後プロジェクト全体` を `解決済み analysis_targets 内の全階層` に明確化 | Claude |
 | 0.4.7 | 2026-03-26 | レビュー findings 解決: REQ-FUNC-018 の `--llm` に full/diff 両モード動作とエンリッチ対象スコープを明記 | Claude |

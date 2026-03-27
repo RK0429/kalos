@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.1 |
+| 改訂 | v0.4.2 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -69,7 +69,12 @@ Python/TS/Rust/Go で最適エンジンを変える。
 
 ## 判断
 
-選択肢 B を採用する。
+選択肢 B を採用する。本 ADR で決定する範囲は以下の通り:
+
+1. **`ExtractorPort` の定義と CodeQL 初期アダプタの採用**: 抽出エンジンを `ExtractorPort` の背後に隠蔽し、出力契約を `SourceAnalysis`（`UnifiedCpg` + `source_files` + 抑制コメント + 解析警告を束ねる集約ルート）に固定する。初期アダプタとして CodeQL を採用する
+2. **Tool Cache Port と Managed Tool Cache Adapter**: CodeQL bundle の bootstrap / 検証 / キャッシュは CPG Extraction コンテキスト内の独立したポート（`Tool Cache Port`）として定義し、`Managed Tool Cache Adapter` が実装する。`ExtractorPort` と `Tool Cache Port` は同一コンテキスト内で協調するが責務は分離される（architecture.md §4.1, §4.2 参照）
+3. **CLI 主導 bootstrap**: `REQ-FUNC-031` の単一バイナリ要件により、bootstrap の正本は kalos CLI 側に置く
+4. **GitHub Action の wrapper 限定**: `REQ-FUNC-032` に基づき、GitHub Action は managed tool cache の prewarm / cache wrapper に留め、bootstrap ロジックを Action 側に持たない
 
 ## 根拠
 
@@ -121,3 +126,4 @@ Python/TS/Rust/Go で最適エンジンを変える。
 | 2026-03-19 | `SourceAnalysis` 出力契約の明文化（`source_files` 含む）、Tool Cache Port の独立ポート化、PoC 失敗判定基準・再判断トリガー追記、新言語追加スコープの注記追加 | arch v0.2.5 / req v0.2.5 |
 | 2026-03-22 | レビュー指摘解決: ADR 間参照整合、スコープ注記の明確化 | arch v0.4.0 / req v0.4.0 |
 | 2026-03-27 | レビュー指摘解決: 公開契約型の `ports` 配置を ADR-0001 参照として追記し、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
+| 2026-03-27 | レビュー指摘解決: `判断` セクションに付随判断（Tool Cache Port、CLI 主導 bootstrap、GitHub Action wrapper 限定）を明記し、判断境界を自己完結的に記述 | arch v0.4.9 / req v0.4.7 |

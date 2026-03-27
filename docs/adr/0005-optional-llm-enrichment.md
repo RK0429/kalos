@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.7 |
+| 改訂 | v0.4.8 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -19,8 +19,9 @@
 改善提案はテンプレート生成を基本としつつ、`--llm` 指定時に文脈依存の提案を拡張できることが求められている。一方で、LLM の応答有無に kalos 全体が依存してはならない。
 
 - `REQ-FUNC-015`
-- `REQ-NF-008`
 - `REQ-NF-003`
+- `REQ-NF-008`
+- `REQ-NF-009`
 
 ## 検討した選択肢
 
@@ -70,7 +71,7 @@
   - **5xx (Server Error)**: リトライせずに当該 request をスキップする
   - **その他のエラー応答（4xx 等、429 を除く）**: リトライせずに当該 request をスキップする。`stderr` / 構造化ログへ warning（HTTP ステータスコードを含む）を出力する
   - スキップされた request の診断はテンプレート提案のみ返す。コア診断・スコア・Exit code は不変
-- **Aggregate sidecar budget**: 1 回の `kalos check` 実行全体で LLM sidecar に費やす**壁時間（wall-clock time）**の上限は `120s`（暫定値）とする。v1 は逐次実行のため、各 request の所要時間（429 の Retry-After 待機を含む）が累積される。最初の request 送信開始から最後の response 受信完了（またはスキップ決定）までの経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。コア診断・スコア・Exit code は不変。上限超過を `stderr` / 構造化ログへ warning として出力する。暫定値は PoC フィードバックに基づき v1 リリースまでに確定する
+- **Aggregate sidecar budget**: 1 回の `kalos check` 実行全体で LLM sidecar に費やす**壁時間（wall-clock time）**の上限は `120s`（暫定値）とする。v1 は逐次実行のため、各 request の所要時間（429 の Retry-After 待機を含む）が累積される。最初の request 送信開始から最後の response 受信完了（またはスキップ決定）までの経過壁時間で会計する。**ディスパッチ順序**: `LlmEnrichmentRequest` は `Application Pipeline` が `List<Diagnostic>` の出現順（= Diagnostics コンテキストの emission order）に従って生成・ディスパッチする。この順序は ADR-0003 の決定論性契約が保証する評価順序に由来するため、同一入力・同一設定であれば再現可能である。ただし、budget 消費は壁時間（ネットワーク遅延・LLM 応答時間）に依存するため、**どの診断で budget が枯渇するかは実行ごとに変動しうる**。したがって `llm_suggestion` の有無の集合自体は非決定的であり、これは「`llm_suggestion` は決定論性契約の適用範囲外」という既存の注記と整合する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。コア診断・スコア・Exit code は不変。上限超過を `stderr` / 構造化ログへ warning として出力する。暫定値は PoC フィードバックに基づき v1 リリースまでに確定する
 - **Post-dispatch fallback（送信後の障害処理）**: `LlmEnrichmentRequest` の送信後にタイムアウト・非応答・エラーが発生した場合、当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す。コア診断・スコア・Exit code は不変
 
 ## 帰結
@@ -109,4 +110,5 @@
 | 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | arch v0.4.4 / req v0.4.4 |
 | 2026-03-26 | レビュー指摘解決: 非 429/5xx HTTP エラーの no-retry+skip ポリシー明記、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、ADR-0002 相互参照追加 | arch v0.4.5 / req v0.4.5 |
 | 2026-03-26 | レビュー指摘解決: 決定論性契約との関係を明示し、`llm_suggestion` が ADR-0003 の適用範囲外であることを追記 | arch v0.4.7 / req v0.4.5 |
+| 2026-03-27 | レビュー指摘解決: aggregate sidecar budget にディスパッチ順序（`List<Diagnostic>` emission order）と budget 枯渇時の cut-off 動作を明記、開頭トレーサビリティに `REQ-NF-009` を追加 | arch v0.4.12 / req v0.4.9 |
 | 2026-03-27 | レビュー指摘解決: 決定論性契約追記の `関連文書版` を ADR-0003 と整合（v0.4.7）、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |

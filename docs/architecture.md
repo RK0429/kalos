@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.12 |
+| バージョン | 0.4.15 |
 | 最終更新日 | 2026-03-27 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.9, domain_model.md v0.4.9 |
+| 入力 | requirements.md v0.4.10, domain_model.md v0.4.11 |
 
 ## 1. 設計目標
 
@@ -157,8 +157,8 @@ graph TB
 | コンテキスト | 主要責務 | 入力 | 出力 | 対応要件 |
 |---|---|---|---|---|
 | CLI Shell | コマンド解釈、標準入出力、Exit code 返却 | CLI 引数 | 実行指示、終了コード | `REQ-FUNC-018`, `REQ-FUNC-022`, `REQ-FUNC-023`, `REQ-FUNC-030` |
-| Application Pipeline | パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 | 全コンテキスト出力 + `ProjectConfig` | `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code | 大部分の `REQ-FUNC-*` を横断 |
-| Configuration | 明示/探索ベースの設定解決、`WorkspaceRoot` 解決、`analysis_targets` 正規化・検証、`targets_explicitly_specified` 由来記録、優先順位マージ、デフォルト提供 | CLI（`--config` を含む）、CLI path 引数（省略時は `["."]`）、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot`、`targets_explicitly_specified` を含む）、正規化済み `analysis_targets` | `REQ-FUNC-018`, `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
+| Application Pipeline | パイプラインオーケストレーション、diff/non-diff モード選択、`DiagnosticReport` の assemble（summary materialization を含む）、`LlmEnrichmentRequest` 組立、exit code 判定、`--strict` セマンティクスの適用 | 全コンテキスト出力 + `ProjectConfig` | `DiagnosticReport` + `ReportMetadata` + `ReportViewOptions` + exit code | `REQ-FUNC-018`（パイプライン統合）, `REQ-FUNC-022`（exit code・`--strict`）, `REQ-FUNC-023`（`--level` → `summary_scope`）, `REQ-FUNC-024`（summary materialization）, `REQ-FUNC-034`（diff オーケストレーション）, `REQ-NF-001`〜`003`（性能・決定論性） |
+| Configuration | 明示/探索ベースの設定解決、`WorkspaceRoot` 解決、`analysis_targets` 正規化・検証、`targets_explicitly_specified` 由来記録、優先順位マージ、デフォルト提供 | CLI（`--config` を含む）、CLI path 引数（省略時は `["."]`）、`.kalos.toml`、既定値 | `ProjectConfig`（`WorkspaceRoot`、`analysis_targets`、`targets_explicitly_specified` を含む） | `REQ-FUNC-018`, `REQ-FUNC-025`〜`028`, `REQ-FUNC-030`, `REQ-NF-007` |
 | Git Diff Adapter | `base-ref` 解決、変更ファイル列挙、`base_snapshot_hash` 取得 | `WorkspaceRoot`、`analysis_targets`、`base-ref` | 変更対象 path 群、`base_snapshot_hash` | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
 | CPG Extraction | ファイル収集、除外適用、抽出エンジン呼び出し、依存定義/lockfile からの外部シンボル解決、`UnifiedCpg` 変換、抑制コメント抽出 | ワークスペース、`ProjectConfig`、依存定義/lockfile、ローカル stub / metadata cache | `SourceAnalysis` | `REQ-FUNC-001`〜`007`, `REQ-FUNC-029`（抽出）, `REQ-FUNC-031` |
 | Managed Tool Cache Adapter | CodeQL bundle の bootstrap、checksum 検証、ローカル cache 解決 | kalos release と一体で versioning された固定版 manifest、cache directory | 解決済み extractor bundle | `REQ-FUNC-031`, `REQ-FUNC-032`, `REQ-NF-009`, `REQ-NF-010` |
@@ -216,7 +216,7 @@ CPG Extraction
 
 - ドメインコンテキスト同士は公開契約でのみ接続する
 - `Reporting` は ACL（Anti-Corruption Layer — 外部出力スキーマからドメインを隔離する境界）としてのみ存在し、ドメインへ逆流しない
-- `Configuration` が `--config` を含む CLI 入力から `WorkspaceRoot` を一意に確定し、CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化する。同時に `targets_explicitly_specified: bool`（CLI path 引数が明示指定された場合 `true`、省略時 `false`）を `ProjectConfig` に記録し、ベースライン生成可否の判定と `analysis_targets_hash` 正規化に使用する。正規化済み `analysis_targets` は入力順を保持したまま `ReportMetadata` として下流へ渡す
+- `Configuration` が `--config` を含む CLI 入力から `WorkspaceRoot` を一意に確定し、CLI path 引数（省略時は `["."]`）を `WorkspaceRoot` 基準の `analysis_targets` へ正規化する。同時に `targets_explicitly_specified: bool`（CLI path 引数が明示指定された場合 `true`、省略時 `false`）を `ProjectConfig` に記録し、ベースライン生成可否の判定と `analysis_targets_hash` 正規化に使用する。正規化済み `analysis_targets` は入力順を保持したまま `ProjectConfig` に保持し、Reporting 出力時に `ReportMetadata.analysis_targets` へ写像する
 - `Git Diff Adapter` が `base-ref` の解決、変更ファイル列挙、`base_snapshot_hash` の取得を担当する。`CPG Extraction` は明示的に渡された path 群だけを抽出する
 - テンプレート改善提案の生成は `Diagnostics` コンテキスト内部の決定論的ロジックであり、別 adapter/port へ分離しない
 - `Diagnostics` は canonical `primary_scope_id` を持つ `Diagnostic` の一覧だけを返し、diff 表示判定や `ScopeDiagnosticSnapshot` の所有単位はその `primary_scope_id` を基準にする。metric 診断では評価対象 `ScopeId`、pattern 診断では主対象 scope、単一の主対象を持たない cross-scope 診断では辞書順最小 `ScopeId` を使う
@@ -610,6 +610,9 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.15 | 2026-03-27 | 入力参照を domain_model.md v0.4.11 に同期（本体の変更なし） | Claude |
+| 0.4.14 | 2026-03-27 | レビュー findings 解決: §4.2 ルールの `analysis_targets` ライフサイクル記述を修正（`ReportMetadata` として下流へ渡す → `ProjectConfig` に保持し Reporting 出力時に `ReportMetadata.analysis_targets` へ写像）、責務表・domain_model.md との整合を確保 | Claude |
+| 0.4.13 | 2026-03-27 | レビュー findings 解決: §4.1 Application Pipeline の対応要件を具体的な REQ-ID に置換（`大部分の REQ-FUNC-*` → 個別 ID）、Configuration 出力から `analysis_targets` を `ProjectConfig` フィールドに統合、入力参照を requirements.md v0.4.10 / domain_model.md v0.4.10 に更新 | Claude |
 | 0.4.12 | 2026-03-27 | レビュー findings 解決: §9.1 PoC 項目を表形式に変換し requirements.md §5 との対応を明示（番号不一致の解消） | Claude |
 | 0.4.11 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図の non-diff フォールバックラベルに `analysis_targets` 限定を明示、入力参照を requirements.md v0.4.8 に更新 | Claude |
 | 0.4.10 | 2026-03-27 | レビュー findings 解決: §5.2 差分解析シーケンス図に `--level` オプションと `summary_scope` 分岐を明示、`scores.overall` の `requested_level` 射影規則を明文化、`full mode` を `non-diff モード` に統一（ADR-0003 の用語区別に整合）、入力参照を domain_model.md v0.4.8 に更新 | Claude |

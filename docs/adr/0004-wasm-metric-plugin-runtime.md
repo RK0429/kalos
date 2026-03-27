@@ -6,7 +6,7 @@
 |---|---|
 | 承認日 | 2026-03-18 |
 | 最終更新日 | 2026-03-27 |
-| 改訂 | v0.4.7 |
+| 改訂 | v0.4.8 |
 
 > **注記**: メタ情報の `改訂` は本 ADR 自体の版番号であり、改訂履歴の `関連文書版` 列に記載される architecture.md / requirements.md の版番号とは独立したバージョニング体系である。
 
@@ -94,7 +94,7 @@
       - 上記の検証を通過した値に対し、domain_model.md の丸め契約（小数第 6 位 round-half-up）を適用して `MetricValue` を構築する
     - `kalos_plugin_alloc(size: u32) -> u32` — ホストが線形メモリへ書き込むためのアロケータ
     - `kalos_plugin_free(ptr: u32, size: u32)` — `kalos_plugin_alloc` で確保した領域を解放する
-  - **線形メモリデータレイアウト**: ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian のバイナリレイアウトとする。エッジレコードは固定長（12 バイト）だが、ノードレコード・ScopeId・config 値は長さプレフィックス付きの可変長レイアウトである。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（kind は CPG ノード種別の列挙値、可変長）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]`（固定長 12 バイト）とする。いずれも Little-Endian。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す、可変長）とする。**ScopeId レイアウト**: 前述の「ScopeId 直列化契約」で定義する（可変長）。**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「スカラー戻り値エンコーディング」を参照。上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
+  - **線形メモリデータレイアウト**: ホスト⇔プラグイン間で線形メモリを介して受け渡す構造化データは Little-Endian のバイナリレイアウトとする。エッジレコードは固定長（12 バイト）だが、ノードレコード・ScopeId・config 値は長さプレフィックス付きの可変長レイアウトである。v1 のレイアウト仕様は SPI version `kalos-metric-spi-v1` に紐づき、SPI version 変更時に破壊的変更となりうる。**v1 ノード/エッジレイアウト**: `cpg_read_node` が書き込むノードレコードは `[kind: u32, name_len: u32, name_bytes: [u8; name_len]]`（`kind` は後述の NodeKind discriminant mapping に従う `u32` 列挙値、可変長）、`cpg_read_edge` が書き込むエッジレコードは `[source_index: u32, target_index: u32, kind: u32]`（`kind` は後述の EdgeKind discriminant mapping に従う `u32` 列挙値、固定長 12 バイト）とする。いずれも Little-Endian。**NodeKind / EdgeKind discriminant mapping**: ノードレコード・エッジレコードの `kind: u32` は以下の規範的（normative）マッピングに従う（domain_model.md §3.1 の `NodeKind` / `EdgeKind` enum 定義に対応）。この対応表は `kalos-metric-spi-v1` の一部であり、バリアントの追加・削除・値の再割当ては SPI version の更改を伴う破壊的変更として扱う。ホストは v1 で定義されていない `kind` 値を含むレコードをプラグインに返さない（将来の SPI version で追加されたバリアントは v1 プラグインに対してフィルタされる）。NodeKind: `0` = Function, `1` = Class, `2` = Module, `3` = Variable, `4` = Parameter, `5` = ExternalSymbol。EdgeKind: `0` = Call, `1` = DataFlow, `2` = ControlFlow, `3` = Contains, `4` = TypeReference, `5` = Semantic。値は 0 始まりの連続整数で、domain_model.md §3.1 の enum 宣言順と一致する。`config_read` が書き込む値は UTF-8 文字列のバイト列（長さは戻り値で返す、可変長）とする。**ScopeId レイアウト**: 前述の「ScopeId 直列化契約」で定義する（可変長）。**`kalos_plugin_evaluate` 戻り値**: WASM 値スタック上の `i64` スカラーであり、線形メモリレイアウトではない。エンコーディングは前述の「スカラー戻り値エンコーディング」を参照。上記レイアウトおよびスカラーエンコーディングは `kalos-metric-spi-v1` の一部であり、変更は SPI version の更改を伴う
   - **WASI 不使用の根拠**: 評価 SPI は pure function（`CpgSubgraph + MetricConfig -> MetricValue`）であり、OS リソースへのアクセスを必要としない。WASI を排除することで、決定論性の保証が WASM ランタイムの fuel metering のみに依存する単純なモデルとなる
 - `Configuration` は `[[plugins]]` の `path` を `WorkspaceRoot` 基準で canonicalize し、`WorkspaceRoot` 外参照または `sha256` 構文不正を設定エラー（exit code 2）として扱う。Plugin Host はこの検証を通過した `plugin_manifest` だけを入力に受け取り、実行時の失敗境界と設定不正の境界を分離する
 - ホストが渡すのは additive-only な `CpgSubgraph` の read-only view と `MetricConfig` だけに絞り、ネットワークやファイル書込は許可しない。Plugin Host は登録された各 `metric_id` と `MetricDefinition.level` に一致する各 `ScopeId` の組み合わせについて `kalos_plugin_evaluate(metric_id, scope)` を 1 回ずつ呼び出し、入力には `UnifiedCpg.subgraph(scope_id)` を渡す。function/module metric は該当 scope ごとに 1 回ずつ、project metric は正規形 `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` に対して 1 回だけ評価する。プラグインはロード時に stable `metric_id`, `level`, `name`, `description` を持つ `MetricDefinition` を登録し、v1 では `participation = ReportOnly`、`rule_binding = None` とする
@@ -158,3 +158,4 @@
 | 2026-03-22 | ScopeId 直列化契約追加、スカラー戻り値と線形メモリレイアウトの用語分離 | arch v0.4.5 / req v0.4.5 |
 | 2026-03-26 | レビュー指摘解決: invalid-value contract に `raw_value` の NaN/±Inf 検査を追加、線形メモリレイアウトの固定長/可変長の区別を明記 | arch v0.4.6 / req v0.4.6 |
 | 2026-03-27 | レビュー指摘解決: `関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
+| 2026-03-27 | レビュー指摘解決: SPI v1 `kind: u32` の規範的 discriminant mapping（NodeKind / EdgeKind）を追加、バリアント変更時の SPI version 更改義務と未知 kind 値のフィルタ規則を明記 | arch v0.4.9 / req v0.4.7 |
