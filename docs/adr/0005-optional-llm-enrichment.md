@@ -53,7 +53,7 @@
 
 ## 判断
 
-選択肢 B を採用する。
+選択肢 B を採用する。本 ADR は「LLM による改善提案をコア評価パイプラインに対してどう位置づけるか」を決定境界とし、テンプレート提案を決定論的コアで生成した上で LLM を後段 sidecar として隔離する方式を採用する。
 
 ## 根拠
 
@@ -99,7 +99,7 @@
 
 ## 改訂履歴
 
-> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。`arch` は architecture.md、`req` は requirements.md を指す。requirements.md の版は architecture.md メタ情報の `入力` フィールドから導出する。ADR 改訂日と各文書版の作成日は一致しない場合がある。
+> **凡例**: `関連文書版` は、当該改訂の時点で整合性を確認した各文書の版を示す（変更が導入された版ではなく、確認の対象とした版）。単独版（例: `v0.4.9`）は当該版のみを確認したことを、範囲表記（例: `v0.2.0–v0.2.8`）は当該範囲の変更を取り込み最終版で整合性を確認したことを表す。`arch` は architecture.md、`req` は requirements.md を指す。requirements.md の版は architecture.md メタ情報の `入力` フィールドから導出する。ADR 改訂日と各文書版の作成日は一致しない場合がある。同一日付の複数エントリは上から時系列順に記載する。
 
 | 日付 | 変更概要 | 関連文書版 |
 |---|---|---|
@@ -110,5 +110,5 @@
 | 2026-03-22 | unsupported `KALOS_LLM_PROVIDER` の preflight failure（exit code 2）追加 | arch v0.4.4 / req v0.4.4 |
 | 2026-03-26 | レビュー指摘解決: 非 429/5xx HTTP エラーの no-retry+skip ポリシー明記、C/C++ 例を v1 対象言語に即した forward compatibility 記述に置換、ADR-0002 相互参照追加 | arch v0.4.5 / req v0.4.5 |
 | 2026-03-26 | レビュー指摘解決: 決定論性契約との関係を明示し、`llm_suggestion` が ADR-0003 の適用範囲外であることを追記 | arch v0.4.7 / req v0.4.5 |
-| 2026-03-27 | レビュー指摘解決: aggregate sidecar budget にディスパッチ順序（`List<Diagnostic>` emission order）と budget 枯渇時の cut-off 動作を明記、開頭トレーサビリティに `REQ-NF-009` を追加 | arch v0.4.12 / req v0.4.9 |
 | 2026-03-27 | レビュー指摘解決: 決定論性契約追記の `関連文書版` を ADR-0003 と整合（v0.4.7）、`関連文書版` の凡例を改訂（requirements.md 追跡の追加・意味論の明確化） | arch v0.4.9 / req v0.4.7 |
+| 2026-03-27 | レビュー指摘解決: aggregate sidecar budget にディスパッチ順序（`List<Diagnostic>` emission order）と budget 枯渇時の cut-off 動作を明記、開頭トレーサビリティに `REQ-NF-009` を追加 | arch v0.4.12 / req v0.4.9 |

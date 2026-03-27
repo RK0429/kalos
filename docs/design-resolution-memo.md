@@ -6,11 +6,11 @@
 |---|---|
 | 作成日 | 2026-03-21 |
 | 最終更新日 | 2026-03-27 |
-| 対象レビュー | requirements.md / architecture.md / domain_model.md / ADR 横断レビュー（4 レビュー文書、初回 19 指摘 + v0.4.0 フォローアップ根拠 4 件（F-1–F-4）+ v0.4.1 フォローアップ 2 件、計 §1–§21 + F-1–F-4） |
+| 対象レビュー | requirements.md 個別レビュー / architecture.md 個別レビュー / domain_model.md 個別レビュー / ADR-0001〜ADR-0005 横断設計整合性レビュー（計 4 レビューセッション、初回 19 指摘 + v0.4.0 フォローアップ根拠 4 件（F-1–F-4）+ v0.4.1 フォローアップ 2 件、§1–§21 + F-1–F-4） |
 | 目的 | 上記 21 §（設計判断）および 4 F 項（v0.4.0 追加根拠）のレビュー指摘に対する設計判断を確定し、文書更新タスクの仕様を定義する |
 | 適用範囲 | v0.3.0–v0.4.1 の文書更新バッチ（§1–§21 の設計判断 + F-1–F-4 の v0.4.0 追加根拠）。v0.4.2 以降のレビュー起因更新は本メモの対象外であり、各文書の変更履歴を参照のこと |
 
-**注意**: 本メモは v0.3.0–v0.4.1 バッチで解決した 21 § の設計判断と、v0.4.0 フォローアップ 4 件（F-1–F-4）の追加根拠の履歴記録である。全判断は対象文書に適用済みである。v0.4.2 以降に行われたレビュー起因の文書更新（版メタ同期、scope semantics 整合、Plugin Host 責務表拡充、PoC 参照番号修正等）は本メモの対象外であり、各文書の変更履歴を正本とする。本メモ内の § 参照は初回適用前の文書構成に基づくため、セクション番号の軽微なずれが生じうる。v0.4.3 で本メモ内の PoC 参照番号を #6 → #3（requirements.md §5）に修正した。
+**注意**: 本メモは v0.3.0–v0.4.1 バッチで解決した 21 § の設計判断と、v0.4.0 フォローアップ 4 件（F-1–F-4）の追加根拠の履歴記録である。全判断は対象文書に適用済みである。v0.4.2 以降に行われたレビュー起因の文書更新（版メタ同期、scope semantics 整合、Plugin Host 責務表拡充、PoC 参照番号修正等）は本メモの対象外であり、各文書の変更履歴を正本とする。本メモ内の内部参照（§N 形式）は §N「見出し名」の形式で記述し、番号ずれへの耐性を持たせている。外部文書のセクション番号参照（例: architecture.md §5.3）は初回適用前の文書構成に基づくため、軽微なずれが生じうる。v0.4.3 で本メモ内の PoC 参照番号を #6 → #3（requirements.md §5）に修正した。
 
 ---
 
@@ -166,7 +166,7 @@ ADR-0003 で `analysis_targets` が部分集合の場合のフォールバック
 
 subset `analysis_targets` の場合は **要求された `analysis_targets` のみを non-diff で全解析する**。全ワークスペースへの拡張は行わない。
 
-これは `InvalidationPlan.fallback_to_full`（§13 参照）とは別の概念である。両者の関係を以下に整理する。
+これは `InvalidationPlan.fallback_to_full`（§13「InvalidationPlan の集合不変条件」参照）とは別の概念である。両者の関係を以下に整理する。
 
 #### `analysis_targets` 制約と `fallback_to_full` の関係
 
@@ -381,7 +381,7 @@ architecture.md §4.1 の責務表に `Application Pipeline` がなく、実質�
 | `recompute_scopes ∩ reuse_scopes = ∅` | 同一スコープが再計算と再利用の両方に属することはない |
 | `recompute_scopes ∪ reuse_scopes = 全既知スコープ`（`fallback_to_full = false` 時） | 全スコープがいずれかに分類される |
 | `AffectedScopeSet.scopes ⊆ recompute_scopes` | 影響を受けたスコープは必ず再計算対象 |
-| `fallback_to_full = true` 時 | `recompute_scopes` と `reuse_scopes` は無視され、現在の `analysis_targets` 内の全スコープを対象に non-diff 再計算が実行される（`analysis_targets` の拡張は行わない。§5 参照） |
+| `fallback_to_full = true` 時 | `recompute_scopes` と `reuse_scopes` は無視され、現在の `analysis_targets` 内の全スコープを対象に non-diff 再計算が実行される（`analysis_targets` の拡張は行わない。§5「Subset analysis_targets のフォールバックセマンティクス」参照） |
 
 ### 更新対象
 
@@ -617,15 +617,15 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 
 再レビュー指摘に基づき、v0.4.0 フォローアップとして以下の更新を行った。これらは §1–§21 の設計判断を拡張するものであり、更新対象一覧で「（v0.4.0）」と表示される項目の設計根拠を提供する。
 
-### F-1. Project scope 正規形の 3-field 表記統一（§5・§13 拡張）
+### F-1. Project scope 正規形の 3-field 表記統一（§5「Subset analysis_targets」・§13「InvalidationPlan の集合不変条件」拡張）
 
 **指摘**: `ScopeId` の project-level 表現が文書間で不統一（2-field と 3-field が混在）。
 
-**判断**: project scope の正規形を `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の 3-field 表記に統一する。domain_model.md の `ScopeId` 値オブジェクト定義が `level`, `qualified_name`, `file_path` の 3-field 構造であり、project scope もこの構造に合わせて全フィールドを明示するのが一貫性の観点から妥当である。§5（`analysis_targets` セマンティクス）および §13（`InvalidationPlan` 不変条件）で scope 表現を参照しているため、両 § の文脈における一貫性を確保する。なお、ADR-0004 が後に追加した ScopeId 直列化契約（v0.4.5、本メモ対象外）も同じ 3-field レイアウトを採用しており、本判断と整合する。
+**判断**: project scope の正規形を `ScopeId(level = Project, qualified_name = "<project>", file_path = ".")` の 3-field 表記に統一する。domain_model.md の `ScopeId` 値オブジェクト定義が `level`, `qualified_name`, `file_path` の 3-field 構造であり、project scope もこの構造に合わせて全フィールドを明示するのが一貫性の観点から妥当である。§5「Subset analysis_targets のフォールバックセマンティクス」および §13「InvalidationPlan の集合不変条件」で scope 表現を参照しているため、両 § の文脈における一貫性を確保する。なお、ADR-0004 が後に追加した ScopeId 直列化契約（v0.4.5、本メモ対象外）も同じ 3-field レイアウトを採用しており、本判断と整合する。
 
 **更新文書**: architecture.md、domain_model.md
 
-### F-2. `normalized_risk` の invalid-value セマンティクス（§2 拡張、ADR-0004 連動）
+### F-2. `normalized_risk` の invalid-value セマンティクス（§2「enabled = false のセマンティクス」拡張、ADR-0004 連動）
 
 **指摘**: WASM プラグインが返す `normalized_risk` の NaN / ±Inf / 範囲外値に対する振る舞いが未定義であり、`MetricValue` の不変条件とスコアリングパイプラインの整合性が保証されなかった。
 
@@ -633,15 +633,15 @@ ADR-0005 と `REQ-NF-009` で LLM 連携の設計意図は定義されていた�
 - `NaN` または `±Inf` → 当該呼び出しをプラグイン評価失敗として扱い、`MetricValue` を生成しない
 - 有限だが `[0.0, 1.0]` 範囲外 → `clamp(normalized_risk, 0.0, 1.0)` で補正し warning を出力
 
-requirements.md と domain_model.md にも同セマンティクスを伝播する。これにより `REQ-NF-003`（決定論性）の保護と、§2（`enabled = false` のスコアリング除外）で前提とする `MetricValue` の整合性を維持する。
+requirements.md と domain_model.md にも同セマンティクスを伝播する。これにより `REQ-NF-003`（決定論性）の保護と、§2「enabled = false のセマンティクス」で前提とする `MetricValue` の整合性を維持する。
 
 **更新文書**: requirements.md、domain_model.md、adr/0004-wasm-metric-plugin-runtime.md
 
-### F-3. Aggregate fuel budget の diff→全解析フォールバック規約（§5 拡張、ADR-0004 連動）
+### F-3. Aggregate fuel budget の diff→全解析フォールバック規約（§5「Subset analysis_targets」拡張、ADR-0004 連動）
 
 **指摘**: diff 解析から全解析にフォールバックした場合（`InvalidationPlan.fallback_to_full = true`）の aggregate fuel budget の切替規則が未定義。
 
-**判断**: フォールバック時は実際の実行パスに従い全解析用 budget（`30_000_000 fuel`）を適用する。diff mode budget（`5_000_000 fuel`）のままでは全スコープ再計算に対してリソース不足のリスクがある。§5 の fallback セマンティクス（`analysis_targets` を拡張しない）と ADR-0004 の fuel budget 定義を整合させる。
+**判断**: フォールバック時は実際の実行パスに従い全解析用 budget（`30_000_000 fuel`）を適用する。diff mode budget（`5_000_000 fuel`）のままでは全スコープ再計算に対してリソース不足のリスクがある。§5「Subset analysis_targets のフォールバックセマンティクス」（`analysis_targets` を拡張しない）と ADR-0004 の fuel budget 定義を整合させる。
 
 **更新文書**: requirements.md、architecture.md、domain_model.md、adr/0004-wasm-metric-plugin-runtime.md
 
@@ -679,8 +679,9 @@ requirements.md と domain_model.md にも同セマンティクスを伝播す�
 
 | 日付 | 変更内容 |
 |---|---|
-| 2026-03-27 | レビュー findings 解決: §10 の Application Pipeline 対応要件を具体的な REQ-ID に置換（`大部分の REQ-FUNC-*` → 個別 ID） |
-| 2026-03-27 | レビュー findings 解決: §8 enum 一覧と §10 更新対象表の `full mode` を `non-diff モード` に統一 |
+| 2026-03-27 | レビュー指摘解決: 対象レビューの ADR 横断レビュー記述を具体化（ADR-0001〜ADR-0005 を明示）、内部 § 参照に見出し名を付与して番号ずれへの耐性を向上 |
+| 2026-03-27 | レビュー指摘解決: §10 の Application Pipeline 対応要件を具体的な REQ-ID に置換（`大部分の REQ-FUNC-*` → 個別 ID） |
+| 2026-03-27 | レビュー指摘解決: §8 enum 一覧と §10 更新対象表の `full mode` を `non-diff モード` に統一 |
 | 2026-03-26 | §16 の `LlmEnrichmentRequest` 図で `MetricContext`/`PatternContext` を定義済みの `MetricObservation`/`PatternEvidence` に置換 |
 | 2026-03-26 | 出所整合修正: ADR-0002 行の出所タグを凡例準拠の `（v0.4.1）` に修正、F-1 根拠から対象外の ADR-0004 ScopeId 直列化契約への依存を除去し domain_model.md の ScopeId 定義に差し替え |
 | 2026-03-26 | 追跡性・出所修正: v0.4.0 フォローアップ根拠セクション（F-1–F-4）追加、ADR-0004 行の出所を改訂履歴と整合（全項目を v0.4.0 に帰属）、§20 更新対象に ADR-0002 を追加、更新対象一覧に ADR-0002 行を追加 |
