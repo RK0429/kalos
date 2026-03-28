@@ -3,7 +3,17 @@ use std::fmt;
 
 macro_rules! string_newtype {
     ($name:ident) => {
-        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            serde::Serialize,
+            serde::Deserialize
+        )]
         pub struct $name(pub String);
 
         impl $name {
@@ -47,14 +57,16 @@ string_newtype!(RuleId);
 string_newtype!(MetricId);
 string_newtype!(DiagnosticId);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum AnalysisLevel {
     Function,
     Module,
     Project,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ScopeId {
     pub level: AnalysisLevel,
     pub qualified_name: String,
@@ -91,7 +103,7 @@ impl PartialOrd for ScopeId {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Severity {
     Error,
     Warning,

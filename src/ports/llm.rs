@@ -2,10 +2,11 @@ use crate::domains::cpg::Language;
 use crate::domains::diagnostics::{
     CpgSubgraphExcerpt, LlmSuggestionBundle, MetricObservation, PatternEvidence, SourceExcerpt,
 };
-use crate::domains::{FilePath, RuleId, Severity};
+use crate::domains::{DiagnosticId, FilePath, RuleId, Severity};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LlmRequest {
+    pub diagnostic_id: DiagnosticId,
     pub rule_id: RuleId,
     pub severity: Severity,
     pub language: Language,

@@ -17,6 +17,19 @@ pub struct BundleManifest {
     pub download_url: String,
 }
 
+/// Returns the default CodeQL bundle manifest for managed tool cache resolution.
+///
+/// All values are placeholders until real CodeQL bundle integration is implemented:
+/// - SHA-256 is the hash of empty input (no real bundle content yet)
+/// - URL uses `example.invalid` (reserved per RFC 6761)
+pub fn default_codeql_bundle_manifest() -> BundleManifest {
+    BundleManifest {
+        version: "2.16.0".to_owned(),
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
+        download_url: "https://example.invalid/codeql-bundle-2.16.0.tar.gz".to_owned(),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ManagedToolCacheAdapter {
     manifest: BundleManifest,

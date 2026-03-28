@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::env;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -6,14 +5,21 @@ use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
 
-use crate::application::pipeline::AnalysisPipeline;
+use crate::adapters::llm::HttpLlmAdapter;
+use crate::adapters::llm::http::validate_llm_config;
+use crate::adapters::baseline_cache::BaselineCacheAdapter;
+use crate::adapters::dependency_resolver::StubDependencyResolver;
+use crate::adapters::diff_source::GitDiffAdapter;
+use crate::adapters::extractor::CodeQlAdapter;
+use crate::adapters::tool_cache::{ManagedToolCacheAdapter, default_codeql_bundle_manifest};
+use crate::application::pipeline::{AnalysisPipeline, DiffConfig};
+use crate::domains::Severity;
 use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
-use crate::domains::cpg::{CpgId, SourceAnalysis, UnifiedCpg};
 use crate::domains::reporting::{
     OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
 };
-use crate::domains::{FilePath, Severity};
-use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
+use crate::platform::fs::RealFileSystem;
+use crate::platform::process::SystemCommandRunner;
 
 #[derive(Debug, Clone, Args)]
 pub struct CheckCommand {
@@ -77,13 +83,35 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
+        let llm_adapter = if self.llm {
+            match validate_llm_config() {
+                Ok(config) => Some(HttpLlmAdapter::new(config)),
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else {
+            None
+        };
 
-        if self.diff.is_some() {
-            eprintln!("diff mode is not implemented yet");
-            return ExitCode::from(2);
-        }
-
-        let pipeline = AnalysisPipeline::new(StubExtractor);
+        let manifest = default_codeql_bundle_manifest();
+        let codeql_version = manifest.version.clone();
+        let tool_cache = ManagedToolCacheAdapter::new(manifest);
+        let exclude_patterns = config
+            .exclude_patterns
+            .iter()
+            .map(|pattern| pattern.pattern.clone())
+            .collect::<Vec<_>>();
+        let extractor = CodeQlAdapter::new(
+            RealFileSystem,
+            SystemCommandRunner,
+            tool_cache,
+            codeql_version,
+            exclude_patterns,
+        );
+        let dependency_resolver = StubDependencyResolver;
+        let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
         let view_options = ReportViewOptions {
             requested_level: self.level.into(),
             output_format: self.format.into(),
@@ -91,15 +119,44 @@ impl CheckCommand {
             minimum_severity: self.severity.map(Severity::from),
         };
 
-        let result = match pipeline.run(&config, view_options) {
-            Ok(result) => result,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(2);
+        let result = if let Some(base_ref) = &self.diff {
+            let cache = match BaselineCacheAdapter::new() {
+                Ok(cache) => cache,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            match pipeline.run_diff(
+                &config,
+                view_options,
+                &DiffConfig {
+                    base_ref: base_ref.clone(),
+                },
+                &GitDiffAdapter,
+                &cache,
+                llm_adapter.as_ref().map(|adapter| adapter as _),
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else {
+            match pipeline.run(&config, view_options, llm_adapter.as_ref().map(|adapter| adapter as _)) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
             }
         };
 
-        let rendered = match result.report.render(None, std::io::stdout().is_terminal()) {
+        let rendered = match result
+            .report
+            .render(result.llm_suggestions.as_ref(), std::io::stdout().is_terminal())
+        {
             Ok(rendered) => rendered,
             Err(error) => {
                 eprintln!("{error}");
@@ -109,26 +166,6 @@ impl CheckCommand {
         println!("{rendered}");
 
         map_exit_code(result.exit_code)
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-struct StubExtractor;
-
-impl ExtractorPort for StubExtractor {
-    type Error = std::convert::Infallible;
-
-    fn extract(&self, _request: &ExtractionRequest) -> Result<SourceAnalysis, Self::Error> {
-        Ok(SourceAnalysis {
-            cpg: UnifiedCpg {
-                id: CpgId::from("stub"),
-                nodes: Vec::new(),
-                edges: Vec::new(),
-            },
-            source_files: BTreeMap::<FilePath, crate::domains::cpg::SourceFile>::new(),
-            suppressions: Vec::new(),
-            warnings: Vec::new(),
-        })
     }
 }
 

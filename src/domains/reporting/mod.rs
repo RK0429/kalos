@@ -119,13 +119,16 @@ impl AnalysisReport {
         diagnostics: Vec<Diagnostic>,
         diagnostics_scope: DiagnosticsScope,
         view: ReportViewOptions,
+        summary_override: Option<DiagnosticSummary>,
     ) -> Self {
         let projected_metrics = project_metrics(metrics, view.requested_level);
         let projected_diagnostics = project_diagnostics(&diagnostics, view.requested_level);
         let summary_scope = summary_scope_for(view.requested_level);
-        let summary = materialize_summary(match summary_scope {
-            SummaryScope::WholeProject => &diagnostics,
-            SummaryScope::ListedDiagnostics => &projected_diagnostics,
+        let summary = summary_override.unwrap_or_else(|| {
+            materialize_summary(match summary_scope {
+                SummaryScope::WholeProject => &diagnostics,
+                SummaryScope::ListedDiagnostics => &projected_diagnostics,
+            })
         });
 
         Self {
@@ -961,6 +964,7 @@ mod tests {
                 strict: true,
                 minimum_severity: Some(Severity::Error),
             },
+            None,
         );
 
         assert!(report.visible_diagnostics().is_empty());
@@ -969,6 +973,31 @@ mod tests {
             report.diagnostics.determine_exit_code(report.view.strict),
             crate::domains::diagnostics::ExitCode::DiagnosticFailure
         );
+    }
+
+    #[test]
+    fn project_report_prefers_summary_override_when_provided() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from(".")], "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            vec![fixture_warning_diagnostic()],
+            DiagnosticsScope::AffectedOnly,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Json,
+                strict: false,
+                minimum_severity: None,
+            },
+            Some(crate::domains::diagnostics::DiagnosticSummary {
+                error_count: 2,
+                warning_count: 3,
+                info_count: 4,
+            }),
+        );
+
+        assert_eq!(report.diagnostics.summary.error_count, 2);
+        assert_eq!(report.diagnostics.summary.warning_count, 3);
+        assert_eq!(report.diagnostics.summary.info_count, 4);
     }
 
     #[test]
@@ -1111,6 +1140,7 @@ mod tests {
                 strict: false,
                 minimum_severity,
             },
+            None,
         )
     }
 

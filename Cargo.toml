@@ -22,6 +22,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 ordered-float = { version = "5", features = ["serde"] }
 sha2 = "0.10"
+ureq = "3"
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

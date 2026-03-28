@@ -85,7 +85,7 @@ impl AnalysisMetrics {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScopeMetrics {
     pub scope_id: ScopeId,
     pub values: Vec<MetricValue>,
@@ -139,14 +139,14 @@ impl ScopeMetrics {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MetricValue {
     pub metric_id: MetricId,
     pub raw_value: f64,
     pub normalized_risk: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OverallScore {
     pub function_risk: Option<f64>,
     pub module_risk: Option<f64>,

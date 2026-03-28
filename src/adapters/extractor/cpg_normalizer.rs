@@ -536,7 +536,10 @@ mod tests {
     fn normalize_rejects_path_outside_workspace() {
         let workspace_root = std::path::Path::new("/workspace");
         let error = CpgNormalizer
-            .normalize_fixture_bytes(workspace_root, BTreeMap::new(), br#"{
+            .normalize_fixture_bytes(
+                workspace_root,
+                BTreeMap::new(),
+                br#"{
                 "modules": [{
                     "id":"m1",
                     "name":"evil",
@@ -545,7 +548,8 @@ mod tests {
                     "end_line":1,
                     "language":"python"
                 }]
-            }"#)
+            }"#,
+            )
             .unwrap_err();
 
         match error {

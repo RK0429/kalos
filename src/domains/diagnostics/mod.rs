@@ -207,7 +207,7 @@ pub struct FileLocation {
     pub column: Option<u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiagnosticSummary {
     pub error_count: u32,
     pub warning_count: u32,

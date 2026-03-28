@@ -422,7 +422,13 @@ mod tests {
         assert!(matches_pattern("logs/debug.log", "*.log"));
 
         let temp = NamedTempFile::new().unwrap();
-        let exact_name = temp.path().file_name().unwrap().to_str().unwrap().to_owned();
+        let exact_name = temp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
         assert!(matches_pattern(exact_name.as_str(), exact_name.as_str()));
         assert!(!matches_pattern(
             &format!("other/{}.bak", exact_name),
