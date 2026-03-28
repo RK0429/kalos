@@ -1,0 +1,49 @@
+{
+  "modules": [
+    {
+      "id": "m1",
+      "name": "web/app",
+      "file": "web/app.ts",
+      "start_line": 1,
+      "end_line": 7,
+      "language": "typescript"
+    }
+  ],
+  "functions": [
+    {
+      "id": "f1",
+      "name": "render",
+      "file": "web/app.ts",
+      "start_line": 1,
+      "end_line": 3,
+      "language": "typescript"
+    },
+    {
+      "id": "f2",
+      "name": "mount",
+      "file": "web/app.ts",
+      "start_line": 5,
+      "end_line": 7,
+      "language": "typescript"
+    }
+  ],
+  "calls": [
+    {
+      "source": "f2",
+      "target": "f1",
+      "language": "typescript"
+    }
+  ],
+  "contains": [
+    {
+      "source": "m1",
+      "target": "f1",
+      "language": "typescript"
+    },
+    {
+      "source": "m1",
+      "target": "f2",
+      "language": "typescript"
+    }
+  ]
+}

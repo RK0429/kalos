@@ -1,0 +1,54 @@
+{
+  "modules": [
+    {
+      "id": "m1",
+      "name": "app",
+      "file": "src/app.py",
+      "start_line": 1,
+      "end_line": 8,
+      "language": "python"
+    }
+  ],
+  "classes": [
+    {
+      "id": "c1",
+      "name": "Greeter",
+      "file": "src/app.py",
+      "start_line": 1,
+      "end_line": 4,
+      "language": "python"
+    }
+  ],
+  "functions": [
+    {
+      "id": "f1",
+      "name": "greet",
+      "file": "src/app.py",
+      "start_line": 6,
+      "end_line": 8,
+      "language": "python",
+      "properties": {
+        "qualified_name": "app.greet"
+      }
+    }
+  ],
+  "calls": [
+    {
+      "source": "f1",
+      "target": "c1",
+      "language": "python"
+    }
+  ],
+  "contains": [
+    {
+      "source": "m1",
+      "target": "c1",
+      "language": "python"
+    },
+    {
+      "source": "m1",
+      "target": "f1",
+      "language": "python"
+    }
+  ]
+}
