@@ -5,13 +5,13 @@ use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
 
-use crate::adapters::llm::HttpLlmAdapter;
-use crate::adapters::llm::http::validate_llm_config;
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
 use crate::adapters::diff_source::GitDiffAdapter;
 use crate::adapters::extractor::CodeQlAdapter;
-use crate::adapters::tool_cache::{ManagedToolCacheAdapter, default_codeql_bundle_manifest};
+use crate::adapters::llm::HttpLlmAdapter;
+use crate::adapters::llm::http::validate_llm_config;
+use crate::adapters::tool_cache::{ManagedToolCacheAdapter, codeql_bundle_manifest};
 use crate::application::pipeline::{AnalysisPipeline, DiffConfig};
 use crate::domains::Severity;
 use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
@@ -95,7 +95,13 @@ impl CheckCommand {
             None
         };
 
-        let manifest = default_codeql_bundle_manifest();
+        let manifest = match codeql_bundle_manifest() {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
+        };
         let codeql_version = manifest.version.clone();
         let tool_cache = ManagedToolCacheAdapter::new(manifest);
         let exclude_patterns = config
@@ -144,7 +150,11 @@ impl CheckCommand {
                 }
             }
         } else {
-            match pipeline.run(&config, view_options, llm_adapter.as_ref().map(|adapter| adapter as _)) {
+            match pipeline.run(
+                &config,
+                view_options,
+                llm_adapter.as_ref().map(|adapter| adapter as _),
+            ) {
                 Ok(result) => result,
                 Err(error) => {
                     eprintln!("{error}");
@@ -153,10 +163,10 @@ impl CheckCommand {
             }
         };
 
-        let rendered = match result
-            .report
-            .render(result.llm_suggestions.as_ref(), std::io::stdout().is_terminal())
-        {
+        let rendered = match result.report.render(
+            result.llm_suggestions.as_ref(),
+            std::io::stdout().is_terminal(),
+        ) {
             Ok(rendered) => rendered,
             Err(error) => {
                 eprintln!("{error}");

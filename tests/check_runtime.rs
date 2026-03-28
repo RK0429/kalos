@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 use kalos::adapters::dependency_resolver::StubDependencyResolver;
 use kalos::adapters::extractor::CodeQlAdapter;
+use kalos::adapters::tool_cache::codeql_bundle_manifest;
 use kalos::application::pipeline::AnalysisPipeline;
 use kalos::domains::config::{Defaults, ProjectConfig, WorkspaceRoot};
 use kalos::domains::reporting::{OutputFormat, ReportViewOptions, RequestedLevel};
@@ -99,9 +100,9 @@ fn codeql_adapter_with_stub_dependency_resolver_emits_req_func_007_warning() {
 }
 
 #[test]
-fn managed_tool_cache_cache_miss_exits_with_code_2_and_clear_error() {
+fn managed_tool_cache_checksum_mismatch_exits_with_code_2_and_clear_error() {
     let temp = seeded_workspace();
-    let cache_dir = temp.path().join("missing-cache");
+    let cache_dir = seed_invalid_managed_bundle(temp.path());
 
     Command::cargo_bin("kalos")
         .unwrap()
@@ -111,7 +112,8 @@ fn managed_tool_cache_cache_miss_exits_with_code_2_and_clear_error() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("failed to resolve CodeQL bundle"))
-        .stderr(predicate::str::contains("Run kalos bootstrap while online"));
+        .stderr(predicate::str::contains("checksum mismatch"))
+        .stderr(predicate::str::contains("kalos bootstrap").not());
 }
 
 #[test]
@@ -200,6 +202,15 @@ fn seeded_workspace() -> TempDir {
     )
     .unwrap();
     temp
+}
+
+fn seed_invalid_managed_bundle(workspace_root: &std::path::Path) -> PathBuf {
+    let manifest = codeql_bundle_manifest().unwrap();
+    let cache_dir = workspace_root.join(".kalos-test-cache");
+    let bundle_dir = cache_dir.join("codeql").join(&manifest.version);
+    fs::create_dir_all(&bundle_dir).unwrap();
+    fs::write(bundle_dir.join("bundle.marker"), "0".repeat(64)).unwrap();
+    cache_dir
 }
 
 fn load_fixture(name: &str) -> String {

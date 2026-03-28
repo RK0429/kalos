@@ -160,14 +160,17 @@ where
         let artifacts = analyze_source_analysis(config, source_analysis, None);
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
-        Ok(finalize_result(assemble_report(
-            config,
-            artifacts.metrics,
-            artifacts.diagnostics,
-            DiagnosticsScope::WholeProject,
-            view_options,
-            None,
-        ), llm_suggestions))
+        Ok(finalize_result(
+            assemble_report(
+                config,
+                artifacts.metrics,
+                artifacts.diagnostics,
+                DiagnosticsScope::WholeProject,
+                view_options,
+                None,
+            ),
+            llm_suggestions,
+        ))
     }
 
     pub fn run_diff<DS, C>(
@@ -211,14 +214,17 @@ where
                 (summary_scope_for(view_options.requested_level) == SummaryScope::WholeProject)
                     .then(|| summary_from_snapshots(&baseline.diagnostic_snapshots))
             });
-            return Ok(finalize_result(assemble_report(
-                config,
-                metrics,
-                Vec::new(),
-                DiagnosticsScope::AffectedOnly,
-                view_options,
-                summary_override,
-            ), None));
+            return Ok(finalize_result(
+                assemble_report(
+                    config,
+                    metrics,
+                    Vec::new(),
+                    DiagnosticsScope::AffectedOnly,
+                    view_options,
+                    summary_override,
+                ),
+                None,
+            ));
         }
 
         let diff_source_analysis = self
@@ -367,14 +373,17 @@ where
             .store(&baseline)
             .map_err(FullRunWithCacheError::Cache)?;
 
-        Ok(finalize_result(assemble_report(
-            config,
-            artifacts.metrics,
-            artifacts.diagnostics,
-            DiagnosticsScope::WholeProject,
-            view_options,
-            None,
-        ), llm_suggestions))
+        Ok(finalize_result(
+            assemble_report(
+                config,
+                artifacts.metrics,
+                artifacts.diagnostics,
+                DiagnosticsScope::WholeProject,
+                view_options,
+                None,
+            ),
+            llm_suggestions,
+        ))
     }
 }
 

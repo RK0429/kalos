@@ -14,6 +14,10 @@ use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
 const DEFAULT_EXTENSIONS: [&str; 5] = [".py", ".ts", ".tsx", ".rs", ".go"];
 
+fn codeql_executable_path(bundle_cache_path: &Path) -> PathBuf {
+    bundle_cache_path.join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
+}
+
 #[derive(Clone, Debug)]
 pub struct CodeQlAdapter<F, R, T> {
     file_system: F,
@@ -124,7 +128,7 @@ where
             .map_err(|error| CodeQlAdapterError::ResolveBundle {
                 message: error.to_string(),
             })?;
-        let codeql_program = bundle.cache_path.join("codeql");
+        let codeql_program = codeql_executable_path(&bundle.cache_path);
         let mut combined_output = CodeQlQueryOutput::default();
         let languages = source_files
             .values()
@@ -243,11 +247,11 @@ mod tests {
     use std::convert::Infallible;
     use std::fs;
     use std::io;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use tempfile::TempDir;
 
-    use super::{CodeQlAdapter, CodeQlAdapterError};
+    use super::{CodeQlAdapter, CodeQlAdapterError, codeql_executable_path};
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind};
     use crate::platform::fs::InMemoryFileSystem;
@@ -288,6 +292,15 @@ mod tests {
         assert_eq!(
             CodeQlAdapter::<(), (), ()>::language_pack(Language::Go),
             "go"
+        );
+    }
+
+    #[test]
+    fn codeql_executable_path_uses_platform_executable_suffix() {
+        assert_eq!(
+            codeql_executable_path(Path::new("/cache/codeql/2.0.0")),
+            Path::new("/cache/codeql/2.0.0")
+                .join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
         );
     }
 
@@ -357,7 +370,10 @@ mod tests {
 
         let invocations = command_runner.invocations().unwrap();
         assert_eq!(invocations.len(), 2);
-        assert_eq!(invocations[0].program, "/cache/codeql/2.0.0/codeql");
+        assert_eq!(
+            PathBuf::from(&invocations[0].program),
+            codeql_executable_path(Path::new("/cache/codeql/2.0.0"))
+        );
         assert_eq!(invocations[0].args[0], "database");
         assert_eq!(invocations[0].args[1], "create");
         assert_eq!(invocations[0].args[3], "--language");
@@ -480,9 +496,10 @@ mod tests {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/web/app.tsx", "export const App = () => null;\n");
         let command_runner = MockCommandRunner::new();
+        let expected_program = codeql_executable_path(Path::new("/cache/codeql/2.0.0"));
         command_runner
             .push_result(Err(ProcessError::Io {
-                program: "/cache/codeql/2.0.0/codeql".to_owned(),
+                program: expected_program.to_string_lossy().into_owned(),
                 cwd: PathBuf::from("/workspace"),
                 source: io::Error::new(io::ErrorKind::NotFound, "missing codeql"),
             }))
@@ -517,7 +534,7 @@ mod tests {
             } => {
                 assert_eq!(stage, "database create");
                 assert_eq!(language, "typescript");
-                assert_eq!(program, "/cache/codeql/2.0.0/codeql");
+                assert_eq!(PathBuf::from(program), expected_program);
                 assert_eq!(cwd, PathBuf::from("/workspace"));
             }
             other => panic!("unexpected error: {other:?}"),

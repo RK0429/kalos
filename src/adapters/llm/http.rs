@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use url::Url;
 
+use crate::domains::Severity;
 use crate::domains::cpg::Language;
 use crate::domains::diagnostics::{LlmSuggestion, LlmSuggestionBundle, PatternType};
-use crate::domains::Severity;
 use crate::ports::llm::{LlmPort, LlmRequest};
 
 const DEFAULT_PROVIDER: &str = "openai";
@@ -76,8 +76,8 @@ where
         return Err(LlmConfigError::UnsupportedProvider(provider));
     }
 
-    let endpoint_url = get_var("KALOS_LLM_ENDPOINT_URL")
-        .unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
+    let endpoint_url =
+        get_var("KALOS_LLM_ENDPOINT_URL").unwrap_or_else(|| DEFAULT_OPENAI_ENDPOINT.to_owned());
     if Url::parse(&endpoint_url).is_err() {
         return Err(LlmConfigError::InvalidEndpointUrl(endpoint_url));
     }
@@ -142,7 +142,9 @@ impl LlmPort for HttpLlmAdapter {
 
         for request in requests {
             if remaining_budget(started_at).is_none() {
-                eprintln!("warning: llm aggregate budget exhausted; skipping remaining diagnostics");
+                eprintln!(
+                    "warning: llm aggregate budget exhausted; skipping remaining diagnostics"
+                );
                 break;
             }
 
@@ -157,11 +159,7 @@ impl LlmPort for HttpLlmAdapter {
 }
 
 impl HttpLlmAdapter {
-    fn dispatch_request(
-        &self,
-        request: &LlmRequest,
-        started_at: Instant,
-    ) -> Option<LlmSuggestion> {
+    fn dispatch_request(&self, request: &LlmRequest, started_at: Instant) -> Option<LlmSuggestion> {
         let mut attempt = 0_u8;
 
         while attempt < 2 {
@@ -226,7 +224,8 @@ impl HttpLlmAdapter {
                 }
             ]
         });
-        let payload = serde_json::to_string(&body).expect("chat completion payload should serialize");
+        let payload =
+            serde_json::to_string(&body).expect("chat completion payload should serialize");
 
         agent
             .post(&endpoint)
@@ -270,9 +269,7 @@ fn build_prompt(request: &LlmRequest) -> String {
             for scope in &pattern.evidence_scopes {
                 prompt.push_str(&format!(
                     "- level={:?} qualified_name={} file_path={}\n",
-                    scope.level,
-                    scope.qualified_name,
-                    scope.file_path,
+                    scope.level, scope.qualified_name, scope.file_path,
                 ));
             }
         }
@@ -291,9 +288,7 @@ fn build_prompt(request: &LlmRequest) -> String {
         for scope in &cpg_excerpt.scopes {
             prompt.push_str(&format!(
                 "- level={:?} qualified_name={} file_path={}\n",
-                scope.level,
-                scope.qualified_name,
-                scope.file_path,
+                scope.level, scope.qualified_name, scope.file_path,
             ));
         }
         prompt.push_str(&cpg_excerpt.representation);
@@ -417,8 +412,7 @@ mod tests {
 
     #[test]
     fn validate_llm_config_requires_api_key() {
-        let error =
-            validate_llm_config_with(|_| None).expect_err("missing api key should fail");
+        let error = validate_llm_config_with(|_| None).expect_err("missing api key should fail");
 
         assert_eq!(error, LlmConfigError::MissingApiKey);
         assert_eq!(
@@ -436,7 +430,10 @@ mod tests {
         })
         .expect_err("unsupported provider should fail");
 
-        assert_eq!(error, LlmConfigError::UnsupportedProvider("anthropic".to_owned()));
+        assert_eq!(
+            error,
+            LlmConfigError::UnsupportedProvider("anthropic".to_owned())
+        );
     }
 
     #[test]
@@ -448,7 +445,10 @@ mod tests {
         })
         .expect_err("invalid endpoint should fail");
 
-        assert_eq!(error, LlmConfigError::InvalidEndpointUrl("not a url".to_owned()));
+        assert_eq!(
+            error,
+            LlmConfigError::InvalidEndpointUrl("not a url".to_owned())
+        );
     }
 
     #[test]
@@ -502,7 +502,10 @@ mod tests {
     fn extracts_message_content_from_chat_completion_response() {
         let body = r#"{"choices":[{"message":{"content":"explanation"}}]}"#;
 
-        assert_eq!(extract_message_content(body).as_deref(), Some("explanation"));
+        assert_eq!(
+            extract_message_content(body).as_deref(),
+            Some("explanation")
+        );
     }
 
     #[test]

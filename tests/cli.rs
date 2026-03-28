@@ -9,7 +9,7 @@ use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use kalos::adapters::tool_cache::default_codeql_bundle_manifest;
+use kalos::adapters::tool_cache::codeql_bundle_manifest;
 
 #[test]
 fn kalos_init_creates_default_config_file() {
@@ -121,7 +121,9 @@ fn kalos_check_llm_unsupported_provider_fails_preflight() {
         .args(["check", "--llm"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unsupported KALOS_LLM_PROVIDER `anthropic`"));
+        .stderr(predicate::str::contains(
+            "unsupported KALOS_LLM_PROVIDER `anthropic`",
+        ));
 }
 
 #[test]
@@ -137,7 +139,9 @@ fn kalos_check_llm_invalid_endpoint_fails_preflight() {
         .args(["check", "--llm"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("KALOS_LLM_ENDPOINT_URL is not a valid URL"));
+        .stderr(predicate::str::contains(
+            "KALOS_LLM_ENDPOINT_URL is not a valid URL",
+        ));
 }
 
 #[test]
@@ -222,15 +226,22 @@ fn seeded_git_workspace() -> TempDir {
 }
 
 fn seed_fake_codeql_bundle(workspace_root: &Path) -> PathBuf {
-    let manifest = default_codeql_bundle_manifest();
+    let manifest = codeql_bundle_manifest().unwrap();
     let cache_dir = workspace_root.join(".kalos-test-cache");
     let bundle_dir = cache_dir.join("codeql").join(&manifest.version);
     let queries_dir = bundle_dir.join("queries");
     fs::create_dir_all(&queries_dir).unwrap();
-    fs::write(bundle_dir.join("bundle.marker"), []).unwrap();
+    fs::write(bundle_dir.join("bundle.marker"), manifest.sha256.as_bytes()).unwrap();
     fs::write(queries_dir.join("extract-rust.ql"), "// fixture query\n").unwrap();
-    write_fake_codeql_executable(&bundle_dir.join("codeql"), &load_fixture("rust.json"));
+    write_fake_codeql_executable(
+        &codeql_executable_path(&bundle_dir),
+        &load_fixture("rust.json"),
+    );
     cache_dir
+}
+
+fn codeql_executable_path(bundle_dir: &Path) -> PathBuf {
+    bundle_dir.join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
 }
 
 #[cfg(unix)]
@@ -245,8 +256,26 @@ fn write_fake_codeql_executable(path: &Path, fixture: &str) {
 }
 
 #[cfg(not(unix))]
-fn write_fake_codeql_executable(_path: &Path, _fixture: &str) {
-    panic!("CLI runtime tests require a unix-like executable fixture");
+fn write_fake_codeql_executable(path: &Path, fixture: &str) {
+    let source_path = path.with_file_name("codeql_fixture.rs");
+    let source = format!(
+        "use std::env;\nuse std::io::Write;\n\nfn main() {{\n    let args = env::args().skip(1).collect::<Vec<_>>();\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"database\" && action == \"create\") {{\n        return;\n    }}\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"query\" && action == \"run\") {{\n        print!({fixture:?});\n        return;\n    }}\n    let _ = writeln!(std::io::stderr(), \"unexpected invocation: {{}}\", args.join(\" \"));\n    std::process::exit(1);\n}}\n"
+    );
+    fs::write(&source_path, source).unwrap();
+    let status = StdCommand::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+        .arg("--edition=2024")
+        .arg("--crate-name")
+        .arg("kalos_fake_codeql")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "fake CodeQL fixture compilation should succeed"
+    );
+    fs::remove_file(source_path).unwrap();
 }
 
 fn load_fixture(name: &str) -> String {
