@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+hash_file() {
+  local file_path="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file_path" | awk '{print $1}'
+    return
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file_path" | awk '{print $1}'
+    return
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file_path" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+    return
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    python - "$file_path" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+    return
+  fi
+
+  echo "unable to locate a SHA-256 implementation" >&2
+  exit 1
+}
+
+sanitize_key_part() {
+  printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._-' '-'
+}
+
+emit_output() {
+  printf '%s=%s\n' "$1" "$2"
+}
+
+resolve_repository_path() {
+  local path="$1"
+
+  case "$path" in
+    /*)
+      printf '%s\n' "$path"
+      ;;
+    ./*)
+      printf '%s/%s\n' "${GITHUB_WORKSPACE%/}" "${path#./}"
+      ;;
+    *)
+      printf '%s/%s\n' "${GITHUB_WORKSPACE%/}" "$path"
+      ;;
+  esac
+}
+
+require_env() {
+  local key="$1"
+  if [ -z "${!key:-}" ]; then
+    echo "required environment variable \`$key\` is not set" >&2
+    exit 1
+  fi
+}
+
+resolve_context() {
+  require_env GITHUB_ACTION_PATH
+  require_env RUNNER_TEMP
+
+  local cache_dir
+  if [ -n "${INPUT_CACHE_DIR:-}" ]; then
+    cache_dir="${INPUT_CACHE_DIR}"
+  else
+    cache_dir="${RUNNER_TEMP%/}/kalos-cache"
+  fi
+
+  local install_root="${RUNNER_TEMP%/}/kalos-tool"
+  local binary_suffix=""
+  if [ "${RUNNER_OS:-}" = "Windows" ]; then
+    binary_suffix=".exe"
+  fi
+  local kalos_bin="${install_root}/bin/kalos${binary_suffix}"
+
+  local bundle_manifest_file="${GITHUB_ACTION_PATH}/src/adapters/tool_cache/managed_bundle.rs"
+  local bundle_seed
+  bundle_seed="$(hash_file "$bundle_manifest_file")"
+  bundle_seed="${bundle_seed%% *}"
+  bundle_seed="${bundle_seed:0:16}"
+
+  local runner_os
+  runner_os="$(sanitize_key_part "${RUNNER_OS:-unknown-os}")"
+  local runner_arch
+  runner_arch="$(sanitize_key_part "${RUNNER_ARCH:-unknown-arch}")"
+  local repo_id
+  repo_id="$(sanitize_key_part "${GITHUB_REPOSITORY_ID:-unknown-repository}")"
+  local ref_name
+  ref_name="$(sanitize_key_part "${GITHUB_REF_NAME:-detached-head}")"
+  local scope
+  scope="$(sanitize_key_part "${INPUT_BASELINE_CACHE_SCOPE:-default}")"
+  local sha
+  sha="$(sanitize_key_part "${GITHUB_SHA:-unknown-sha}")"
+
+  local bundle_cache_key="kalos-bundle-${runner_os}-${runner_arch}-${bundle_seed}"
+  local baseline_restore_prefix="kalos-baseline-${runner_os}-${runner_arch}-${repo_id}-${scope}-${ref_name}-"
+  local baseline_cache_key="${baseline_restore_prefix}${sha}"
+  local sarif_file=""
+  local sarif_file_abs=""
+  if [ "${INPUT_UPLOAD_SARIF:-false}" = "true" ]; then
+    require_env GITHUB_WORKSPACE
+    require_env INPUT_SARIF_FILE
+    sarif_file="$INPUT_SARIF_FILE"
+    sarif_file_abs="$(resolve_repository_path "$INPUT_SARIF_FILE")"
+  fi
+
+  emit_output cache_dir "$cache_dir"
+  emit_output install_root "$install_root"
+  emit_output kalos_bin "$kalos_bin"
+  emit_output bundle_cache_key "$bundle_cache_key"
+  emit_output baseline_restore_prefix "$baseline_restore_prefix"
+  emit_output baseline_cache_key "$baseline_cache_key"
+  emit_output sarif_file "$sarif_file"
+  emit_output sarif_file_abs "$sarif_file_abs"
+}
+
+mktemp_dir() {
+  local temp_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+  mkdir -p "$temp_root"
+  mktemp -d "${temp_root%/}/kalos-prewarm.XXXXXX"
+}
+
+prewarm() {
+  require_env KALOS_BIN
+  require_env KALOS_CACHE_DIR
+
+  local workspace
+  workspace="$(mktemp_dir)"
+  trap 'rm -rf "'"$workspace"'"' EXIT
+
+  mkdir -p "$workspace/src"
+  cat >"$workspace/Cargo.toml" <<'EOF'
+[package]
+name = "kalos-action-prewarm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+EOF
+  cat >"$workspace/src/lib.rs" <<'EOF'
+pub fn kalos_action_prewarm() -> i32 {
+    1
+}
+EOF
+
+  (
+    cd "$workspace"
+    "$KALOS_BIN" check --level project --format json >"$workspace/prewarm-report.json"
+  )
+}
+
+args_contain_format_flag() {
+  local pending_value=0
+  local arg
+
+  for arg in "$@"; do
+    if [ "$pending_value" -eq 1 ]; then
+      return 0
+    fi
+
+    case "$arg" in
+      --format)
+        pending_value=1
+        ;;
+      --format=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+run_check() {
+  require_env KALOS_BIN
+
+  local args=()
+  if [ -n "${KALOS_ACTION_ARGS:-}" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ -n "$line" ]; then
+        args+=("$line")
+      fi
+    done <<EOF
+${KALOS_ACTION_ARGS}
+EOF
+  fi
+
+  if [ -n "${KALOS_ACTION_SARIF_FILE:-}" ]; then
+    if args_contain_format_flag "${args[@]}"; then
+      echo "KALOS_ACTION_SARIF_FILE is set; omit --format from args and let the wrapper force SARIF output" >&2
+      exit 1
+    fi
+
+    mkdir -p "$(dirname "$KALOS_ACTION_SARIF_FILE")"
+    "$KALOS_BIN" check --format sarif "${args[@]}" >"$KALOS_ACTION_SARIF_FILE"
+  elif [ "${#args[@]}" -eq 0 ]; then
+    "$KALOS_BIN" check
+  else
+    "$KALOS_BIN" check "${args[@]}"
+  fi
+}
+
+main() {
+  if [ "$#" -ne 1 ]; then
+    echo "usage: $0 <resolve-context|prewarm|run-check>" >&2
+    exit 1
+  fi
+
+  case "$1" in
+    resolve-context)
+      resolve_context
+      ;;
+    prewarm)
+      prewarm
+      ;;
+    run-check)
+      run_check
+      ;;
+    *)
+      echo "unknown command: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

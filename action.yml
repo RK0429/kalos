@@ -1,0 +1,132 @@
+name: kalos
+description: Acquire a kalos binary, restore bundle and baseline caches, prewarm the managed CodeQL bundle, run kalos check, and optionally upload SARIF to GitHub Code Scanning.
+
+inputs:
+  working-directory:
+    description: Directory where kalos check runs.
+    required: false
+    default: .
+  cache-dir:
+    description: Override KALOS_CACHE_DIR. Defaults to $RUNNER_TEMP/kalos-cache.
+    required: false
+    default: ""
+  baseline-cache-scope:
+    description: Optional namespace segment for baseline cache keys.
+    required: false
+    default: default
+  args:
+    description: Newline-delimited arguments passed to kalos check.
+    required: false
+    default: ""
+  upload-sarif:
+    description: When true, force `kalos check` to emit SARIF and upload it to GitHub Code Scanning.
+    required: false
+    default: "false"
+  sarif-file:
+    description: Repository-relative SARIF output path used when `upload-sarif` is true.
+    required: false
+    default: .github/results/kalos.sarif
+
+outputs:
+  cache-dir:
+    description: Effective KALOS cache directory.
+    value: ${{ steps.context.outputs.cache_dir }}
+  binary-path:
+    description: Path to the acquired kalos binary.
+    value: ${{ steps.context.outputs.kalos_bin }}
+  sarif-file:
+    description: Repository-relative SARIF output path when Code Scanning upload is enabled.
+    value: ${{ steps.context.outputs.sarif_file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve action context
+      id: context
+      shell: bash
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        INPUT_BASELINE_CACHE_SCOPE: ${{ inputs.baseline-cache-scope }}
+        INPUT_CACHE_DIR: ${{ inputs.cache-dir }}
+        INPUT_SARIF_FILE: ${{ inputs.sarif-file }}
+        INPUT_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+        RUNNER_ARCH: ${{ runner.arch }}
+        RUNNER_OS: ${{ runner.os }}
+        RUNNER_TEMP: ${{ runner.temp }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/github-action-wrapper.sh" resolve-context >> "$GITHUB_OUTPUT"
+
+    - name: Prepare cache directories
+      shell: bash
+      run: |
+        mkdir -p "${{ steps.context.outputs.cache_dir }}/codeql"
+        mkdir -p "${{ steps.context.outputs.cache_dir }}/baselines"
+
+    - name: Restore managed CodeQL bundle cache
+      id: bundle-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.context.outputs.cache_dir }}/codeql
+        key: ${{ steps.context.outputs.bundle_cache_key }}
+
+    - name: Restore baseline cache
+      id: baseline-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.context.outputs.cache_dir }}/baselines
+        key: ${{ steps.context.outputs.baseline_cache_key }}
+        restore-keys: |
+          ${{ steps.context.outputs.baseline_restore_prefix }}
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@1.85.0
+
+    - name: Acquire kalos binary
+      shell: bash
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        KALOS_INSTALL_ROOT: ${{ steps.context.outputs.install_root }}
+      run: cargo install --force --locked --path "$GITHUB_ACTION_PATH" --root "$KALOS_INSTALL_ROOT"
+
+    - name: Prewarm managed CodeQL bundle
+      shell: bash
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        KALOS_BIN: ${{ steps.context.outputs.kalos_bin }}
+        KALOS_CACHE_DIR: ${{ steps.context.outputs.cache_dir }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/github-action-wrapper.sh" prewarm
+
+    - name: Run kalos check
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        KALOS_ACTION_ARGS: ${{ inputs.args }}
+        KALOS_ACTION_SARIF_FILE: ${{ steps.context.outputs.sarif_file_abs }}
+        KALOS_BIN: ${{ steps.context.outputs.kalos_bin }}
+        KALOS_CACHE_DIR: ${{ steps.context.outputs.cache_dir }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/github-action-wrapper.sh" run-check
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ steps.context.outputs.sarif_file }}
+
+    - name: Save managed CodeQL bundle cache
+      if: ${{ always() && steps.bundle-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.context.outputs.cache_dir }}/codeql
+        key: ${{ steps.context.outputs.bundle_cache_key }}
+
+    - name: Save baseline cache
+      if: ${{ always() && steps.baseline-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.context.outputs.cache_dir }}/baselines
+        key: ${{ steps.context.outputs.baseline_cache_key }}

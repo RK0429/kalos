@@ -94,7 +94,7 @@ fn run_pipeline_hash(
         Vec::new(),
     );
     let pipeline = AnalysisPipeline::new(extractor, StubDependencyResolver);
-    let result = pipeline.run(config, view_options, None).unwrap();
+    let result = pipeline.run(config, view_options, None, None).unwrap();
     let rendered = result.report.render_json(None).unwrap();
 
     Sha256::digest(rendered.as_bytes()).to_vec()

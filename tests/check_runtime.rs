@@ -164,6 +164,7 @@ fn analysis_pipeline_runs_end_to_end_with_codeql_adapter_and_stub_dependency_res
                 minimum_severity: Some(Severity::Info),
             },
             None,
+            None,
         )
         .unwrap();
 

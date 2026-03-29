@@ -121,7 +121,34 @@ impl AnalysisReport {
         view: ReportViewOptions,
         summary_override: Option<DiagnosticSummary>,
     ) -> Self {
-        let projected_metrics = project_metrics(metrics, view.requested_level);
+        let definitions = builtin_metric_definitions();
+        let definition_refs = definitions
+            .iter()
+            .map(|definition| definition.as_ref())
+            .collect::<Vec<_>>();
+        let catalog = metric_catalog_from_definitions(definition_refs);
+
+        Self::project_with_metric_catalog(
+            metadata,
+            metrics,
+            &catalog,
+            diagnostics,
+            diagnostics_scope,
+            view,
+            summary_override,
+        )
+    }
+
+    pub fn project_with_metric_catalog(
+        metadata: ReportMetadata,
+        metrics: &AnalysisMetrics,
+        metric_catalog: &BTreeMap<crate::domains::MetricId, MetricMetadata>,
+        diagnostics: Vec<Diagnostic>,
+        diagnostics_scope: DiagnosticsScope,
+        view: ReportViewOptions,
+        summary_override: Option<DiagnosticSummary>,
+    ) -> Self {
+        let projected_metrics = project_metrics(metrics, view.requested_level, metric_catalog);
         let projected_diagnostics = project_diagnostics(&diagnostics, view.requested_level);
         let summary_scope = summary_scope_for(view.requested_level);
         let summary = summary_override.unwrap_or_else(|| {
@@ -224,6 +251,28 @@ impl AnalysisReport {
             self.diagnostics.summary.warning_count,
             self.diagnostics.summary.info_count
         );
+        if !self.metrics.is_empty() {
+            let _ = writeln!(output, "\n── Metrics ───────────────────────────");
+            for scope_metrics in &self.metrics {
+                let _ = writeln!(
+                    output,
+                    "{} [{}] risk={:.3}",
+                    scope_metrics.scope_id.qualified_name,
+                    analysis_level_str(scope_metrics.scope_id.level),
+                    scope_metrics.scope_risk
+                );
+                for value in &scope_metrics.values {
+                    let _ = writeln!(
+                        output,
+                        "  metric={} raw={:.3} normalized={:.3} participation={}",
+                        value.metric_id.as_str(),
+                        value.raw_value,
+                        value.normalized_risk,
+                        participation_str(value.participation)
+                    );
+                }
+            }
+        }
 
         output
     }
@@ -366,6 +415,15 @@ impl AnalysisReport {
                         "rules": rules,
                     }
                 },
+                "properties": {
+                    "kalos": {
+                        "metrics": self
+                            .metrics
+                            .iter()
+                            .map(report_scope_metrics_json)
+                            .collect::<Vec<_>>(),
+                    },
+                },
                 "results": results,
             }]
         }))?)
@@ -428,21 +486,15 @@ impl AnalysisReport {
 pub fn project_metrics(
     metrics: &AnalysisMetrics,
     requested_level: RequestedLevel,
+    catalog: &BTreeMap<crate::domains::MetricId, MetricMetadata>,
 ) -> Vec<ReportScopeMetrics> {
-    let definitions = builtin_metric_definitions();
-    let definition_refs = definitions
-        .iter()
-        .map(|definition| definition.as_ref())
-        .collect::<Vec<_>>();
-    let catalog = metric_catalog_from_definitions(definition_refs);
-
     let mut projected = Vec::new();
     if requested_level.includes(AnalysisLevel::Function) {
         projected.extend(
             metrics
                 .function_metrics
                 .iter()
-                .map(|scope_metrics| project_scope_metrics(scope_metrics, &catalog)),
+                .map(|scope_metrics| project_scope_metrics(scope_metrics, catalog)),
         );
     }
     if requested_level.includes(AnalysisLevel::Module) {
@@ -450,7 +502,7 @@ pub fn project_metrics(
             metrics
                 .module_metrics
                 .iter()
-                .map(|scope_metrics| project_scope_metrics(scope_metrics, &catalog)),
+                .map(|scope_metrics| project_scope_metrics(scope_metrics, catalog)),
         );
     }
     if requested_level.includes(AnalysisLevel::Project) {
@@ -458,7 +510,7 @@ pub fn project_metrics(
             metrics
                 .project_metrics
                 .iter()
-                .map(|scope_metrics| project_scope_metrics(scope_metrics, &catalog)),
+                .map(|scope_metrics| project_scope_metrics(scope_metrics, catalog)),
         );
     }
 
@@ -809,6 +861,8 @@ impl RequestedLevelExt for RequestedLevel {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::Value;
 
     use super::{
@@ -820,7 +874,10 @@ mod tests {
         Diagnostic, DiagnosticKind, DiagnosticsScope, FileLocation, MetricObservation,
         PatternEvidence, PatternType, TemplateSuggestion,
     };
-    use crate::domains::metrics::{AnalysisMetrics, MetricValue, OverallScore, ScopeMetrics};
+    use crate::domains::metrics::{
+        AnalysisMetrics, MetricMetadata, MetricParticipation, MetricValue, OverallScore,
+        ScopeMetrics, builtin_metric_definitions, metric_catalog_from_definitions,
+    };
     use crate::domains::{
         AnalysisLevel, DiagnosticId, FilePath, MetricId, RuleId, ScopeId, Severity,
     };
@@ -1119,6 +1176,59 @@ mod tests {
         assert!(cross_scope_result["properties"]["kalos"]["template_suggestion"].is_object());
     }
 
+    #[test]
+    fn renderers_include_report_only_metrics() {
+        let plugin_metric_id = MetricId::from("P-F001");
+        let report = AnalysisReport::project_with_metric_catalog(
+            ReportMetadata::new(
+                vec![FilePath::from("."), FilePath::from("src")],
+                "0.1.0",
+                "1.0.0",
+            ),
+            &fixture_metrics_with_plugin(plugin_metric_id.clone()),
+            &fixture_metric_catalog_with_plugin(plugin_metric_id.clone()),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+            },
+            None,
+        );
+
+        let human = report.render_human(None, false);
+        assert!(human.contains("metric=P-F001"));
+        assert!(human.contains("participation=report_only"));
+
+        let json = report.render_json(None).expect("json should render");
+        let json_value: Value = serde_json::from_str(&json).expect("json should parse");
+        assert!(
+            json_value["metrics"]
+                .as_array()
+                .expect("metrics array")
+                .iter()
+                .flat_map(|scope| scope["values"].as_array().expect("values array"))
+                .any(|value| {
+                    value["metric_id"] == "P-F001" && value["participation"] == "report_only"
+                })
+        );
+
+        let sarif = report.render_sarif(None).expect("sarif should render");
+        let sarif_value: Value = serde_json::from_str(&sarif).expect("sarif should parse");
+        assert!(
+            sarif_value["runs"][0]["properties"]["kalos"]["metrics"]
+                .as_array()
+                .expect("sarif metrics array")
+                .iter()
+                .flat_map(|scope| scope["values"].as_array().expect("values array"))
+                .any(|value| {
+                    value["metric_id"] == "P-F001" && value["participation"] == "report_only"
+                })
+        );
+    }
+
     fn project_report(
         requested_level: RequestedLevel,
         minimum_severity: Option<Severity>,
@@ -1184,6 +1294,35 @@ mod tests {
                 project_score: Some(75),
             },
         }
+    }
+
+    fn fixture_metrics_with_plugin(plugin_metric_id: MetricId) -> AnalysisMetrics {
+        let mut metrics = fixture_metrics();
+        metrics.function_metrics[0].values.push(MetricValue {
+            metric_id: plugin_metric_id,
+            raw_value: 99.0,
+            normalized_risk: 1.0,
+        });
+        metrics
+    }
+
+    fn fixture_metric_catalog_with_plugin(
+        plugin_metric_id: MetricId,
+    ) -> BTreeMap<MetricId, MetricMetadata> {
+        let definitions = builtin_metric_definitions();
+        let definition_refs = definitions
+            .iter()
+            .map(|definition| definition.as_ref())
+            .collect::<Vec<_>>();
+        let mut catalog = metric_catalog_from_definitions(definition_refs);
+        catalog.insert(
+            plugin_metric_id,
+            MetricMetadata {
+                participation: MetricParticipation::ReportOnly,
+                rule_binding: None,
+            },
+        );
+        catalog
     }
 
     fn fixture_diagnostics() -> Vec<Diagnostic> {

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -11,15 +12,21 @@ use crate::adapters::diff_source::GitDiffAdapter;
 use crate::adapters::extractor::CodeQlAdapter;
 use crate::adapters::llm::HttpLlmAdapter;
 use crate::adapters::llm::http::validate_llm_config;
+use crate::adapters::plugin::{
+    EvaluationWarning, ModuleLoadWarning, PluginHostError, WasmPluginHost,
+};
 use crate::adapters::tool_cache::{ManagedToolCacheAdapter, codeql_bundle_manifest};
 use crate::application::pipeline::{AnalysisPipeline, DiffConfig};
+use crate::domains::MetricId;
 use crate::domains::Severity;
 use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
+use crate::domains::metrics::builtin_metric_definitions;
 use crate::domains::reporting::{
     OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
 };
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
+use crate::ports::PluginPort;
 
 #[derive(Debug, Clone, Args)]
 pub struct CheckCommand {
@@ -118,6 +125,19 @@ impl CheckCommand {
         );
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
+        let mut plugin_host = Some(WasmPluginHost::load(
+            config.workspace_root.as_path(),
+            &config.plugin_manifest,
+            &builtin_metric_ids(),
+            if self.diff.is_some() {
+                DIFF_PLUGIN_AGGREGATE_FUEL_BUDGET
+            } else {
+                FULL_PLUGIN_AGGREGATE_FUEL_BUDGET
+            },
+        ));
+        if let Some(plugin_host) = &plugin_host {
+            emit_module_load_warnings(plugin_host.warnings());
+        }
         let view_options = ReportViewOptions {
             requested_level: self.level.into(),
             output_format: self.format.into(),
@@ -141,10 +161,16 @@ impl CheckCommand {
                 },
                 &GitDiffAdapter,
                 &cache,
+                plugin_host
+                    .as_mut()
+                    .map(|host| host as &mut dyn PluginPort<Error = PluginHostError>),
                 llm_adapter.as_ref().map(|adapter| adapter as _),
             ) {
                 Ok(result) => result,
                 Err(error) => {
+                    if let Some(plugin_host) = &plugin_host {
+                        emit_evaluation_warnings(plugin_host.evaluation_warnings());
+                    }
                     eprintln!("{error}");
                     return ExitCode::from(2);
                 }
@@ -153,15 +179,24 @@ impl CheckCommand {
             match pipeline.run(
                 &config,
                 view_options,
+                plugin_host
+                    .as_mut()
+                    .map(|host| host as &mut dyn PluginPort<Error = PluginHostError>),
                 llm_adapter.as_ref().map(|adapter| adapter as _),
             ) {
                 Ok(result) => result,
                 Err(error) => {
+                    if let Some(plugin_host) = &plugin_host {
+                        emit_evaluation_warnings(plugin_host.evaluation_warnings());
+                    }
                     eprintln!("{error}");
                     return ExitCode::from(2);
                 }
             }
         };
+        if let Some(plugin_host) = &plugin_host {
+            emit_evaluation_warnings(plugin_host.evaluation_warnings());
+        }
 
         let rendered = match result.report.render(
             result.llm_suggestions.as_ref(),
@@ -176,6 +211,65 @@ impl CheckCommand {
         println!("{rendered}");
 
         map_exit_code(result.exit_code)
+    }
+}
+
+const FULL_PLUGIN_AGGREGATE_FUEL_BUDGET: u64 = 30_000_000;
+const DIFF_PLUGIN_AGGREGATE_FUEL_BUDGET: u64 = 5_000_000;
+
+fn builtin_metric_ids() -> BTreeSet<MetricId> {
+    builtin_metric_definitions()
+        .into_iter()
+        .map(|definition| definition.id().clone())
+        .collect()
+}
+
+fn emit_module_load_warnings(warnings: &[ModuleLoadWarning]) {
+    for warning in warnings {
+        eprintln!(
+            "plugin load warning [{:?}] {}: {}",
+            warning.kind,
+            warning.path.display(),
+            warning.message
+        );
+    }
+}
+
+fn emit_evaluation_warnings(warnings: &[EvaluationWarning]) {
+    for warning in warnings {
+        let metric = warning
+            .metric_id
+            .as_ref()
+            .map(|metric_id| metric_id.as_str().to_owned())
+            .unwrap_or_else(|| "-".to_owned());
+        let scope = warning
+            .scope_id
+            .as_ref()
+            .map(|scope_id| {
+                format!(
+                    "{}:{}:{}",
+                    analysis_level_label(scope_id.level),
+                    scope_id.qualified_name,
+                    scope_id.file_path.as_str()
+                )
+            })
+            .unwrap_or_else(|| "-".to_owned());
+        eprintln!(
+            "plugin evaluation warning [{:?}] {} metric={} scope={}: {}",
+            warning.kind,
+            warning.path.display(),
+            metric,
+            scope,
+            warning.message
+        );
+    }
+}
+
+fn analysis_level_label(level: crate::domains::AnalysisLevel) -> &'static str {
+    match level {
+        crate::domains::AnalysisLevel::Function => "function",
+        crate::domains::AnalysisLevel::Module => "module",
+        crate::domains::AnalysisLevel::Project => "project",
     }
 }
 

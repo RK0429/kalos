@@ -6,6 +6,8 @@ use std::fmt;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::adapters::plugin::PluginHostError;
+use crate::adapters::plugin::wasm::FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET;
 use crate::domains::config::ProjectConfig;
 use crate::domains::cpg::{SourceAnalysis, SourceLocation, UnifiedCpg};
 use crate::domains::diagnostics::{
@@ -18,18 +20,19 @@ use crate::domains::impact::{
     analyze_impact, build_dependency_index_from_cpg,
 };
 use crate::domains::metrics::{
-    AnalysisMetrics, MetricConfig, MetricDefinition, ScopeMetrics, builtin_metric_definitions,
-    metric_catalog_from_definitions,
+    AnalysisMetrics, MetricConfig, MetricDefinition, MetricMetadata, ScopeMetrics,
+    builtin_metric_definitions, metric_catalog_from_definitions,
 };
 use crate::domains::reporting::{
     AnalysisReport, ReportMetadata, ReportViewOptions, summary_scope_for,
 };
-use crate::domains::{AnalysisLevel, FilePath, ScopeId, Severity};
+use crate::domains::{AnalysisLevel, FilePath, MetricId, ScopeId, Severity};
 use crate::ports::cache::CachePort;
 use crate::ports::dependency_resolver::{DependencyResolutionRequest, DependencyResolverPort};
 use crate::ports::diff_source::{DiffRequest, DiffSourcePort};
 use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
 use crate::ports::llm::{LlmPort, LlmRequest};
+use crate::ports::{PluginEvaluationRequest, PluginPort};
 
 pub struct AnalysisPipeline<E, D> {
     extractor: E,
@@ -55,6 +58,7 @@ pub struct PipelineResult {
 pub enum PipelineError<E, D> {
     Extraction(E),
     DependencyResolution(D),
+    Plugin(PluginHostError),
 }
 
 #[derive(Debug)]
@@ -75,6 +79,12 @@ struct AnalysisArtifacts {
     diagnostics: Vec<Diagnostic>,
 }
 
+struct PluginMetricsContext {
+    definitions: Vec<Box<dyn MetricDefinition>>,
+    metric_catalog: BTreeMap<MetricId, MetricMetadata>,
+    loaded_metric_ids: BTreeSet<MetricId>,
+}
+
 #[derive(Debug)]
 enum FullRunWithCacheError<E, D, C> {
     Pipeline(PipelineError<E, D>),
@@ -91,6 +101,7 @@ impl<E: fmt::Display, D: fmt::Display> fmt::Display for PipelineError<E, D> {
             Self::DependencyResolution(error) => {
                 write!(f, "failed to resolve external dependencies: {error}")
             }
+            Self::Plugin(error) => write!(f, "failed to evaluate plugin metrics: {error}"),
         }
     }
 }
@@ -100,6 +111,13 @@ where
     E: Error + 'static,
     D: Error + 'static,
 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Extraction(error) => Some(error),
+            Self::DependencyResolution(error) => Some(error),
+            Self::Plugin(error) => Some(error),
+        }
+    }
 }
 
 impl<E: fmt::Display, D: fmt::Display, DS: fmt::Display, C: fmt::Display> fmt::Display
@@ -148,8 +166,11 @@ where
         &self,
         config: &ProjectConfig,
         view_options: ReportViewOptions,
+        plugin_host: Option<&mut dyn PluginPort<Error = PluginHostError>>,
         llm: Option<&dyn LlmPort<Error = Infallible>>,
     ) -> Result<PipelineResult, PipelineError<E::Error, D::Error>> {
+        let plugin_metrics =
+            load_plugin_metrics_context(plugin_host.as_deref()).map_err(PipelineError::Plugin)?;
         let source_analysis = self.extract_and_resolve(
             config,
             ExtractionRequest {
@@ -157,13 +178,21 @@ where
                 analysis_targets: config.analysis_targets.clone(),
             },
         )?;
-        let artifacts = analyze_source_analysis(config, source_analysis, None);
+        let artifacts = analyze_source_analysis(
+            config,
+            source_analysis,
+            None,
+            &plugin_metrics.definitions,
+            plugin_host,
+        )
+        .map_err(PipelineError::Plugin)?;
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
         Ok(finalize_result(
             assemble_report(
                 config,
                 artifacts.metrics,
+                &plugin_metrics.metric_catalog,
                 artifacts.diagnostics,
                 DiagnosticsScope::WholeProject,
                 view_options,
@@ -173,6 +202,7 @@ where
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run_diff<DS, C>(
         &self,
         config: &ProjectConfig,
@@ -180,6 +210,7 @@ where
         diff_config: &DiffConfig,
         diff_source: &DS,
         cache: &C,
+        mut plugin_host: Option<&mut dyn PluginPort<Error = PluginHostError>>,
         llm: Option<&dyn LlmPort<Error = Infallible>>,
     ) -> DiffRunResult<E::Error, D::Error, DS::Error, C::Error>
     where
@@ -190,11 +221,17 @@ where
             eprintln!(
                 "diff mode is not available for explicitly specified targets; falling back to full analysis"
             );
+            if let Some(host) = plugin_host.as_mut() {
+                host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
+            }
             return self
-                .run(config, view_options, llm)
+                .run(config, view_options, plugin_host, llm)
                 .map_err(DiffPipelineError::Pipeline);
         }
 
+        let plugin_metrics = load_plugin_metrics_context(plugin_host.as_deref())
+            .map_err(PipelineError::Plugin)
+            .map_err(DiffPipelineError::Pipeline)?;
         let snapshot = diff_source
             .diff(&DiffRequest {
                 workspace_root: config.workspace_root.abs_path.clone(),
@@ -206,10 +243,23 @@ where
         let baseline = cache.load(&fingerprint).map_err(DiffPipelineError::Cache)?;
 
         if snapshot.changed_files.is_empty() {
-            let metrics = baseline
-                .as_ref()
-                .map(|baseline| metrics_from_scope_map(config, &baseline.scope_metrics))
-                .unwrap_or_else(|| empty_metrics(config));
+            let metrics = if let Some(baseline) = baseline.as_ref() {
+                metrics_from_scope_map(
+                    config,
+                    &baseline.scope_metrics,
+                    &plugin_metrics.metric_catalog,
+                    &plugin_metrics.loaded_metric_ids,
+                )
+            } else {
+                if let Some(host) = plugin_host.as_mut() {
+                    empty_metrics(config, &plugin_metrics.definitions, Some(&mut **host))
+                } else {
+                    empty_metrics(config, &plugin_metrics.definitions, None)
+                }
+                .map(|(metrics, _)| metrics)
+                .map_err(PipelineError::Plugin)
+                .map_err(DiffPipelineError::Pipeline)?
+            };
             let summary_override = baseline.as_ref().and_then(|baseline| {
                 (summary_scope_for(view_options.requested_level) == SummaryScope::WholeProject)
                     .then(|| summary_from_snapshots(&baseline.diagnostic_snapshots))
@@ -218,6 +268,7 @@ where
                 assemble_report(
                     config,
                     metrics,
+                    &plugin_metrics.metric_catalog,
                     Vec::new(),
                     DiagnosticsScope::AffectedOnly,
                     view_options,
@@ -245,8 +296,19 @@ where
 
         if baseline.is_none() {
             eprintln!("compatible diff baseline was not found; falling back to full analysis");
+            if let Some(host) = plugin_host.as_mut() {
+                host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
+            }
             return self
-                .run_and_store_full_baseline(config, view_options, fingerprint, cache, llm)
+                .run_and_store_full_baseline(
+                    config,
+                    view_options,
+                    fingerprint,
+                    cache,
+                    &plugin_metrics,
+                    plugin_host,
+                    llm,
+                )
                 .map_err(DiffPipelineError::from_pipeline_or_cache);
         }
 
@@ -254,8 +316,19 @@ where
             eprintln!(
                 "diff optimization could not determine affected scopes; falling back to full analysis"
             );
+            if let Some(host) = plugin_host.as_mut() {
+                host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
+            }
             return self
-                .run_and_store_full_baseline(config, view_options, fingerprint, cache, llm)
+                .run_and_store_full_baseline(
+                    config,
+                    view_options,
+                    fingerprint,
+                    cache,
+                    &plugin_metrics,
+                    plugin_host,
+                    llm,
+                )
                 .map_err(DiffPipelineError::from_pipeline_or_cache);
         }
 
@@ -270,17 +343,23 @@ where
             .difference(&actual_recomputed_scopes)
             .cloned()
             .collect::<BTreeSet<_>>();
-        let recomputed_metrics = compute_metrics(
+        let (recomputed_metrics, loaded_plugin_metric_ids) = compute_metrics_with_plugins(
             &diff_source_analysis.cpg,
             config,
             Some(&actual_recomputed_scopes),
-        );
+            &plugin_metrics.definitions,
+            plugin_host,
+        )
+        .map_err(PipelineError::Plugin)
+        .map_err(DiffPipelineError::Pipeline)?;
         let merged_metrics = merge_metrics(
             config,
             recomputed_metrics,
             &baseline,
             &impact.invalidation_plan.reuse_scopes,
             &baseline_fallback_scopes,
+            &plugin_metrics.metric_catalog,
+            &loaded_plugin_metric_ids,
         );
         let merged_diagnostics =
             generate_diagnostics(&diff_source_analysis, &merged_metrics, config);
@@ -307,6 +386,7 @@ where
         let report = assemble_report(
             config,
             merged_metrics,
+            &plugin_metrics.metric_catalog,
             affected_diagnostics,
             DiagnosticsScope::AffectedOnly,
             view_options,
@@ -339,12 +419,15 @@ where
         Ok(source_analysis)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_and_store_full_baseline<C>(
         &self,
         config: &ProjectConfig,
         view_options: ReportViewOptions,
         fingerprint: BaselineFingerprint,
         cache: &C,
+        plugin_metrics: &PluginMetricsContext,
+        plugin_host: Option<&mut dyn PluginPort<Error = PluginHostError>>,
         llm: Option<&dyn LlmPort<Error = Infallible>>,
     ) -> FullRunWithCacheResult<E::Error, D::Error, C::Error>
     where
@@ -359,7 +442,15 @@ where
                 },
             )
             .map_err(FullRunWithCacheError::Pipeline)?;
-        let artifacts = analyze_source_analysis(config, source_analysis, None);
+        let artifacts = analyze_source_analysis(
+            config,
+            source_analysis,
+            None,
+            &plugin_metrics.definitions,
+            plugin_host,
+        )
+        .map_err(PipelineError::Plugin)
+        .map_err(FullRunWithCacheError::Pipeline)?;
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
         let baseline = DiffBaseline {
@@ -377,6 +468,7 @@ where
             assemble_report(
                 config,
                 artifacts.metrics,
+                &plugin_metrics.metric_catalog,
                 artifacts.diagnostics,
                 DiagnosticsScope::WholeProject,
                 view_options,
@@ -391,15 +483,23 @@ fn analyze_source_analysis(
     config: &ProjectConfig,
     source_analysis: SourceAnalysis,
     metric_scope_filter: Option<&BTreeSet<ScopeId>>,
-) -> AnalysisArtifacts {
-    let metrics = compute_metrics(&source_analysis.cpg, config, metric_scope_filter);
+    plugin_definitions: &[Box<dyn MetricDefinition>],
+    plugin_host: Option<&mut dyn PluginPort<Error = PluginHostError>>,
+) -> Result<AnalysisArtifacts, PluginHostError> {
+    let (metrics, _) = compute_metrics_with_plugins(
+        &source_analysis.cpg,
+        config,
+        metric_scope_filter,
+        plugin_definitions,
+        plugin_host,
+    )?;
     let diagnostics = generate_diagnostics(&source_analysis, &metrics, config);
 
-    AnalysisArtifacts {
+    Ok(AnalysisArtifacts {
         source_analysis,
         metrics,
         diagnostics,
-    }
+    })
 }
 
 fn maybe_enrich_with_llm(
@@ -510,18 +610,20 @@ where
 fn assemble_report(
     config: &ProjectConfig,
     metrics: AnalysisMetrics,
+    metric_catalog: &BTreeMap<MetricId, MetricMetadata>,
     diagnostics: Vec<Diagnostic>,
     diagnostics_scope: DiagnosticsScope,
     view_options: ReportViewOptions,
     summary_override: Option<DiagnosticSummary>,
 ) -> AnalysisReport {
-    AnalysisReport::project(
+    AnalysisReport::project_with_metric_catalog(
         ReportMetadata::new(
             config.analysis_targets.clone(),
             env!("CARGO_PKG_VERSION"),
             "1.0.0",
         ),
         &metrics,
+        metric_catalog,
         diagnostics,
         diagnostics_scope,
         view_options,
@@ -529,17 +631,15 @@ fn assemble_report(
     )
 }
 
-fn compute_metrics(
+fn compute_metrics_with_plugins(
     cpg: &UnifiedCpg,
     config: &ProjectConfig,
     scope_filter: Option<&BTreeSet<ScopeId>>,
-) -> AnalysisMetrics {
+    plugin_definitions: &[Box<dyn MetricDefinition>],
+    mut plugin_port: Option<&mut dyn PluginPort<Error = PluginHostError>>,
+) -> Result<(AnalysisMetrics, BTreeSet<MetricId>), PluginHostError> {
     let definitions = builtin_metric_definitions();
-    let definition_refs = definitions
-        .iter()
-        .map(|definition| definition.as_ref())
-        .collect::<Vec<_>>();
-    let metric_catalog = metric_catalog_from_definitions(definition_refs);
+    let metric_catalog = metric_catalog_with_plugins(plugin_definitions);
     let metric_config = MetricConfig {
         entries: BTreeMap::new(),
     };
@@ -549,65 +649,129 @@ fn compute_metrics(
         .map(|scopes| scopes.contains(&project_scope_id()))
         .unwrap_or(true);
 
-    let function_metrics = compute_scope_metrics(
-        cpg,
-        &function_scope_ids,
-        AnalysisLevel::Function,
-        &definitions,
-        &metric_config,
-    );
-    let module_metrics = compute_scope_metrics(
-        cpg,
-        &module_scope_ids,
-        AnalysisLevel::Module,
-        &definitions,
-        &metric_config,
-    );
-    let project_metrics = project_scope_metrics.then(|| {
-        compute_scope_metrics(
+    let function_metrics = if let Some(host) = plugin_port.as_mut() {
+        compute_scope_metrics_with_plugins(
             cpg,
-            &[project_scope_id()],
-            AnalysisLevel::Project,
+            &function_scope_ids,
+            AnalysisLevel::Function,
             &definitions,
+            plugin_definitions,
             &metric_config,
-        )
-        .into_iter()
-        .next()
-        .expect("project scope metrics should always exist")
+            Some(&mut **host),
+        )?
+    } else {
+        compute_scope_metrics_with_plugins(
+            cpg,
+            &function_scope_ids,
+            AnalysisLevel::Function,
+            &definitions,
+            plugin_definitions,
+            &metric_config,
+            None,
+        )?
+    };
+    let module_metrics = if let Some(host) = plugin_port.as_mut() {
+        compute_scope_metrics_with_plugins(
+            cpg,
+            &module_scope_ids,
+            AnalysisLevel::Module,
+            &definitions,
+            plugin_definitions,
+            &metric_config,
+            Some(&mut **host),
+        )?
+    } else {
+        compute_scope_metrics_with_plugins(
+            cpg,
+            &module_scope_ids,
+            AnalysisLevel::Module,
+            &definitions,
+            plugin_definitions,
+            &metric_config,
+            None,
+        )?
+    };
+    let project_metrics = project_scope_metrics.then(|| {
+        if let Some(host) = plugin_port.as_mut() {
+            compute_scope_metrics_with_plugins(
+                cpg,
+                &[project_scope_id()],
+                AnalysisLevel::Project,
+                &definitions,
+                plugin_definitions,
+                &metric_config,
+                Some(&mut **host),
+            )
+        } else {
+            compute_scope_metrics_with_plugins(
+                cpg,
+                &[project_scope_id()],
+                AnalysisLevel::Project,
+                &definitions,
+                plugin_definitions,
+                &metric_config,
+                None,
+            )
+        }
+        .map(|mut metrics| {
+            metrics
+                .drain(..)
+                .next()
+                .expect("project scope metrics should always exist")
+        })
     });
 
-    AnalysisMetrics::assemble(
-        function_metrics,
-        module_metrics,
-        project_metrics,
-        &config.score_weights,
-        &metric_catalog,
-        &config.rules,
-    )
+    Ok((
+        AnalysisMetrics::assemble(
+            function_metrics,
+            module_metrics,
+            project_metrics.transpose()?,
+            &config.score_weights,
+            &metric_catalog,
+            &config.rules,
+        ),
+        loaded_plugin_metric_ids(plugin_definitions),
+    ))
 }
 
-fn compute_scope_metrics(
+fn compute_scope_metrics_with_plugins(
     cpg: &UnifiedCpg,
     scope_ids: &[ScopeId],
     level: AnalysisLevel,
     definitions: &[Box<dyn MetricDefinition>],
+    plugin_definitions: &[Box<dyn MetricDefinition>],
     metric_config: &MetricConfig,
-) -> Vec<ScopeMetrics> {
-    let mut scope_metrics = scope_ids
-        .iter()
-        .map(|scope_id| {
-            let subgraph = cpg.subgraph(scope_id);
-            let values = definitions
+    mut plugin_port: Option<&mut dyn PluginPort<Error = PluginHostError>>,
+) -> Result<Vec<ScopeMetrics>, PluginHostError> {
+    let mut scope_metrics = Vec::with_capacity(scope_ids.len());
+    for scope_id in scope_ids {
+        let subgraph = cpg.subgraph(scope_id);
+        let mut values = definitions
+            .iter()
+            .filter(|definition| definition.level() == level)
+            .filter_map(|definition| definition.compute(&subgraph, metric_config))
+            .collect::<Vec<_>>();
+
+        if let Some(plugin_port) = plugin_port.as_deref_mut() {
+            for definition in plugin_definitions
                 .iter()
                 .filter(|definition| definition.level() == level)
-                .filter_map(|definition| definition.compute(&subgraph, metric_config))
-                .collect::<Vec<_>>();
+            {
+                let request = PluginEvaluationRequest {
+                    scope_id: scope_id.clone(),
+                    subgraph: subgraph.clone(),
+                    config: metric_config.clone(),
+                };
+                if let Some(value) = plugin_port.evaluate(definition.as_ref(), &request)? {
+                    values.push(value);
+                }
+            }
+        }
 
-            ScopeMetrics::new(scope_id.clone(), values)
-        })
-        .collect::<Vec<_>>();
+        scope_metrics.push(ScopeMetrics::new(scope_id.clone(), values));
+    }
     scope_metrics.sort_by(|left, right| left.scope_id.cmp(&right.scope_id));
-    scope_metrics
+    Ok(scope_metrics)
 }
 
 fn finalize_result(
@@ -622,8 +786,12 @@ fn finalize_result(
     }
 }
 
-fn empty_metrics(config: &ProjectConfig) -> AnalysisMetrics {
-    compute_metrics(
+fn empty_metrics(
+    config: &ProjectConfig,
+    plugin_definitions: &[Box<dyn MetricDefinition>],
+    plugin_port: Option<&mut dyn PluginPort<Error = PluginHostError>>,
+) -> Result<(AnalysisMetrics, BTreeSet<MetricId>), PluginHostError> {
+    compute_metrics_with_plugins(
         &UnifiedCpg {
             id: crate::domains::cpg::CpgId::from("empty"),
             nodes: Vec::new(),
@@ -631,7 +799,69 @@ fn empty_metrics(config: &ProjectConfig) -> AnalysisMetrics {
         },
         config,
         Some(&BTreeSet::new()),
+        plugin_definitions,
+        plugin_port,
     )
+}
+
+fn load_plugin_metrics_context(
+    plugin_host: Option<&dyn PluginPort<Error = PluginHostError>>,
+) -> Result<PluginMetricsContext, PluginHostError> {
+    let definitions = plugin_host
+        .map(|host| host.load_metric_definitions())
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(PluginMetricsContext {
+        metric_catalog: metric_catalog_with_plugins(&definitions),
+        loaded_metric_ids: loaded_plugin_metric_ids(&definitions),
+        definitions,
+    })
+}
+
+fn metric_catalog_with_plugins(
+    plugin_definitions: &[Box<dyn MetricDefinition>],
+) -> BTreeMap<MetricId, MetricMetadata> {
+    let definitions = builtin_metric_definitions();
+    let mut definition_refs = definitions
+        .iter()
+        .map(|definition| definition.as_ref())
+        .collect::<Vec<_>>();
+    definition_refs.extend(
+        plugin_definitions
+            .iter()
+            .map(|definition| definition.as_ref()),
+    );
+    metric_catalog_from_definitions(definition_refs)
+}
+
+fn loaded_plugin_metric_ids(
+    plugin_definitions: &[Box<dyn MetricDefinition>],
+) -> BTreeSet<MetricId> {
+    plugin_definitions
+        .iter()
+        .map(|definition| definition.id().clone())
+        .collect()
+}
+
+fn builtin_metric_ids() -> BTreeSet<MetricId> {
+    builtin_metric_definitions()
+        .into_iter()
+        .map(|definition| definition.id().clone())
+        .collect()
+}
+
+fn filter_reused_scope_metrics(
+    scope_metrics: &ScopeMetrics,
+    builtin_metric_ids: &BTreeSet<MetricId>,
+    loaded_plugin_metric_ids: &BTreeSet<MetricId>,
+) -> ScopeMetrics {
+    let mut filtered = scope_metrics.clone();
+    filtered.values.retain(|value| {
+        builtin_metric_ids.contains(&value.metric_id)
+            || loaded_plugin_metric_ids.contains(&value.metric_id)
+    });
+    filtered
 }
 
 fn filtered_scope_ids(
@@ -652,7 +882,10 @@ fn merge_metrics(
     baseline: &DiffBaseline,
     reuse_scopes: &BTreeSet<ScopeId>,
     baseline_fallback_scopes: &BTreeSet<ScopeId>,
+    metric_catalog: &BTreeMap<MetricId, MetricMetadata>,
+    loaded_plugin_metric_ids: &BTreeSet<MetricId>,
 ) -> AnalysisMetrics {
+    let builtin_metric_ids = builtin_metric_ids();
     let mut function_metrics = baseline
         .scope_metrics
         .iter()
@@ -660,7 +893,9 @@ fn merge_metrics(
             (reuse_scopes.contains(*scope_id) || baseline_fallback_scopes.contains(*scope_id))
                 && scope_id.level == AnalysisLevel::Function
         })
-        .map(|(_, metrics)| metrics.clone())
+        .map(|(_, metrics)| {
+            filter_reused_scope_metrics(metrics, &builtin_metric_ids, loaded_plugin_metric_ids)
+        })
         .collect::<Vec<_>>();
     function_metrics.extend(recomputed_metrics.function_metrics);
     function_metrics.sort_by(|left, right| left.scope_id.cmp(&right.scope_id));
@@ -672,7 +907,9 @@ fn merge_metrics(
             (reuse_scopes.contains(*scope_id) || baseline_fallback_scopes.contains(*scope_id))
                 && scope_id.level == AnalysisLevel::Module
         })
-        .map(|(_, metrics)| metrics.clone())
+        .map(|(_, metrics)| {
+            filter_reused_scope_metrics(metrics, &builtin_metric_ids, loaded_plugin_metric_ids)
+        })
         .collect::<Vec<_>>();
     module_metrics.extend(recomputed_metrics.module_metrics);
     module_metrics.sort_by(|left, right| left.scope_id.cmp(&right.scope_id));
@@ -681,26 +918,21 @@ fn merge_metrics(
         baseline
             .scope_metrics
             .get(&project_scope_id())
-            .cloned()
+            .map(|metrics| {
+                filter_reused_scope_metrics(metrics, &builtin_metric_ids, loaded_plugin_metric_ids)
+            })
             .filter(|_| {
                 reuse_scopes.contains(&project_scope_id())
                     || baseline_fallback_scopes.contains(&project_scope_id())
             })
     });
 
-    let definitions = builtin_metric_definitions();
-    let definition_refs = definitions
-        .iter()
-        .map(|definition| definition.as_ref())
-        .collect::<Vec<_>>();
-    let metric_catalog = metric_catalog_from_definitions(definition_refs);
-
     AnalysisMetrics::assemble(
         function_metrics,
         module_metrics,
         project_metrics,
         &config.score_weights,
-        &metric_catalog,
+        metric_catalog,
         &config.rules,
     )
 }
@@ -708,36 +940,38 @@ fn merge_metrics(
 fn metrics_from_scope_map(
     config: &ProjectConfig,
     scope_metrics: &BTreeMap<ScopeId, ScopeMetrics>,
+    metric_catalog: &BTreeMap<MetricId, MetricMetadata>,
+    loaded_plugin_metric_ids: &BTreeSet<MetricId>,
 ) -> AnalysisMetrics {
+    let builtin_metric_ids = builtin_metric_ids();
     let mut function_metrics = scope_metrics
         .iter()
         .filter(|(scope_id, _)| scope_id.level == AnalysisLevel::Function)
-        .map(|(_, metrics)| metrics.clone())
+        .map(|(_, metrics)| {
+            filter_reused_scope_metrics(metrics, &builtin_metric_ids, loaded_plugin_metric_ids)
+        })
         .collect::<Vec<_>>();
     function_metrics.sort_by(|left, right| left.scope_id.cmp(&right.scope_id));
 
     let mut module_metrics = scope_metrics
         .iter()
         .filter(|(scope_id, _)| scope_id.level == AnalysisLevel::Module)
-        .map(|(_, metrics)| metrics.clone())
+        .map(|(_, metrics)| {
+            filter_reused_scope_metrics(metrics, &builtin_metric_ids, loaded_plugin_metric_ids)
+        })
         .collect::<Vec<_>>();
     module_metrics.sort_by(|left, right| left.scope_id.cmp(&right.scope_id));
 
-    let project_metrics = scope_metrics.get(&project_scope_id()).cloned();
-
-    let definitions = builtin_metric_definitions();
-    let definition_refs = definitions
-        .iter()
-        .map(|definition| definition.as_ref())
-        .collect::<Vec<_>>();
-    let metric_catalog = metric_catalog_from_definitions(definition_refs);
+    let project_metrics = scope_metrics.get(&project_scope_id()).map(|metrics| {
+        filter_reused_scope_metrics(metrics, &builtin_metric_ids, loaded_plugin_metric_ids)
+    });
 
     AnalysisMetrics::assemble(
         function_metrics,
         module_metrics,
         project_metrics,
         &config.score_weights,
-        &metric_catalog,
+        metric_catalog,
         &config.rules,
     )
 }
@@ -882,6 +1116,17 @@ fn config_hash(config: &ProjectConfig) -> String {
             "module": config.score_weights.module,
             "project": config.score_weights.project,
         },
+        "plugin_manifest": config
+            .plugin_manifest
+            .modules
+            .iter()
+            .map(|module| {
+                json!({
+                    "path": module.workspace_relative_path.as_str(),
+                    "sha256": module.sha256,
+                })
+            })
+            .collect::<Vec<_>>(),
     });
 
     sha256_hex(
@@ -1130,9 +1375,12 @@ mod tests {
     use std::convert::Infallible;
 
     use super::{
-        AnalysisPipeline, DiffConfig, apply_dependency_resolution, assemble_report,
-        build_baseline_fingerprint, build_llm_requests, project_scope_id,
+        AnalysisPipeline, DiffConfig, FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET,
+        apply_dependency_resolution, assemble_report, build_baseline_fingerprint,
+        build_llm_requests, compute_metrics_with_plugins, merge_metrics, metrics_from_scope_map,
+        project_scope_id,
     };
+    use crate::adapters::plugin::PluginHostError;
     use crate::domains::config::{Defaults, ProjectConfig, WorkspaceRoot};
     use crate::domains::cpg::{
         AnalysisWarning, CpgEdge, CpgId, CpgNode, EdgeKind, Language, NodeId, NodeKind,
@@ -1146,7 +1394,10 @@ mod tests {
     use crate::domains::impact::{
         BaselineFingerprint, DependencyIndexManifest, DiffBaseline, ScopeDiagnosticSnapshot,
     };
-    use crate::domains::metrics::{AnalysisMetrics, OverallScore};
+    use crate::domains::metrics::{
+        AnalysisMetrics, MetricConfig, MetricDefinition, MetricOrigin, MetricParticipation,
+        MetricValue, OverallScore, builtin_metric_definitions, metric_catalog_from_definitions,
+    };
     use crate::domains::reporting::{
         OutputFormat, ReportScopeMetrics, ReportViewOptions, RequestedLevel,
     };
@@ -1160,6 +1411,86 @@ mod tests {
     use crate::ports::diff_source::{DiffRequest, DiffSnapshot, DiffSourcePort};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
     use crate::ports::llm::{LlmPort, LlmRequest};
+    use crate::ports::{PluginEvaluationRequest, PluginPort};
+
+    #[derive(Clone, Debug)]
+    struct TestPluginMetricDefinition {
+        id: MetricId,
+        level: AnalysisLevel,
+    }
+
+    impl MetricDefinition for TestPluginMetricDefinition {
+        fn id(&self) -> &MetricId {
+            &self.id
+        }
+
+        fn name(&self) -> &str {
+            "test-plugin-metric"
+        }
+
+        fn level(&self) -> AnalysisLevel {
+            self.level
+        }
+
+        fn origin(&self) -> MetricOrigin {
+            MetricOrigin::Plugin
+        }
+
+        fn participation(&self) -> MetricParticipation {
+            MetricParticipation::ReportOnly
+        }
+
+        fn rule_binding(&self) -> Option<&RuleId> {
+            None
+        }
+
+        fn description(&self) -> &str {
+            "test plugin metric"
+        }
+
+        fn compute(
+            &self,
+            _subgraph: &crate::domains::cpg::CpgSubgraph,
+            _config: &MetricConfig,
+        ) -> Option<MetricValue> {
+            None
+        }
+    }
+
+    #[derive(Default)]
+    struct MockPluginPort {
+        definitions: Vec<TestPluginMetricDefinition>,
+        responses: BTreeMap<(MetricId, ScopeId), MetricValue>,
+        reset_calls: Vec<u64>,
+    }
+
+    impl PluginPort for MockPluginPort {
+        type Error = PluginHostError;
+
+        fn load_metric_definitions(&self) -> Result<Vec<Box<dyn MetricDefinition>>, Self::Error> {
+            Ok(self
+                .definitions
+                .iter()
+                .cloned()
+                .map(|definition| Box::new(definition) as Box<dyn MetricDefinition>)
+                .collect())
+        }
+
+        fn reset_aggregate_fuel_budget(&mut self, budget: u64) {
+            self.reset_calls.push(budget);
+        }
+
+        fn evaluate(
+            &mut self,
+            definition: &dyn MetricDefinition,
+            request: &PluginEvaluationRequest,
+        ) -> Result<Option<MetricValue>, Self::Error> {
+            Ok(self
+                .responses
+                .get(&(definition.id().clone(), request.scope_id.clone()))
+                .cloned())
+        }
+    }
 
     #[derive(Clone, Debug)]
     struct MockExtractor {
@@ -1326,6 +1657,7 @@ mod tests {
         let report = assemble_report(
             &fixture_config(),
             fixture_metrics(),
+            &fixture_metric_catalog(),
             vec![
                 metric_diagnostic(
                     "diag-function-warning",
@@ -1365,6 +1697,189 @@ mod tests {
     }
 
     #[test]
+    fn compute_metrics_includes_report_only_plugin_values_without_affecting_scores() {
+        let source_analysis = warning_source_analysis("src/lib.rs", "crate::f");
+        let plugin_metric_id = MetricId::from("P-F001");
+        let function_scope = ScopeId::new(AnalysisLevel::Function, "crate::f", "src/lib.rs");
+        let mut plugin_port = MockPluginPort {
+            definitions: vec![TestPluginMetricDefinition {
+                id: plugin_metric_id.clone(),
+                level: AnalysisLevel::Function,
+            }],
+            responses: BTreeMap::from([(
+                (plugin_metric_id.clone(), function_scope.clone()),
+                MetricValue {
+                    metric_id: plugin_metric_id.clone(),
+                    raw_value: 99.0,
+                    normalized_risk: 1.0,
+                },
+            )]),
+            ..Default::default()
+        };
+        let plugin_definitions = plugin_port.load_metric_definitions().unwrap();
+        let builtin_only =
+            compute_metrics_with_plugins(&source_analysis.cpg, &fixture_config(), None, &[], None)
+                .unwrap()
+                .0;
+        let (with_plugins, loaded_metric_ids) = compute_metrics_with_plugins(
+            &source_analysis.cpg,
+            &fixture_config(),
+            None,
+            &plugin_definitions,
+            Some(&mut plugin_port),
+        )
+        .unwrap();
+
+        assert_eq!(
+            loaded_metric_ids,
+            BTreeSet::from([plugin_metric_id.clone()])
+        );
+        assert!(
+            with_plugins.function_metrics[0]
+                .values
+                .iter()
+                .any(|value| value.metric_id == plugin_metric_id)
+        );
+        assert_eq!(
+            with_plugins.function_metrics[0].scope_risk,
+            builtin_only.function_metrics[0].scope_risk
+        );
+        assert_eq!(with_plugins.overall_score, builtin_only.overall_score);
+    }
+
+    #[test]
+    fn metrics_from_scope_map_filters_unloaded_plugin_values() {
+        let scope_id = ScopeId::new(AnalysisLevel::Function, "crate::f", "src/lib.rs");
+        let plugin_metric_id = MetricId::from("P-F001");
+        let scope_metrics = BTreeMap::from([(
+            scope_id.clone(),
+            ScopeMetricsLiteral::new(
+                scope_id,
+                0.0,
+                vec![("M-F001", 1.0, 0.55), ("P-F001", 99.0, 1.0)],
+            )
+            .into(),
+        )]);
+
+        let filtered = metrics_from_scope_map(
+            &fixture_config(),
+            &scope_metrics,
+            &fixture_metric_catalog(),
+            &BTreeSet::new(),
+        );
+        assert_eq!(filtered.function_metrics[0].values.len(), 1);
+        assert_eq!(
+            filtered.function_metrics[0].values[0].metric_id,
+            MetricId::from("M-F001")
+        );
+
+        let retained = metrics_from_scope_map(
+            &fixture_config(),
+            &scope_metrics,
+            &fixture_metric_catalog_with_plugin(plugin_metric_id.clone()),
+            &BTreeSet::from([plugin_metric_id.clone()]),
+        );
+        assert!(
+            retained.function_metrics[0]
+                .values
+                .iter()
+                .any(|value| value.metric_id == plugin_metric_id)
+        );
+    }
+
+    #[test]
+    fn merge_metrics_filters_unloaded_plugin_values_from_reused_baseline() {
+        let unchanged_scope = ScopeId::new(
+            AnalysisLevel::Function,
+            "crate::unchanged",
+            "src/unchanged.rs",
+        );
+        let baseline = DiffBaseline {
+            fingerprint: build_baseline_fingerprint(
+                &fixture_config(),
+                &DiffSnapshot {
+                    base_snapshot_hash: "base-tree".to_owned(),
+                    changed_files: BTreeSet::new(),
+                },
+            ),
+            dependency_index: DependencyIndexManifest {
+                reverse_dependencies: BTreeMap::new(),
+            },
+            scope_metrics: BTreeMap::from([(
+                unchanged_scope.clone(),
+                ScopeMetricsLiteral::new(
+                    unchanged_scope.clone(),
+                    0.0,
+                    vec![("M-F001", 1.0, 0.55), ("P-F001", 99.0, 1.0)],
+                )
+                .into(),
+            )]),
+            diagnostic_snapshots: BTreeMap::new(),
+            overall_score: OverallScore {
+                function_risk: Some(0.0),
+                module_risk: None,
+                project_risk: None,
+                overall_risk: 0.0,
+                overall_score: 100,
+                function_score: Some(100),
+                module_score: None,
+                project_score: None,
+            },
+        };
+
+        let merged = merge_metrics(
+            &fixture_config(),
+            AnalysisMetrics {
+                function_metrics: Vec::new(),
+                module_metrics: Vec::new(),
+                project_metrics: None,
+                overall_score: OverallScore {
+                    function_risk: None,
+                    module_risk: None,
+                    project_risk: None,
+                    overall_risk: 0.0,
+                    overall_score: 100,
+                    function_score: None,
+                    module_score: None,
+                    project_score: None,
+                },
+            },
+            &baseline,
+            &BTreeSet::from([unchanged_scope]),
+            &BTreeSet::new(),
+            &fixture_metric_catalog(),
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(merged.function_metrics[0].values.len(), 1);
+        assert_eq!(
+            merged.function_metrics[0].values[0].metric_id,
+            MetricId::from("M-F001")
+        );
+    }
+
+    #[test]
+    fn baseline_fingerprint_changes_when_plugin_manifest_changes() {
+        let snapshot = DiffSnapshot {
+            base_snapshot_hash: "base-tree".to_owned(),
+            changed_files: BTreeSet::from([FilePath::from("src/lib.rs")]),
+        };
+        let mut with_plugin = fixture_config();
+        with_plugin
+            .plugin_manifest
+            .modules
+            .push(crate::domains::config::PluginModuleRef {
+                workspace_relative_path: FilePath::from(".kalos/plugins/example.wasm"),
+                sha256: "a".repeat(64),
+            });
+
+        assert_ne!(
+            build_baseline_fingerprint(&fixture_config(), &snapshot).config_hash,
+            build_baseline_fingerprint(&with_plugin, &snapshot).config_hash
+        );
+    }
+
+    #[test]
     fn analysis_pipeline_runs_non_diff_flow_with_stub_extractor() {
         let pipeline = AnalysisPipeline::new(
             MockExtractor {
@@ -1391,6 +1906,7 @@ mod tests {
                     strict: false,
                     minimum_severity: None,
                 },
+                None,
                 None,
             )
             .expect("pipeline should succeed");
@@ -1427,6 +1943,7 @@ mod tests {
             changed_files: BTreeSet::from([FilePath::from("src/lib.rs")]),
         });
         let cache = MockCache::new(None);
+        let mut plugin_port = MockPluginPort::default();
 
         let result = pipeline
             .run_diff(
@@ -1437,6 +1954,7 @@ mod tests {
                 },
                 &diff_source,
                 &cache,
+                Some(&mut plugin_port),
                 None,
             )
             .expect("subset fallback should succeed");
@@ -1448,6 +1966,10 @@ mod tests {
         assert!(diff_source.requests.borrow().is_empty());
         assert!(cache.load_fingerprints.borrow().is_empty());
         assert!(cache.stored.borrow().is_empty());
+        assert_eq!(
+            plugin_port.reset_calls,
+            vec![FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET]
+        );
     }
 
     #[test]
@@ -1472,6 +1994,7 @@ mod tests {
         );
         let diff_source = MockDiffSource::new(snapshot.clone());
         let cache = MockCache::new(None);
+        let mut plugin_port = MockPluginPort::default();
 
         let result = pipeline
             .run_diff(
@@ -1482,6 +2005,7 @@ mod tests {
                 },
                 &diff_source,
                 &cache,
+                Some(&mut plugin_port),
                 None,
             )
             .expect("missing baseline should fall back successfully");
@@ -1501,6 +2025,10 @@ mod tests {
         assert_eq!(
             cache.stored.borrow()[0].fingerprint,
             build_baseline_fingerprint(&config, &snapshot)
+        );
+        assert_eq!(
+            plugin_port.reset_calls,
+            vec![FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET]
         );
     }
 
@@ -1548,6 +2076,7 @@ mod tests {
                 },
                 &diff_source,
                 &cache,
+                None,
                 None,
             )
             .expect("diff run should succeed");
@@ -1627,6 +2156,7 @@ mod tests {
                 &diff_source,
                 &cache,
                 None,
+                None,
             )
             .expect("scoped diff run should succeed");
 
@@ -1685,6 +2215,7 @@ mod tests {
                 &diff_source,
                 &cache,
                 None,
+                None,
             )
             .expect("empty diff should succeed");
 
@@ -1737,6 +2268,7 @@ mod tests {
         );
         let diff_source = MockDiffSource::new(snapshot);
         let cache = MockCache::new(Some(baseline));
+        let mut plugin_port = MockPluginPort::default();
 
         let result = pipeline
             .run_diff(
@@ -1747,6 +2279,7 @@ mod tests {
                 },
                 &diff_source,
                 &cache,
+                Some(&mut plugin_port),
                 None,
             )
             .expect("incompatible baseline should fall back");
@@ -1763,6 +2296,10 @@ mod tests {
             ]
         );
         assert_eq!(cache.stored.borrow().len(), 1);
+        assert_eq!(
+            plugin_port.reset_calls,
+            vec![FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET]
+        );
     }
 
     #[test]
@@ -1895,6 +2432,7 @@ mod tests {
                     minimum_severity: None,
                 },
                 None,
+                None,
             )
             .expect("pipeline should succeed without llm");
         let diagnostic_id = without_llm.report.diagnostics.diagnostics[0].id.clone();
@@ -1917,6 +2455,7 @@ mod tests {
                     strict: false,
                     minimum_severity: None,
                 },
+                None,
                 Some(&llm_port),
             )
             .expect("pipeline should succeed with llm");
@@ -2152,6 +2691,29 @@ mod tests {
                 project_score: Some(75),
             },
         }
+    }
+
+    fn fixture_metric_catalog() -> BTreeMap<MetricId, crate::domains::metrics::MetricMetadata> {
+        let definitions = builtin_metric_definitions();
+        let definition_refs = definitions
+            .iter()
+            .map(|definition| definition.as_ref())
+            .collect::<Vec<_>>();
+        metric_catalog_from_definitions(definition_refs)
+    }
+
+    fn fixture_metric_catalog_with_plugin(
+        plugin_metric_id: MetricId,
+    ) -> BTreeMap<MetricId, crate::domains::metrics::MetricMetadata> {
+        let mut catalog = fixture_metric_catalog();
+        catalog.insert(
+            plugin_metric_id,
+            crate::domains::metrics::MetricMetadata {
+                participation: MetricParticipation::ReportOnly,
+                rule_binding: None,
+            },
+        );
+        catalog
     }
 
     fn metric_diagnostic(
