@@ -30,7 +30,7 @@ fn kalos_init_creates_default_config_file() {
 }
 
 #[test]
-fn kalos_init_reports_existing_config() {
+fn kalos_init_preserves_existing_config_when_declined() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");
     fs::write(&config_path, "existing = true\n").unwrap();
@@ -38,10 +38,72 @@ fn kalos_init_reports_existing_config() {
     Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
+        .write_stdin(b"n\n")
         .arg("init")
         .assert()
         .success()
         .stdout(predicate::str::contains("already exists"));
+
+    assert_eq!(
+        fs::read_to_string(config_path).unwrap(),
+        "existing = true\n"
+    );
+}
+
+#[test]
+fn kalos_init_overwrites_existing_config_when_confirmed() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join(".kalos.toml");
+    fs::write(&config_path, "existing = true\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .write_stdin(b"y\n")
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created"));
+
+    let config = fs::read_to_string(config_path).unwrap();
+    assert!(config.contains("[score.weights]"));
+    assert!(!config.contains("existing = true"));
+}
+
+#[test]
+fn kalos_init_overwrites_existing_config_when_confirmed_with_uppercase_y() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join(".kalos.toml");
+    fs::write(&config_path, "existing = true\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .write_stdin(b"Y\n")
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created"));
+
+    let config = fs::read_to_string(config_path).unwrap();
+    assert!(config.contains("[score.weights]"));
+    assert!(!config.contains("existing = true"));
+}
+
+#[test]
+fn kalos_init_preserves_existing_config_on_empty_input() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join(".kalos.toml");
+    fs::write(&config_path, "existing = true\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .write_stdin(b"\n")
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("aborted"));
 
     assert_eq!(
         fs::read_to_string(config_path).unwrap(),

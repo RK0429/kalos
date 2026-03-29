@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::Args;
@@ -21,11 +22,22 @@ impl InitCommand {
 
         let config_path = cwd.join(CONFIG_FILE_NAME);
         if config_path.exists() {
-            println!(
-                "{} already exists. Overwrite prompt is not implemented yet.",
-                CONFIG_FILE_NAME
-            );
-            return ExitCode::SUCCESS;
+            print!("{CONFIG_FILE_NAME} already exists. Overwrite? [y/N] ");
+            if let Err(error) = io::stdout().flush() {
+                eprintln!("failed to flush stdout: {error}");
+                return ExitCode::from(2);
+            }
+
+            let mut input = String::new();
+            if let Err(error) = io::stdin().read_line(&mut input) {
+                eprintln!("failed to read overwrite confirmation: {error}");
+                return ExitCode::from(2);
+            }
+
+            if !matches!(input.trim(), "y" | "Y") {
+                println!("aborted");
+                return ExitCode::SUCCESS;
+            }
         }
 
         if let Err(error) = fs::write(&config_path, render_default_config()) {
