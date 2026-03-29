@@ -1,6 +1,6 @@
 # Wave 9-1 quality gates and determinism check only.
-# Performance benchmark job (Wave 9-4) is not yet implemented and will be
-# added as a separate job when REQ-NF-002 baselines are established.
+# Wave 9-4 performance benchmark now runs from `.github/workflows/benchmark.yml`
+# so CI remains focused on fast push/pull_request quality gates.
 name: CI
 
 on:

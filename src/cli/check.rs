@@ -176,14 +176,34 @@ impl CheckCommand {
                 }
             }
         } else {
-            match pipeline.run(
-                &config,
-                view_options,
-                plugin_host
-                    .as_mut()
-                    .map(|host| host as &mut dyn PluginPort<Error = PluginHostError>),
-                llm_adapter.as_ref().map(|adapter| adapter as _),
-            ) {
+            let baseline_result = BaselineCacheAdapter::new().ok().and_then(|cache| {
+                let head_tree_hash = resolve_head_tree_hash(&config.workspace_root.abs_path)?;
+                Some((cache, head_tree_hash))
+            });
+
+            let run_result = if let Some((cache, head_tree_hash)) = baseline_result.as_ref() {
+                pipeline.run_full_workspace(
+                    &config,
+                    view_options,
+                    head_tree_hash,
+                    cache,
+                    plugin_host
+                        .as_mut()
+                        .map(|host| host as &mut dyn PluginPort<Error = PluginHostError>),
+                    llm_adapter.as_ref().map(|adapter| adapter as _),
+                )
+            } else {
+                pipeline.run(
+                    &config,
+                    view_options,
+                    plugin_host
+                        .as_mut()
+                        .map(|host| host as &mut dyn PluginPort<Error = PluginHostError>),
+                    llm_adapter.as_ref().map(|adapter| adapter as _),
+                )
+            };
+
+            match run_result {
                 Ok(result) => result,
                 Err(error) => {
                     if let Some(plugin_host) = &plugin_host {
@@ -216,6 +236,19 @@ impl CheckCommand {
 
 const FULL_PLUGIN_AGGREGATE_FUEL_BUDGET: u64 = 30_000_000;
 const DIFF_PLUGIN_AGGREGATE_FUEL_BUDGET: u64 = 5_000_000;
+
+fn resolve_head_tree_hash(workspace_root: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD^{tree}"])
+        .current_dir(workspace_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let hash = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (!hash.is_empty()).then_some(hash)
+}
 
 fn builtin_metric_ids() -> BTreeSet<MetricId> {
     builtin_metric_definitions()

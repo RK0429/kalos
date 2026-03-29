@@ -203,6 +203,71 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn run_full_workspace<C: CachePort>(
+        &self,
+        config: &ProjectConfig,
+        view_options: ReportViewOptions,
+        head_tree_hash: &str,
+        cache: &C,
+        plugin_host: Option<&mut dyn PluginPort<Error = PluginHostError>>,
+        llm: Option<&dyn LlmPort<Error = Infallible>>,
+    ) -> Result<PipelineResult, PipelineError<E::Error, D::Error>>
+    where
+        C::Error: fmt::Display,
+    {
+        let plugin_metrics =
+            load_plugin_metrics_context(plugin_host.as_deref()).map_err(PipelineError::Plugin)?;
+        let source_analysis = self.extract_and_resolve(
+            config,
+            ExtractionRequest {
+                workspace_root: config.workspace_root.abs_path.clone(),
+                analysis_targets: config.analysis_targets.clone(),
+            },
+        )?;
+        let artifacts = analyze_source_analysis(
+            config,
+            source_analysis,
+            None,
+            &plugin_metrics.definitions,
+            plugin_host,
+        )
+        .map_err(PipelineError::Plugin)?;
+        let llm_suggestions =
+            maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
+        let dependency_index = build_dependency_index_from_cpg(&artifacts.source_analysis.cpg);
+        let scope_metrics = scope_metrics_map(&artifacts.metrics);
+        let diagnostic_snapshots = diagnostic_snapshots_from_diagnostics(&artifacts.diagnostics);
+        let overall_score = artifacts.metrics.overall_score.clone();
+        let report = assemble_report(
+            config,
+            artifacts.metrics,
+            &plugin_metrics.metric_catalog,
+            artifacts.diagnostics,
+            DiagnosticsScope::WholeProject,
+            view_options,
+            None,
+        );
+        let exit_code = report.diagnostics.determine_exit_code(report.view.strict);
+
+        if !config.targets_explicitly_specified
+            && matches!(exit_code, ExitCode::Success | ExitCode::DiagnosticFailure)
+        {
+            let baseline = DiffBaseline {
+                fingerprint: build_baseline_fingerprint_with_hash(config, head_tree_hash),
+                dependency_index,
+                scope_metrics,
+                diagnostic_snapshots,
+                overall_score,
+            };
+            if let Err(error) = cache.store(&baseline) {
+                eprintln!("warning: failed to write baseline cache: {error}");
+            }
+        }
+
+        Ok(finalize_result(report, llm_suggestions))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn run_diff<DS, C>(
         &self,
         config: &ProjectConfig,
@@ -1077,21 +1142,28 @@ fn increment_summary(summary: &mut DiagnosticSummary, severity: Severity) {
     }
 }
 
-fn build_baseline_fingerprint(
+fn build_baseline_fingerprint_with_hash(
     config: &ProjectConfig,
-    snapshot: &crate::ports::diff_source::DiffSnapshot,
+    base_snapshot_hash: &str,
 ) -> BaselineFingerprint {
     BaselineFingerprint {
         workspace_root_hash: sha256_hex(
             config.workspace_root.abs_path.to_string_lossy().as_bytes(),
         ),
-        base_snapshot_hash: snapshot.base_snapshot_hash.clone(),
+        base_snapshot_hash: base_snapshot_hash.to_owned(),
         config_hash: config_hash(config),
         analysis_targets_hash: analysis_targets_hash(&config.analysis_targets),
         rule_catalog_version: "builtin-v1".to_owned(),
         extractor_version: "codeql-v1".to_owned(),
         kalos_version: env!("CARGO_PKG_VERSION").to_owned(),
     }
+}
+
+fn build_baseline_fingerprint(
+    config: &ProjectConfig,
+    snapshot: &crate::ports::diff_source::DiffSnapshot,
+) -> BaselineFingerprint {
+    build_baseline_fingerprint_with_hash(config, &snapshot.base_snapshot_hash)
 }
 
 fn config_hash(config: &ProjectConfig) -> String {

@@ -155,6 +155,135 @@ fn kalos_check_json_output_has_required_top_level_fields() {
 }
 
 #[test]
+fn kalos_check_non_diff_full_workspace_writes_baseline() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success();
+
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
+}
+
+#[test]
+fn kalos_check_non_diff_strict_exit_code_1_still_writes_baseline() {
+    let temp = seeded_git_workspace();
+    fs::write(
+        temp.path().join(".kalos.toml"),
+        "[rules.KAL-PAT003]\nseverity = \"warning\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "mod a;\nmod b;\n\npub fn placeholder() -> i32 {\n    a::call_b() + b::call_a()\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("src/a.rs"),
+        "pub fn call_b() -> i32 {\n    crate::b::call_a()\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("src/b.rs"),
+        "pub fn call_a() -> i32 {\n    crate::a::call_b()\n}\n",
+    )
+    .unwrap();
+    run_git(temp.path(), &["add", "."]);
+    run_git(temp.path(), &["commit", "-m", "strict warning fixture"]);
+    let cache_dir = seed_fake_codeql_bundle_with_fixture(
+        temp.path(),
+        r#"{
+  "modules": [
+    { "id": "m1", "name": "crate::a", "file": "src/a.rs", "start_line": 1, "end_line": 3, "language": "rust" },
+    { "id": "m2", "name": "crate::b", "file": "src/b.rs", "start_line": 1, "end_line": 3, "language": "rust" }
+  ],
+  "functions": [
+    { "id": "f1", "name": "crate::a::call_b", "file": "src/a.rs", "start_line": 1, "end_line": 3, "language": "rust" },
+    { "id": "f2", "name": "crate::b::call_a", "file": "src/b.rs", "start_line": 1, "end_line": 3, "language": "rust" }
+  ],
+  "calls": [
+    { "source": "f1", "target": "f2", "language": "rust" },
+    { "source": "f2", "target": "f1", "language": "rust" }
+  ],
+  "contains": [
+    { "source": "m1", "target": "f1", "language": "rust" },
+    { "source": "m2", "target": "f2", "language": "rust" }
+  ]
+}"#,
+    );
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--strict"])
+        .assert()
+        .code(1);
+
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
+}
+
+#[test]
+fn kalos_check_explicit_targets_skip_baseline_write_back() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "src/lib.rs"])
+        .assert()
+        .success();
+
+    assert_eq!(baseline_entry_count(&cache_dir), 0);
+}
+
+#[test]
+fn kalos_check_non_diff_then_diff_reuses_baseline() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success();
+
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
+
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "pub fn placeholder() -> i32 {\n    let branch_alpha = 1;\n    let branch_beta = 2;\n    let branch_gamma = 3;\n    let branch_delta = 4;\n    if branch_alpha > 0 { branch_beta + branch_delta } else { branch_gamma }\n}\n",
+    )
+    .unwrap();
+    run_git(temp.path(), &["add", "src/lib.rs"]);
+    run_git(temp.path(), &["commit", "-m", "third"]);
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1", "--format", "json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("falling back to full analysis").not());
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(parsed["diagnostics_scope"], "affected_only");
+    assert_eq!(parsed["summary_scope"], "whole_project");
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
+}
+
+#[test]
 fn kalos_check_llm_missing_api_key_fails_preflight() {
     let temp = seeded_workspace();
 
@@ -288,6 +417,10 @@ fn seeded_git_workspace() -> TempDir {
 }
 
 fn seed_fake_codeql_bundle(workspace_root: &Path) -> PathBuf {
+    seed_fake_codeql_bundle_with_fixture(workspace_root, &load_fixture("rust.json"))
+}
+
+fn seed_fake_codeql_bundle_with_fixture(workspace_root: &Path, fixture: &str) -> PathBuf {
     let manifest = codeql_bundle_manifest().unwrap();
     let cache_dir = workspace_root.join(".kalos-test-cache");
     let bundle_dir = cache_dir.join("codeql").join(&manifest.version);
@@ -295,11 +428,16 @@ fn seed_fake_codeql_bundle(workspace_root: &Path) -> PathBuf {
     fs::create_dir_all(&queries_dir).unwrap();
     fs::write(bundle_dir.join("bundle.marker"), manifest.sha256.as_bytes()).unwrap();
     fs::write(queries_dir.join("extract-rust.ql"), "// fixture query\n").unwrap();
-    write_fake_codeql_executable(
-        &codeql_executable_path(&bundle_dir),
-        &load_fixture("rust.json"),
-    );
+    write_fake_codeql_executable(&codeql_executable_path(&bundle_dir), fixture);
     cache_dir
+}
+
+fn baseline_entry_count(cache_dir: &Path) -> usize {
+    let baselines_dir = cache_dir.join("baselines");
+    match fs::read_dir(baselines_dir) {
+        Ok(entries) => entries.count(),
+        Err(_) => 0,
+    }
 }
 
 fn codeql_executable_path(bundle_dir: &Path) -> PathBuf {
