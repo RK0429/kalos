@@ -230,6 +230,7 @@ fn build_database_create_args(
     vec![
         "database".to_owned(),
         "create".to_owned(),
+        "--overwrite".to_owned(),
         database_path.to_string_lossy().into_owned(),
         "--language".to_owned(),
         CodeQlAdapter::<(), (), ()>::language_pack(language).to_owned(),
@@ -393,12 +394,58 @@ mod tests {
         );
         assert_eq!(invocations[0].args[0], "database");
         assert_eq!(invocations[0].args[1], "create");
-        assert_eq!(invocations[0].args[3], "--language");
-        assert_eq!(invocations[0].args[4], "python");
+        assert_eq!(invocations[0].args[4], "--language");
+        assert_eq!(invocations[0].args[5], "python");
         assert_eq!(invocations[1].args[0], "query");
         assert_eq!(invocations[1].args[1], "run");
         assert!(invocations[1].args.iter().any(|arg| arg == "--format=json"));
         assert!(invocations[1].args.iter().any(|arg| arg == "--output=-"));
+    }
+
+    #[test]
+    fn codeql_adapter_passes_overwrite_flag() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
+        let command_runner = MockCommandRunner::new();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: load_fixture("python.json").into_bytes(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(invocations.len(), 2);
+        assert!(invocations[0].args.iter().any(|arg| arg == "--overwrite"));
     }
 
     #[test]
