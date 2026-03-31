@@ -10,10 +10,16 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use kalos::adapters::tool_cache::codeql_bundle_manifest;
+use kalos::domains::diagnostics::builtin_metric_rules;
 
 #[test]
 fn kalos_init_creates_default_config_file() {
     let temp = TempDir::new().unwrap();
+    let metric_description = builtin_metric_rules()
+        .into_iter()
+        .find(|rule| rule.id.as_str() == "KAL-F001")
+        .map(|rule| rule.description)
+        .unwrap();
 
     Command::cargo_bin("kalos")
         .unwrap()
@@ -25,6 +31,7 @@ fn kalos_init_creates_default_config_file() {
 
     let config = fs::read_to_string(temp.path().join(".kalos.toml")).unwrap();
     assert!(config.contains("[score.weights]"));
+    assert!(config.contains(&format!("# {metric_description}")));
     assert!(config.contains("# [rules.KAL-F001]"));
     assert!(config.contains("# [rules.KAL-PAT003]"));
 }

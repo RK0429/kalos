@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::domains::diagnostics::RuleConfig;
+use crate::domains::diagnostics::{RuleConfig, builtin_metric_rules, builtin_pattern_rules};
 use crate::domains::metrics::ScoreWeights;
 use crate::domains::{FilePath, RuleId, Severity};
 use crate::platform::fs::path_to_forward_slashes;
@@ -449,6 +449,7 @@ impl ProjectConfig {
 
 pub fn render_default_config() -> String {
     let mut output = String::new();
+    let rule_descriptions = builtin_rule_descriptions();
 
     output.push_str("# kalos configuration\n");
     output.push_str(
@@ -459,6 +460,10 @@ pub fn render_default_config() -> String {
     output.push_str("# Metric rule thresholds (defaults shown as comments)\n");
 
     for (rule_id, threshold) in DEFAULT_METRIC_RULE_THRESHOLDS {
+        let description = rule_descriptions
+            .get(rule_id)
+            .expect("default metric rule must have a built-in description");
+        let _ = writeln!(output, "# {description}");
         let _ = writeln!(output, "# [rules.{rule_id}]");
         output.push_str("# enabled = true\n");
         let _ = writeln!(output, "# threshold = {threshold:.2}");
@@ -467,6 +472,10 @@ pub fn render_default_config() -> String {
 
     output.push_str("# Pattern rule overrides\n");
     for (rule_id, severity) in DEFAULT_PATTERN_RULE_SEVERITIES {
+        let description = rule_descriptions
+            .get(rule_id)
+            .expect("default pattern rule must have a built-in description");
+        let _ = writeln!(output, "# {description}");
         let _ = writeln!(output, "# [rules.{rule_id}]");
         output.push_str("# enabled = true\n");
         let _ = writeln!(output, "# severity = \"{}\"\n", severity.as_str());
@@ -484,6 +493,18 @@ pub fn render_default_config() -> String {
     );
 
     output
+}
+
+fn builtin_rule_descriptions() -> BTreeMap<String, String> {
+    builtin_metric_rules()
+        .into_iter()
+        .map(|rule| (rule.id.to_string(), rule.description))
+        .chain(
+            builtin_pattern_rules()
+                .into_iter()
+                .map(|rule| (rule.id.to_string(), rule.description)),
+        )
+        .collect()
 }
 
 fn parse_severity(rule_id: &RuleId, value: String) -> Result<Severity, ConfigError> {
@@ -688,6 +709,7 @@ mod tests {
         ConfigError, ConfigFile, Defaults, GlobPattern, ProjectConfig, ResolveOptions, RuleConfig,
         ScoreWeightsOverride, WorkspaceRoot,
     };
+    use crate::domains::diagnostics::{builtin_metric_rules, builtin_pattern_rules};
     use crate::domains::metrics::ScoreWeights;
     use crate::domains::{FilePath, RuleId, Severity};
 
@@ -1071,9 +1093,22 @@ severity = "fatal"
     #[test]
     fn render_default_config_lists_known_rules() {
         let rendered = super::render_default_config();
+        let metric_description = builtin_metric_rules()
+            .into_iter()
+            .find(|rule| rule.id == RuleId::from("KAL-F001"))
+            .map(|rule| rule.description)
+            .unwrap();
+        let pattern_description = builtin_pattern_rules()
+            .into_iter()
+            .find(|rule| rule.id == RuleId::from("KAL-PAT003"))
+            .map(|rule| rule.description)
+            .unwrap();
+
         assert!(rendered.contains("# [rules.KAL-F001]"));
+        assert!(rendered.contains(&format!("# {metric_description}")));
         assert!(rendered.contains("# threshold = 0.55"));
         assert!(rendered.contains("# [rules.KAL-PAT003]"));
+        assert!(rendered.contains(&format!("# {pattern_description}")));
         assert!(rendered.contains("project = 0.25"));
     }
 
