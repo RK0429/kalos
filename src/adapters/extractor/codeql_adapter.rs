@@ -79,12 +79,13 @@ pub enum CodeQlAdapterError {
         #[source]
         source: ProcessError,
     },
-    #[error("CodeQL `{stage}` failed for `{language}` with exit code {exit_code}: {stderr}")]
+    #[error("CodeQL `{stage}` failed for `{language}` (exit code {exit_code})\n\n{guidance}")]
     CommandFailed {
         stage: &'static str,
         language: String,
         exit_code: i32,
         stderr: String,
+        guidance: String,
     },
     #[error(transparent)]
     Normalize(#[from] NormalizationError),
@@ -219,11 +220,13 @@ where
                 source,
             })?;
         if output.exit_code != 0 {
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             return Err(CodeQlAdapterError::CommandFailed {
                 stage,
                 language: language_name(language).to_owned(),
                 exit_code: output.exit_code,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                guidance: format_command_guidance(&stderr),
+                stderr,
             });
         }
 
@@ -270,6 +273,26 @@ fn build_bqrs_decode_args(bqrs_path: &Path) -> Vec<String> {
     ]
 }
 
+fn format_command_guidance(stderr: &str) -> String {
+    let (cause, hint) = classify_codeql_error(stderr);
+    let detail = stderr.trim();
+    format!("  cause: {cause}\n  detail: {detail}\n\n  next steps:\n    - {hint}")
+}
+
+fn classify_codeql_error(stderr: &str) -> (&'static str, &'static str) {
+    if stderr.contains("does not exist") {
+        (
+            "the CodeQL database output directory does not exist",
+            "This is likely a kalos internal error. Please report an issue: https://github.com/RK0429/kalos/issues",
+        )
+    } else {
+        (
+            "CodeQL encountered an error during extraction",
+            "Verify that CodeQL supports your project's language and build configuration. If the problem persists, please report an issue: https://github.com/RK0429/kalos/issues",
+        )
+    }
+}
+
 fn language_name(language: Language) -> &'static str {
     match language {
         Language::Python => "python",
@@ -288,7 +311,9 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{CodeQlAdapter, CodeQlAdapterError, codeql_executable_path};
+    use super::{
+        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, format_command_guidance,
+    };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind};
     use crate::platform::fs::InMemoryFileSystem;
@@ -698,6 +723,7 @@ mod tests {
                 language,
                 exit_code,
                 stderr,
+                ..
             } => {
                 assert_eq!(stage, "database create");
                 assert_eq!(language, "typescript");
@@ -756,6 +782,52 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn command_failed_display_includes_next_steps_and_issue_url() {
+        let stderr = "query run failed".to_owned();
+        let error = CodeQlAdapterError::CommandFailed {
+            stage: "query run",
+            language: "rust".to_owned(),
+            exit_code: 2,
+            stderr: stderr.clone(),
+            guidance: format_command_guidance(&stderr),
+        };
+
+        let display = error.to_string();
+        assert!(display.contains("next steps"));
+        assert!(display.contains("https://github.com/RK0429/kalos/issues"));
+    }
+
+    #[test]
+    fn command_failed_display_classifies_directory_not_exist() {
+        let stderr = "database path does not exist".to_owned();
+        let error = CodeQlAdapterError::CommandFailed {
+            stage: "database create",
+            language: "python".to_owned(),
+            exit_code: 1,
+            stderr: stderr.clone(),
+            guidance: format_command_guidance(&stderr),
+        };
+
+        let display = error.to_string();
+        assert!(display.contains("the CodeQL database output directory does not exist"));
+    }
+
+    #[test]
+    fn command_failed_display_shows_generic_cause_for_unknown_errors() {
+        let stderr = "unexpected extractor failure".to_owned();
+        let error = CodeQlAdapterError::CommandFailed {
+            stage: "bqrs decode",
+            language: "go".to_owned(),
+            exit_code: 3,
+            stderr: stderr.clone(),
+            guidance: format_command_guidance(&stderr),
+        };
+
+        let display = error.to_string();
+        assert!(display.contains("CodeQL encountered an error during extraction"));
     }
 
     fn load_fixture(name: &str) -> String {
