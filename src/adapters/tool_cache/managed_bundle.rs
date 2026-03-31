@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
+use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use thiserror::Error;
@@ -111,8 +112,6 @@ impl ManagedToolCacheAdapter {
     }
 
     fn bootstrap_bundle(&self, bundle_dir: &Path) -> Result<(), ManagedToolCacheError> {
-        eprintln!("Downloading CodeQL bundle v{}...", self.manifest.version);
-
         let bundle_root =
             bundle_dir
                 .parent()
@@ -167,6 +166,11 @@ impl ManagedToolCacheAdapter {
                 url: self.manifest.download_url.clone(),
                 message: error.to_string(),
             })?;
+        let content_length = response
+            .headers()
+            .get("content-length")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
         let mut reader = response.into_body().into_reader();
         let mut writer = OpenOptions::new()
             .write(true)
@@ -177,6 +181,27 @@ impl ManagedToolCacheAdapter {
                 url: self.manifest.download_url.clone(),
                 message: error.to_string(),
             })?;
+
+        let progress_message = format!("Downloading CodeQL bundle v{}", self.manifest.version);
+        let progress_bar = if let Some(content_length) = content_length {
+            let progress_bar = ProgressBar::new(content_length);
+            progress_bar.set_style(
+                ProgressStyle::with_template(
+                    "{msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+                )
+                .expect("valid progress template"),
+            );
+            progress_bar
+        } else {
+            let progress_bar = ProgressBar::new_spinner();
+            progress_bar.enable_steady_tick(Duration::from_millis(100));
+            progress_bar.set_style(
+                ProgressStyle::with_template("{msg} {spinner} {bytes} ({bytes_per_sec})")
+                    .expect("valid progress template"),
+            );
+            progress_bar
+        };
+        progress_bar.set_message(progress_message);
 
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 16 * 1024];
@@ -191,6 +216,7 @@ impl ManagedToolCacheAdapter {
             if read == 0 {
                 break;
             }
+            progress_bar.inc(read as u64);
             hasher.update(&buffer[..read]);
             writer.write_all(&buffer[..read]).map_err(|error| {
                 ManagedToolCacheError::BootstrapDownload {
@@ -207,6 +233,10 @@ impl ManagedToolCacheAdapter {
                 url: self.manifest.download_url.clone(),
                 message: error.to_string(),
             })?;
+        progress_bar.finish_with_message(format!(
+            "Downloaded CodeQL bundle v{}",
+            self.manifest.version
+        ));
 
         let actual = format!("{:x}", hasher.finalize());
         if actual != self.manifest.sha256 {
@@ -675,6 +705,50 @@ mod tests {
     }
 
     #[test]
+    fn download_archive_reports_progress() {
+        let temp = TempDir::new().unwrap();
+        let archive_bytes = fixture_archive_bytes();
+        let checksum = format!("{:x}", Sha256::digest(&archive_bytes));
+        let (download_url, server) = spawn_http_server(archive_bytes);
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: checksum,
+                download_url,
+            },
+            temp.path(),
+        );
+        let archive_path = temp.path().join("codeql.tar.gz");
+
+        adapter.download_archive(&archive_path).unwrap();
+        server.join().unwrap();
+
+        assert!(archive_path.exists());
+    }
+
+    #[test]
+    fn download_archive_works_without_content_length() {
+        let temp = TempDir::new().unwrap();
+        let archive_bytes = fixture_archive_bytes();
+        let checksum = format!("{:x}", Sha256::digest(&archive_bytes));
+        let (download_url, server) = spawn_http_server_no_content_length(archive_bytes);
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: checksum,
+                download_url,
+            },
+            temp.path(),
+        );
+        let archive_path = temp.path().join("codeql.tar.gz");
+
+        adapter.download_archive(&archive_path).unwrap();
+        server.join().unwrap();
+
+        assert!(archive_path.exists());
+    }
+
+    #[test]
     fn resolve_bundle_reports_download_error_without_bootstrap_hint() {
         let temp = TempDir::new().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -802,6 +876,21 @@ mod tests {
                 body.len()
             )
             .unwrap();
+            stream.write_all(&body).unwrap();
+            stream.flush().unwrap();
+        });
+
+        (format!("http://{addr}/codeql.tgz"), handle)
+    }
+
+    fn spawn_http_server_no_content_length(body: Vec<u8>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n").unwrap();
             stream.write_all(&body).unwrap();
             stream.flush().unwrap();
         });

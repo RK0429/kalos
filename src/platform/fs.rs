@@ -145,12 +145,10 @@ impl FileSystem for InMemoryFileSystem {
     }
 
     fn create_dir_all(&self, path: &Path) -> Result<(), io::Error> {
-        let mut created_dirs = self.created_dirs.lock().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                "in-memory file system state should be available",
-            )
-        })?;
+        let mut created_dirs = self
+            .created_dirs
+            .lock()
+            .map_err(|_| io::Error::other("in-memory file system state should be available"))?;
         created_dirs.push(path.to_path_buf());
         Ok(())
     }

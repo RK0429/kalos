@@ -22,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 ordered-float = { version = "5", features = ["serde"] }
 sha2 = "0.10"
+indicatif = "0.17"
 ureq = "3"
 url = "2"
 flate2 = "1"
