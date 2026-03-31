@@ -66,6 +66,12 @@ pub enum CodeQlAdapterError {
     },
     #[error("failed to resolve CodeQL bundle: {message}")]
     ResolveBundle { message: String },
+    #[error("failed to create CodeQL database directory `{path}`: {source}")]
+    CreateDatabaseDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("failed to execute `{stage}` for `{language}`: {source}")]
     Process {
         stage: &'static str,
@@ -141,10 +147,21 @@ where
                 .join(".kalos")
                 .join("codeql")
                 .join(Self::language_pack(language).replace('/', "-"));
+            let database_dir = database_path
+                .parent()
+                .expect("database path should have parent")
+                .to_path_buf();
             let query_path = bundle.cache_path.join("queries").join(format!(
                 "extract-{}.ql",
                 Self::language_pack(language).replace('/', "-")
             ));
+
+            self.file_system
+                .create_dir_all(&database_dir)
+                .map_err(|source| CodeQlAdapterError::CreateDatabaseDir {
+                    path: database_dir.clone(),
+                    source,
+                })?;
 
             self.run_checked(
                 &codeql_program,
@@ -382,6 +399,55 @@ mod tests {
         assert_eq!(invocations[1].args[1], "run");
         assert!(invocations[1].args.iter().any(|arg| arg == "--format=json"));
         assert!(invocations[1].args.iter().any(|arg| arg == "--output=-"));
+    }
+
+    #[test]
+    fn codeql_adapter_creates_database_parent_directory() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
+        let file_system_for_assertion = file_system.clone();
+        let command_runner = MockCommandRunner::new();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: load_fixture("python.json").into_bytes(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner,
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        assert!(
+            file_system_for_assertion
+                .created_dirs()
+                .contains(&PathBuf::from("/workspace/.kalos/codeql"))
+        );
     }
 
     #[test]

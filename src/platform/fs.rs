@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub trait FileSystem: Send + Sync {
     fn read_dir_recursive(
@@ -10,6 +11,7 @@ pub trait FileSystem: Send + Sync {
         extensions: &[&str],
     ) -> Result<Vec<PathBuf>, io::Error>;
     fn read_to_string(&self, path: &Path) -> Result<String, io::Error>;
+    fn create_dir_all(&self, path: &Path) -> Result<(), io::Error>;
 }
 
 pub fn path_to_forward_slashes(path: &Path) -> String {
@@ -55,6 +57,10 @@ impl FileSystem for RealFileSystem {
     fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
         fs::read_to_string(path)
     }
+
+    fn create_dir_all(&self, path: &Path) -> Result<(), io::Error> {
+        fs::create_dir_all(path)
+    }
 }
 
 fn collect_dir_entries(
@@ -81,6 +87,7 @@ fn collect_dir_entries(
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryFileSystem {
     files: BTreeMap<PathBuf, String>,
+    created_dirs: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl InMemoryFileSystem {
@@ -90,6 +97,13 @@ impl InMemoryFileSystem {
 
     pub fn insert(&mut self, path: impl Into<PathBuf>, contents: impl Into<String>) {
         self.files.insert(path.into(), contents.into());
+    }
+
+    pub fn created_dirs(&self) -> Vec<PathBuf> {
+        self.created_dirs
+            .lock()
+            .expect("in-memory file system state should be available")
+            .clone()
     }
 }
 
@@ -128,6 +142,17 @@ impl FileSystem for InMemoryFileSystem {
                 format!("path `{}` does not exist", path.display()),
             )
         })
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<(), io::Error> {
+        let mut created_dirs = self.created_dirs.lock().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "in-memory file system state should be available",
+            )
+        })?;
+        created_dirs.push(path.to_path_buf());
+        Ok(())
     }
 }
 
@@ -195,5 +220,18 @@ mod tests {
         let contents = fs.read_to_string("/workspace/.gitignore".as_ref()).unwrap();
 
         assert_eq!(contents, "target/");
+    }
+
+    #[test]
+    fn in_memory_file_system_records_created_directories() {
+        let fs = InMemoryFileSystem::new();
+
+        fs.create_dir_all("/workspace/.kalos/codeql".as_ref())
+            .unwrap();
+
+        assert_eq!(
+            fs.created_dirs(),
+            vec![std::path::PathBuf::from("/workspace/.kalos/codeql")]
+        );
     }
 }
