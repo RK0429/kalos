@@ -98,6 +98,66 @@ fn kalos_init_overwrites_existing_config_when_confirmed_with_uppercase_y() {
 }
 
 #[test]
+fn kalos_init_creates_gitignore_with_kalos_entry() {
+    let temp = TempDir::new().unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "created .gitignore with .kalos/ entry",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_init_appends_kalos_entry_to_existing_gitignore() {
+    let temp = TempDir::new().unwrap();
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added .kalos/ to .gitignore"));
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        "target/\n\n.kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_init_skips_gitignore_when_kalos_entry_exists() {
+    let temp = TempDir::new().unwrap();
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n.kalos/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added .kalos/ to .gitignore").not())
+        .stdout(predicate::str::contains("created .gitignore with .kalos/ entry").not());
+
+    let gitignore = fs::read_to_string(gitignore_path).unwrap();
+    assert_eq!(gitignore, "target/\n.kalos/\n");
+    assert_eq!(gitignore.matches(".kalos/").count(), 1);
+}
+
+#[test]
 fn kalos_init_preserves_existing_config_on_empty_input() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");

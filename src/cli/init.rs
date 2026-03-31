@@ -7,6 +7,8 @@ use clap::Args;
 
 use crate::domains::config::{CONFIG_FILE_NAME, render_default_config};
 
+const KALOS_DIR_ENTRY: &str = ".kalos/";
+
 #[derive(Debug, Clone, Default, Args)]
 #[command(about = "create a default configuration file")]
 pub struct InitCommand {}
@@ -47,6 +49,37 @@ impl InitCommand {
         }
 
         println!("created {}", config_path.display());
+        if let Err(error) = ensure_gitignore_entry(&cwd) {
+            eprintln!("warning: failed to update .gitignore: {error}");
+        }
         ExitCode::SUCCESS
     }
+}
+
+fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<()> {
+    let gitignore_path = cwd.join(".gitignore");
+
+    if gitignore_path.exists() {
+        let contents = fs::read_to_string(&gitignore_path)?;
+        let has_kalos_entry = contents.lines().any(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with('#') && trimmed == KALOS_DIR_ENTRY
+        });
+
+        if has_kalos_entry {
+            return Ok(());
+        }
+
+        let mut updated_contents = contents;
+        updated_contents.push('\n');
+        updated_contents.push_str(KALOS_DIR_ENTRY);
+        updated_contents.push('\n');
+        fs::write(&gitignore_path, updated_contents)?;
+        println!("added {KALOS_DIR_ENTRY} to .gitignore");
+        return Ok(());
+    }
+
+    fs::write(&gitignore_path, format!("{KALOS_DIR_ENTRY}\n"))?;
+    println!("created .gitignore with {KALOS_DIR_ENTRY} entry");
+    Ok(())
 }
