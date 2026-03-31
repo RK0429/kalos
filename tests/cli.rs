@@ -453,6 +453,38 @@ fn kalos_check_diff_uses_cached_baseline_on_subsequent_run() {
     assert_eq!(parsed["summary_scope"], "whole_project");
 }
 
+#[test]
+fn kalos_check_emits_debug_logs_when_rust_log_is_set() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("RUST_LOG", "kalos=debug")
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("check config loaded"));
+}
+
+#[test]
+fn kalos_check_does_not_emit_debug_logs_by_default() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("RUST_LOG")
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("check config loaded").not());
+}
+
 fn seeded_workspace() -> TempDir {
     let temp = TempDir::new().unwrap();
     fs::create_dir_all(temp.path().join("src")).unwrap();

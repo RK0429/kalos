@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
+use tracing::debug;
 
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
@@ -111,6 +112,12 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
+        debug!(
+            workspace_root = %config.workspace_root.abs_path.display(),
+            target_count = config.analysis_targets.len(),
+            rule_count = config.rules.len(),
+            "check config loaded"
+        );
         let llm_adapter = if self.llm {
             match validate_llm_config() {
                 Ok(config) => Some(HttpLlmAdapter::new(config)),
@@ -165,6 +172,10 @@ impl CheckCommand {
             strict: self.strict,
             minimum_severity: self.severity.map(Severity::from),
         };
+        debug!(
+            mode = if self.diff.is_some() { "diff" } else { "full" },
+            "check analysis mode selected"
+        );
 
         let result = if let Some(base_ref) = &self.diff {
             let cache = match BaselineCacheAdapter::new() {
@@ -235,6 +246,11 @@ impl CheckCommand {
                 }
             }
         };
+        debug!(
+            exit_code = ?result.exit_code,
+            diagnostic_count = result.report.diagnostics.diagnostics.len(),
+            "check analysis completed"
+        );
         if let Some(plugin_host) = &plugin_host {
             emit_evaluation_warnings(plugin_host.evaluation_warnings());
         }

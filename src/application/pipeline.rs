@@ -5,6 +5,7 @@ use std::fmt;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tracing::debug;
 
 use crate::adapters::plugin::PluginHostError;
 use crate::adapters::plugin::wasm::FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET;
@@ -169,6 +170,11 @@ where
         plugin_host: Option<&mut dyn PluginPort<Error = PluginHostError>>,
         llm: Option<&dyn LlmPort<Error = Infallible>>,
     ) -> Result<PipelineResult, PipelineError<E::Error, D::Error>> {
+        debug!(
+            workspace_root = %config.workspace_root.abs_path.display(),
+            target_count = config.analysis_targets.len(),
+            "pipeline run started"
+        );
         let plugin_metrics =
             load_plugin_metrics_context(plugin_host.as_deref()).map_err(PipelineError::Plugin)?;
         let source_analysis = self.extract_and_resolve(
@@ -215,6 +221,10 @@ where
     where
         C::Error: fmt::Display,
     {
+        debug!(
+            head_tree_hash = %head_tree_hash,
+            "pipeline full workspace baseline cache active"
+        );
         let plugin_metrics =
             load_plugin_metrics_context(plugin_host.as_deref()).map_err(PipelineError::Plugin)?;
         let source_analysis = self.extract_and_resolve(
@@ -304,6 +314,11 @@ where
                 analysis_targets: config.analysis_targets.clone(),
             })
             .map_err(DiffPipelineError::DiffSource)?;
+        debug!(
+            base_ref = %diff_config.base_ref,
+            changed_file_count = snapshot.changed_files.len(),
+            "pipeline diff snapshot loaded"
+        );
         let fingerprint = build_baseline_fingerprint(config, &snapshot);
         let baseline = cache.load(&fingerprint).map_err(DiffPipelineError::Cache)?;
 
@@ -475,12 +490,22 @@ where
         config: &ProjectConfig,
         request: ExtractionRequest,
     ) -> Result<SourceAnalysis, PipelineError<E::Error, D::Error>> {
+        debug!(
+            workspace_root = %request.workspace_root.display(),
+            target_count = request.analysis_targets.len(),
+            "pipeline extraction started"
+        );
         let mut source_analysis = self
             .extractor
             .extract(&request)
             .map_err(PipelineError::Extraction)?;
         apply_dependency_resolution(&self.dependency_resolver, config, &mut source_analysis)
             .map_err(PipelineError::DependencyResolution)?;
+        debug!(
+            cpg_node_count = source_analysis.cpg.nodes.len(),
+            source_file_count = source_analysis.source_files.len(),
+            "pipeline extraction completed"
+        );
         Ok(source_analysis)
     }
 
@@ -558,7 +583,15 @@ fn analyze_source_analysis(
         plugin_definitions,
         plugin_host,
     )?;
+    debug!(
+        scope_count = all_scope_metrics(&metrics).count(),
+        "pipeline metrics computed"
+    );
     let diagnostics = generate_diagnostics(&source_analysis, &metrics, config);
+    debug!(
+        diagnostic_count = diagnostics.len(),
+        "pipeline diagnostics generated"
+    );
 
     Ok(AnalysisArtifacts {
         source_analysis,
