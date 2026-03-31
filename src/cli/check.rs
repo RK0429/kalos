@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -70,6 +71,13 @@ pub struct CheckCommand {
     pub llm: bool,
     #[arg(long, help = "treat warnings as errors")]
     pub strict: bool,
+    #[arg(
+        long,
+        short = 'o',
+        value_name = "path",
+        help = "write output to a file instead of stdout"
+    )]
+    pub output: Option<PathBuf>,
 }
 
 impl CheckCommand {
@@ -257,7 +265,7 @@ impl CheckCommand {
 
         let rendered = match result.report.render(
             result.llm_suggestions.as_ref(),
-            std::io::stdout().is_terminal(),
+            self.output.is_none() && std::io::stdout().is_terminal(),
         ) {
             Ok(rendered) => rendered,
             Err(error) => {
@@ -265,7 +273,27 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
-        println!("{rendered}");
+        if let Some(path) = &self.output {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                if let Err(error) = fs::create_dir_all(parent) {
+                    eprintln!(
+                        "failed to create output directory `{}`: {error}",
+                        parent.display()
+                    );
+                    return ExitCode::from(2);
+                }
+            }
+
+            if let Err(error) = fs::write(path, format!("{rendered}\n")) {
+                eprintln!("failed to write output file `{}`: {error}", path.display());
+                return ExitCode::from(2);
+            }
+        } else {
+            println!("{rendered}");
+        }
 
         map_exit_code(result.exit_code)
     }

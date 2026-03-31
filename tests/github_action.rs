@@ -219,7 +219,24 @@ fn run_check_captures_sarif_output_for_code_scanning_upload() {
         &fake_kalos,
         &trace_dir,
         r#"printf '%s\n' "$@" > "$TRACE_DIR/args.txt"
-cat <<'EOF'
+output_path=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output)
+      output_path="$2"
+      shift 2
+      ;;
+    --output=*)
+      output_path="${1#--output=}"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+mkdir -p "$(dirname "$output_path")"
+cat <<'EOF' > "$output_path"
 {"runs":[{"tool":{"driver":{"name":"kalos"}},"results":[]}]}
 EOF
 "#,
@@ -238,7 +255,15 @@ EOF
     let forwarded_args = fs::read_to_string(trace_dir.join("args.txt")).unwrap();
     assert_eq!(
         forwarded_args.lines().collect::<Vec<_>>(),
-        vec!["check", "--format", "sarif", "--level", "project"]
+        vec![
+            "check",
+            "--format",
+            "sarif",
+            "--output",
+            sarif_path.to_str().unwrap(),
+            "--level",
+            "project",
+        ]
     );
     assert_eq!(
         fs::read_to_string(&sarif_path).unwrap(),
@@ -266,7 +291,36 @@ fn run_check_rejects_explicit_format_when_code_scanning_capture_is_enabled() {
 
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("omit --format from args"), "{stderr}");
+    assert!(
+        stderr.contains("omit --format/--output from args"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_check_rejects_explicit_output_when_code_scanning_capture_is_enabled() {
+    let temp = TempDir::new().unwrap();
+    let fake_kalos = temp.path().join("kalos");
+    write_fake_kalos_binary(&fake_kalos, temp.path(), "exit 0\n");
+
+    let output = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("run-check")
+        .env("KALOS_ACTION_ARGS", "--output\ncustom.sarif")
+        .env(
+            "KALOS_ACTION_SARIF_FILE",
+            temp.path().join("results").join("kalos.sarif"),
+        )
+        .env("KALOS_BIN", &fake_kalos)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("omit --format/--output from args"),
+        "{stderr}"
+    );
 }
 
 #[test]

@@ -222,6 +222,80 @@ fn kalos_check_json_output_has_required_top_level_fields() {
 }
 
 #[test]
+fn kalos_check_output_flag_writes_json_to_file() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("result.json");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json", "--output"])
+        .arg(&output_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(rendered.ends_with('\n'), "expected trailing newline");
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert!(parsed.is_object(), "expected JSON object output");
+}
+
+#[test]
+fn kalos_check_output_flag_writes_sarif_to_file() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("result.sarif");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "sarif", "-o"])
+        .arg(&output_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(rendered.ends_with('\n'), "expected trailing newline");
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert!(parsed.get("version").is_some(), "missing SARIF version");
+    assert!(parsed.get("runs").is_some(), "missing SARIF runs");
+}
+
+#[test]
+fn kalos_check_output_flag_creates_parent_directories() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_path = temp
+        .path()
+        .join("nested")
+        .join("reports")
+        .join("result.json");
+
+    assert!(!output_path.parent().unwrap().exists());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json", "--output"])
+        .arg(&output_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    assert!(output_path.parent().unwrap().is_dir());
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(rendered.ends_with('\n'), "expected trailing newline");
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert!(parsed.is_object(), "expected JSON object output");
+}
+
+#[test]
 fn kalos_check_non_diff_full_workspace_writes_baseline() {
     let temp = seeded_git_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());

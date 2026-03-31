@@ -167,7 +167,7 @@ EOF
   )
 }
 
-args_contain_format_flag() {
+args_contain_conflicting_flag() {
   local pending_value=0
   local arg
 
@@ -181,6 +181,15 @@ args_contain_format_flag() {
         pending_value=1
         ;;
       --format=*)
+        return 0
+        ;;
+      --output|-o)
+        pending_value=1
+        ;;
+      -o?*)
+        return 0
+        ;;
+      --output=*)
         return 0
         ;;
     esac
@@ -204,13 +213,12 @@ EOF
   fi
 
   if [ -n "${KALOS_ACTION_SARIF_FILE:-}" ]; then
-    if args_contain_format_flag "${args[@]}"; then
-      echo "KALOS_ACTION_SARIF_FILE is set; omit --format from args and let the wrapper force SARIF output" >&2
+    if args_contain_conflicting_flag "${args[@]}"; then
+      echo "KALOS_ACTION_SARIF_FILE is set; omit --format/--output from args and let the wrapper manage SARIF output" >&2
       exit 1
     fi
 
-    mkdir -p "$(dirname "$KALOS_ACTION_SARIF_FILE")"
-    "$KALOS_BIN" check --format sarif "${args[@]}" >"$KALOS_ACTION_SARIF_FILE"
+    "$KALOS_BIN" check --format sarif --output "$KALOS_ACTION_SARIF_FILE" "${args[@]}"
   elif [ "${#args[@]}" -eq 0 ]; then
     "$KALOS_BIN" check
   else

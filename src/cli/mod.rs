@@ -55,6 +55,7 @@ mod tests {
         assert!(!command.targets_explicitly_specified());
         assert_eq!(command.format, OutputFormat::Human);
         assert_eq!(command.level, RequestedLevel::All);
+        assert_eq!(command.output, None);
     }
 
     #[test]
@@ -82,6 +83,8 @@ mod tests {
             "src",
             "--format",
             "json",
+            "--output",
+            "result.json",
             "--level",
             "module",
             "--config",
@@ -104,6 +107,10 @@ mod tests {
         };
 
         assert_eq!(command.format, OutputFormat::Json);
+        assert_eq!(
+            command.output,
+            Some(std::path::PathBuf::from("result.json"))
+        );
         assert_eq!(command.level, RequestedLevel::Module);
         assert_eq!(
             command.config,
@@ -117,6 +124,19 @@ mod tests {
         assert_eq!(command.diff.as_deref(), Some("origin/main"));
         assert!(command.llm);
         assert!(command.strict);
+    }
+
+    #[test]
+    fn check_parses_output_short_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "-o", "report.sarif"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert_eq!(
+            command.output,
+            Some(std::path::PathBuf::from("report.sarif"))
+        );
     }
 
     #[test]
@@ -150,6 +170,7 @@ mod tests {
         assert!(help.contains("git base ref for differential analysis"));
         assert!(help.contains("enable llm-assisted analysis"));
         assert!(help.contains("treat warnings as errors"));
+        assert!(help.contains("write output to a file instead of stdout"));
     }
 
     #[test]
