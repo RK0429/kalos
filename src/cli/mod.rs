@@ -10,7 +10,7 @@ use self::init::InitCommand;
 #[command(
     name = "kalos",
     version,
-    about = "Kalos CLI",
+    about = "cpg-based code quality analysis tool",
     long_about = None,
     subcommand_required = true,
     arg_required_else_help = true
@@ -36,7 +36,7 @@ pub fn run() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{Parser, error::ErrorKind};
 
     use super::check::{MinimumSeverity, OutputFormat, RequestedLevel};
     use super::{Cli, Command};
@@ -123,5 +123,45 @@ mod tests {
     fn init_parses() {
         let cli = Cli::try_parse_from(["kalos", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Init(_)));
+    }
+
+    #[test]
+    fn root_help_shows_tool_about_text() {
+        let help = render_help(["kalos", "--help"]);
+
+        assert!(help.contains("cpg-based code quality analysis tool"));
+    }
+
+    #[test]
+    fn check_help_shows_about_and_argument_help_text() {
+        let help = render_help(["kalos", "check", "--help"]);
+
+        assert!(help.contains("run code quality analysis"));
+        assert!(
+            help.contains("target files or directories to analyze (defaults to workspace root)")
+        );
+        assert!(help.contains("output format"));
+        assert!(help.contains("[default: human]"));
+        assert!(help.contains("analysis granularity level"));
+        assert!(help.contains("[default: all]"));
+        assert!(help.contains("path to configuration file (.kalos.toml)"));
+        assert!(help.contains("glob patterns to exclude from analysis (repeatable)"));
+        assert!(help.contains("minimum severity threshold for diagnostics"));
+        assert!(help.contains("git base ref for differential analysis"));
+        assert!(help.contains("enable llm-assisted analysis"));
+        assert!(help.contains("treat warnings as errors"));
+    }
+
+    #[test]
+    fn init_help_shows_about_text() {
+        let help = render_help(["kalos", "init", "--help"]);
+
+        assert!(help.contains("create a default configuration file"));
+    }
+
+    fn render_help<const N: usize>(args: [&str; N]) -> String {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        error.to_string()
     }
 }

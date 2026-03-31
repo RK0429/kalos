@@ -29,24 +29,45 @@ use crate::platform::process::SystemCommandRunner;
 use crate::ports::PluginPort;
 
 #[derive(Debug, Clone, Args)]
+#[command(about = "run code quality analysis")]
 pub struct CheckCommand {
-    #[arg(value_name = "path")]
+    #[arg(
+        value_name = "path",
+        help = "target files or directories to analyze (defaults to workspace root)"
+    )]
     pub paths: Vec<PathBuf>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human, help = "output format")]
     pub format: OutputFormat,
-    #[arg(long, value_enum, default_value_t = RequestedLevel::All)]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RequestedLevel::All,
+        help = "analysis granularity level"
+    )]
     pub level: RequestedLevel,
-    #[arg(long, value_name = "path")]
+    #[arg(
+        long,
+        value_name = "path",
+        help = "path to configuration file (.kalos.toml)"
+    )]
     pub config: Option<PathBuf>,
-    #[arg(long, value_name = "pattern")]
+    #[arg(
+        long,
+        value_name = "pattern",
+        help = "glob patterns to exclude from analysis (repeatable)"
+    )]
     pub exclude: Vec<String>,
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, help = "minimum severity threshold for diagnostics")]
     pub severity: Option<MinimumSeverity>,
-    #[arg(long, value_name = "base-ref")]
+    #[arg(
+        long,
+        value_name = "base-ref",
+        help = "git base ref for differential analysis"
+    )]
     pub diff: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "enable llm-assisted analysis")]
     pub llm: bool,
-    #[arg(long)]
+    #[arg(long, help = "treat warnings as errors")]
     pub strict: bool,
 }
 

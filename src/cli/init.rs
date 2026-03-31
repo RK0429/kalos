@@ -8,6 +8,7 @@ use clap::Args;
 use crate::domains::config::{CONFIG_FILE_NAME, render_default_config};
 
 #[derive(Debug, Clone, Default, Args)]
+#[command(about = "create a default configuration file")]
 pub struct InitCommand {}
 
 impl InitCommand {
