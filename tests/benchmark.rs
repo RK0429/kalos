@@ -363,11 +363,18 @@ fn enqueue_codeql_results(command_runner: &MockCommandRunner, languages: &[Langu
             .expect("database create mock should queue successfully");
         command_runner
             .push_result(Ok(ProcessOutput {
-                stdout: load_fixture(language).into_bytes(),
+                stdout: Vec::new(),
                 stderr: Vec::new(),
                 exit_code: 0,
             }))
             .expect("query run mock should queue successfully");
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: load_fixture(language).into_bytes(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .expect("bqrs decode mock should queue successfully");
     }
 }
 

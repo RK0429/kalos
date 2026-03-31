@@ -52,6 +52,13 @@ fn codeql_adapter_with_stub_dependency_resolver_emits_req_func_007_warning() {
         .unwrap();
     command_runner
         .push_result(Ok(ProcessOutput {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        }))
+        .unwrap();
+    command_runner
+        .push_result(Ok(ProcessOutput {
             stdout: load_fixture("rust.json").into_bytes(),
             stderr: Vec::new(),
             exit_code: 0,
@@ -124,6 +131,13 @@ fn analysis_pipeline_runs_end_to_end_with_codeql_adapter_and_stub_dependency_res
         "pub fn placeholder() -> i32 { 1 }\n",
     );
     let command_runner = MockCommandRunner::new();
+    command_runner
+        .push_result(Ok(ProcessOutput {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        }))
+        .unwrap();
     command_runner
         .push_result(Ok(ProcessOutput {
             stdout: Vec::new(),

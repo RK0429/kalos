@@ -398,7 +398,7 @@ fn codeql_executable_path(bundle_dir: &Path) -> PathBuf {
 #[cfg(unix)]
 fn write_fake_codeql_executable(path: &Path, fixture: &str) {
     let script = format!(
-        "#!/bin/sh\nif [ \"$1\" = \"database\" ] && [ \"$2\" = \"create\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"query\" ] && [ \"$2\" = \"run\" ]; then\n  cat <<'EOF'\n{fixture}\nEOF\n  exit 0\nfi\necho \"unexpected invocation: $@\" >&2\nexit 1\n"
+        "#!/bin/sh\nif [ \"$1\" = \"database\" ] && [ \"$2\" = \"create\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"query\" ] && [ \"$2\" = \"run\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"bqrs\" ] && [ \"$2\" = \"decode\" ]; then\n  cat <<'EOF'\n{fixture}\nEOF\n  exit 0\nfi\necho \"unexpected invocation: $@\" >&2\nexit 1\n"
     );
     fs::write(path, script).unwrap();
     let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -410,7 +410,7 @@ fn write_fake_codeql_executable(path: &Path, fixture: &str) {
 fn write_fake_codeql_executable(path: &Path, fixture: &str) {
     let source_path = path.with_file_name("codeql_fixture.rs");
     let source = format!(
-        "use std::env;\nuse std::io::Write;\n\nfn main() {{\n    let args = env::args().skip(1).collect::<Vec<_>>();\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"database\" && action == \"create\") {{\n        return;\n    }}\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"query\" && action == \"run\") {{\n        print!({fixture:?});\n        return;\n    }}\n    let _ = writeln!(std::io::stderr(), \"unexpected invocation: {{}}\", args.join(\" \"));\n    std::process::exit(1);\n}}\n"
+        "use std::env;\nuse std::io::Write;\n\nfn main() {{\n    let args = env::args().skip(1).collect::<Vec<_>>();\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"database\" && action == \"create\") {{\n        return;\n    }}\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"query\" && action == \"run\") {{\n        return;\n    }}\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"bqrs\" && action == \"decode\") {{\n        print!({fixture:?});\n        return;\n    }}\n    let _ = writeln!(std::io::stderr(), \"unexpected invocation: {{}}\", args.join(\" \"));\n    std::process::exit(1);\n}}\n"
     );
     fs::write(&source_path, source).unwrap();
     let status = StdCommand::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))

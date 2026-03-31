@@ -73,6 +73,13 @@ fn run_pipeline_hash(
         .unwrap();
     command_runner
         .push_result(Ok(ProcessOutput {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        }))
+        .unwrap();
+    command_runner
+        .push_result(Ok(ProcessOutput {
             stdout: fixture.as_bytes().to_vec(),
             stderr: Vec::new(),
             exit_code: 0,
