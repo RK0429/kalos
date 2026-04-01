@@ -59,7 +59,11 @@ pub struct CheckCommand {
         help = "glob patterns to exclude from analysis (repeatable)"
     )]
     pub exclude: Vec<String>,
-    #[arg(long, value_enum, help = "minimum severity threshold for diagnostics")]
+    #[arg(
+        long,
+        value_enum,
+        help = "minimum severity threshold for diagnostics (omit to show all)"
+    )]
     pub severity: Option<MinimumSeverity>,
     #[arg(
         long,

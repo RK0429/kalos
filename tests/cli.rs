@@ -192,6 +192,18 @@ fn kalos_root_help_uses_uppercase_cpg_in_about_text() {
 }
 
 #[test]
+fn kalos_check_help_describes_omitted_severity_behavior() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "minimum severity threshold for diagnostics (omit to show all)",
+        ));
+}
+
+#[test]
 fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());

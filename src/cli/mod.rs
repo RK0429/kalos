@@ -166,7 +166,7 @@ mod tests {
         assert!(help.contains("[default: all]"));
         assert!(help.contains("path to configuration file (.kalos.toml)"));
         assert!(help.contains("glob patterns to exclude from analysis (repeatable)"));
-        assert!(help.contains("minimum severity threshold for diagnostics"));
+        assert!(help.contains("minimum severity threshold for diagnostics (omit to show all)"));
         assert!(help.contains("git base ref for differential analysis"));
         assert!(help.contains("enable llm-assisted analysis"));
         assert!(help.contains("treat warnings as errors"));
