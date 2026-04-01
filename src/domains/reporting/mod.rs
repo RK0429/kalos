@@ -16,6 +16,7 @@ use crate::domains::{AnalysisLevel, FilePath, ScopeId, Severity};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportMetadata {
     pub analysis_targets: Vec<FilePath>,
+    pub file_count: usize,
     pub tool_version: String,
     pub schema_version: String,
 }
@@ -23,11 +24,13 @@ pub struct ReportMetadata {
 impl ReportMetadata {
     pub fn new(
         analysis_targets: Vec<FilePath>,
+        file_count: usize,
         tool_version: impl Into<String>,
         schema_version: impl Into<String>,
     ) -> Self {
         Self {
             analysis_targets,
+            file_count,
             tool_version: tool_version.into(),
             schema_version: schema_version.into(),
         }
@@ -191,6 +194,22 @@ impl AnalysisReport {
     ) -> String {
         let mut output = String::new();
         let diagnostics = self.visible_diagnostics();
+        let analysis_targets = self
+            .metadata
+            .analysis_targets
+            .iter()
+            .map(FilePath::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let _ = writeln!(
+            output,
+            "Analyzed {} files in {}",
+            self.metadata.file_count, analysis_targets
+        );
+        if !diagnostics.is_empty() {
+            output.push('\n');
+        }
 
         for diagnostic in diagnostics {
             let _ = writeln!(
@@ -1011,7 +1030,7 @@ mod tests {
     #[test]
     fn strict_exit_code_uses_unfiltered_summary_not_visible_diagnostics() {
         let report = AnalysisReport::project(
-            ReportMetadata::new(vec![FilePath::from(".")], "0.1.0", "1.0.0"),
+            ReportMetadata::new(vec![FilePath::from(".")], 10, "0.1.0", "1.0.0"),
             &fixture_metrics(),
             vec![fixture_warning_diagnostic()],
             DiagnosticsScope::WholeProject,
@@ -1035,7 +1054,7 @@ mod tests {
     #[test]
     fn project_report_prefers_summary_override_when_provided() {
         let report = AnalysisReport::project(
-            ReportMetadata::new(vec![FilePath::from(".")], "0.1.0", "1.0.0"),
+            ReportMetadata::new(vec![FilePath::from(".")], 10, "0.1.0", "1.0.0"),
             &fixture_metrics(),
             vec![fixture_warning_diagnostic()],
             DiagnosticsScope::AffectedOnly,
@@ -1182,6 +1201,7 @@ mod tests {
         let report = AnalysisReport::project_with_metric_catalog(
             ReportMetadata::new(
                 vec![FilePath::from("."), FilePath::from("src")],
+                10,
                 "0.1.0",
                 "1.0.0",
             ),
@@ -1229,6 +1249,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn human_output_starts_with_analyzed_summary_line() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+            },
+            None,
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.starts_with("Analyzed 42 files in src/\n\n"));
+    }
+
+    #[test]
+    fn human_output_summary_line_with_multiple_targets() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(
+                vec![FilePath::from("src/"), FilePath::from("tests/")],
+                42,
+                "0.1.0",
+                "1.0.0",
+            ),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+            },
+            None,
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.starts_with("Analyzed 42 files in src/, tests/\n\n"));
+    }
+
     fn project_report(
         requested_level: RequestedLevel,
         minimum_severity: Option<Severity>,
@@ -1238,6 +1305,7 @@ mod tests {
         AnalysisReport::project(
             ReportMetadata::new(
                 vec![FilePath::from("."), FilePath::from("src")],
+                10,
                 "0.1.0",
                 "1.0.0",
             ),

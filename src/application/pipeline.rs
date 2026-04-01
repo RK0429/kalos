@@ -194,6 +194,7 @@ where
         .map_err(PipelineError::Plugin)?;
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
+        let file_count = artifacts.source_analysis.source_files.len();
         Ok(finalize_result(
             assemble_report(
                 config,
@@ -202,6 +203,7 @@ where
                 artifacts.diagnostics,
                 DiagnosticsScope::WholeProject,
                 view_options,
+                file_count,
                 None,
             ),
             llm_suggestions,
@@ -248,6 +250,7 @@ where
         let scope_metrics = scope_metrics_map(&artifacts.metrics);
         let diagnostic_snapshots = diagnostic_snapshots_from_diagnostics(&artifacts.diagnostics);
         let overall_score = artifacts.metrics.overall_score.clone();
+        let file_count = artifacts.source_analysis.source_files.len();
         let report = assemble_report(
             config,
             artifacts.metrics,
@@ -255,6 +258,7 @@ where
             artifacts.diagnostics,
             DiagnosticsScope::WholeProject,
             view_options,
+            file_count,
             None,
         );
         let exit_code = report.diagnostics.determine_exit_code(report.view.strict);
@@ -352,6 +356,7 @@ where
                     Vec::new(),
                     DiagnosticsScope::AffectedOnly,
                     view_options,
+                    snapshot.changed_files.len(),
                     summary_override,
                 ),
                 None,
@@ -463,6 +468,7 @@ where
         let overall_score = merged_metrics.overall_score.clone();
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &affected_diagnostics, &diff_source_analysis);
+        let file_count = diff_source_analysis.source_files.len();
         let report = assemble_report(
             config,
             merged_metrics,
@@ -470,6 +476,7 @@ where
             affected_diagnostics,
             DiagnosticsScope::AffectedOnly,
             view_options,
+            file_count,
             summary_override,
         );
         cache
@@ -553,6 +560,7 @@ where
         cache
             .store(&baseline)
             .map_err(FullRunWithCacheError::Cache)?;
+        let file_count = artifacts.source_analysis.source_files.len();
 
         Ok(finalize_result(
             assemble_report(
@@ -562,6 +570,7 @@ where
                 artifacts.diagnostics,
                 DiagnosticsScope::WholeProject,
                 view_options,
+                file_count,
                 None,
             ),
             llm_suggestions,
@@ -712,11 +721,13 @@ fn assemble_report(
     diagnostics: Vec<Diagnostic>,
     diagnostics_scope: DiagnosticsScope,
     view_options: ReportViewOptions,
+    file_count: usize,
     summary_override: Option<DiagnosticSummary>,
 ) -> AnalysisReport {
     AnalysisReport::project_with_metric_catalog(
         ReportMetadata::new(
             config.analysis_targets.clone(),
+            file_count,
             env!("CARGO_PKG_VERSION"),
             "1.0.0",
         ),
@@ -1790,6 +1801,7 @@ mod tests {
                 strict: true,
                 minimum_severity: None,
             },
+            1,
             None,
         );
 
