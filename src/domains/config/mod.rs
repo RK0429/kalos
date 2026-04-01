@@ -164,7 +164,7 @@ pub enum ConfigError {
         #[source]
         source: io::Error,
     },
-    #[error("failed to read config file `{path}`: {source}")]
+    #[error("failed to load config file `{path}`: {source}")]
     ReadConfig {
         path: PathBuf,
         #[source]
@@ -267,6 +267,12 @@ impl ProjectConfig {
     ) -> Result<DiscoveredWorkspace, ConfigError> {
         if let Some(config_path) = &options.config_path {
             let config_path = absolute_from_base(&options.cwd, config_path);
+            if let Err(source) = fs::metadata(&config_path) {
+                return Err(ConfigError::ReadConfig {
+                    path: config_path,
+                    source,
+                });
+            }
             let parent = config_path
                 .parent()
                 .ok_or_else(|| ConfigError::MissingConfigParent {
@@ -321,7 +327,24 @@ impl ProjectConfig {
         config_file: Option<&ConfigFile>,
         defaults: &Defaults,
     ) -> Result<Self, ConfigError> {
-        let workspace_root = Self::discover_workspace(options)?.workspace_root;
+        let workspace_root = if let Some(config_file) = config_file {
+            let config_path = options
+                .config_path
+                .as_ref()
+                .map(|path| absolute_from_base(&options.cwd, path))
+                .unwrap_or_else(|| config_file.path.clone());
+            let parent = config_path
+                .parent()
+                .ok_or_else(|| ConfigError::MissingConfigParent {
+                    path: config_path.clone(),
+                })?;
+
+            WorkspaceRoot {
+                abs_path: canonicalize_workspace_root(parent)?,
+            }
+        } else {
+            Self::discover_workspace(options)?.workspace_root
+        };
         Self::resolve_with_workspace(workspace_root, options, config_file, defaults)
     }
 
@@ -738,6 +761,33 @@ mod tests {
         assert_eq!(
             discovery.config_path,
             Some(fs::canonicalize(&config_path).unwrap())
+        );
+    }
+
+    #[test]
+    fn discover_workspace_returns_read_error_for_nonexistent_config_path() {
+        let temp = TempDir::new().unwrap();
+        let options = ResolveOptions {
+            cwd: temp.path().to_path_buf(),
+            config_path: Some(PathBuf::from("/nonexistent/path/.kalos.toml")),
+            analysis_targets: Vec::new(),
+            targets_explicitly_specified: false,
+            exclude_patterns: Vec::new(),
+        };
+
+        let error = ProjectConfig::discover_workspace(&options).unwrap_err();
+        assert!(
+            matches!(error, ConfigError::ReadConfig { .. }),
+            "expected ReadConfig, got: {error}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("failed to load config file"),
+            "expected 'failed to load config file' in: {message}"
+        );
+        assert!(
+            message.contains("No such file or directory"),
+            "expected OS error text in: {message}"
         );
     }
 

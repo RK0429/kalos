@@ -425,6 +425,22 @@ fn kalos_check_non_diff_then_diff_reuses_baseline() {
 }
 
 #[test]
+fn kalos_check_missing_config_reports_config_load_error() {
+    let temp = TempDir::new().unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--config", "/nonexistent/path"])
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("failed to load config file")
+                .and(predicate::str::contains("No such file or directory")),
+        );
+}
+
+#[test]
 fn kalos_check_llm_missing_api_key_fails_preflight() {
     let temp = seeded_workspace();
 
