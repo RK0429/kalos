@@ -10,7 +10,7 @@ use self::init::InitCommand;
 #[command(
     name = "kalos",
     version,
-    about = "cpg-based code quality analysis tool",
+    about = "CPG-based code quality analysis tool",
     long_about = None,
     subcommand_required = true,
     arg_required_else_help = true
@@ -149,7 +149,7 @@ mod tests {
     fn root_help_shows_tool_about_text() {
         let help = render_help(["kalos", "--help"]);
 
-        assert!(help.contains("cpg-based code quality analysis tool"));
+        assert!(help.contains("CPG-based code quality analysis tool"));
     }
 
     #[test]

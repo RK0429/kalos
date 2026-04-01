@@ -179,6 +179,19 @@ fn kalos_init_preserves_existing_config_on_empty_input() {
 }
 
 #[test]
+fn kalos_root_help_uses_uppercase_cpg_in_about_text() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "CPG-based code quality analysis tool",
+        ))
+        .stdout(predicate::str::contains("cpg-based code quality analysis tool").not());
+}
+
+#[test]
 fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
