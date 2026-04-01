@@ -280,7 +280,12 @@ fn format_command_guidance(stderr: &str) -> String {
 }
 
 fn classify_codeql_error(stderr: &str) -> (&'static str, &'static str) {
-    if stderr.contains("does not exist") {
+    if stderr.contains(".ql does not exist") {
+        (
+            "a required CodeQL query file is missing (the bundle may be incomplete)",
+            "The CodeQL bundle may be incomplete. Try deleting the cache directory and re-running:\n        rm -rf ~/.cache/kalos/codeql/\n        kalos check\n    - If the issue persists, please report: https://github.com/RK0429/kalos/issues",
+        )
+    } else if stderr.contains("does not exist") {
         (
             "the CodeQL database output directory does not exist",
             "This is likely a kalos internal error. Please report an issue: https://github.com/RK0429/kalos/issues",
@@ -813,6 +818,56 @@ mod tests {
 
         let display = error.to_string();
         assert!(display.contains("the CodeQL database output directory does not exist"));
+    }
+
+    #[test]
+    fn classify_codeql_error_detects_missing_query_file() {
+        let stderr = "A fatal error occurred: /Users/test/.cache/kalos/codeql/2.25.1/queries/extract-rust.ql does not exist.".to_owned();
+        let error = CodeQlAdapterError::CommandFailed {
+            stage: "query run",
+            language: "rust".to_owned(),
+            exit_code: 2,
+            stderr: stderr.clone(),
+            guidance: format_command_guidance(&stderr),
+        };
+
+        let display = error.to_string();
+        assert!(display.contains("bundle may be incomplete"));
+        assert!(display.contains("rm -rf ~/.cache/kalos/codeql/"));
+        assert!(display.contains("kalos check"));
+        assert!(display.contains("https://github.com/RK0429/kalos/issues"));
+    }
+
+    #[test]
+    fn classify_codeql_error_distinguishes_query_file_from_directory_missing() {
+        let directory_missing_stderr = "database path does not exist".to_owned();
+        let directory_missing_error = CodeQlAdapterError::CommandFailed {
+            stage: "database create",
+            language: "python".to_owned(),
+            exit_code: 1,
+            stderr: directory_missing_stderr.clone(),
+            guidance: format_command_guidance(&directory_missing_stderr),
+        };
+
+        let directory_missing_display = directory_missing_error.to_string();
+        assert!(
+            directory_missing_display
+                .contains("the CodeQL database output directory does not exist")
+        );
+        assert!(!directory_missing_display.contains("bundle may be incomplete"));
+
+        let query_missing_stderr = "/path/to/extract-python.ql does not exist".to_owned();
+        let query_missing_error = CodeQlAdapterError::CommandFailed {
+            stage: "query run",
+            language: "python".to_owned(),
+            exit_code: 1,
+            stderr: query_missing_stderr.clone(),
+            guidance: format_command_guidance(&query_missing_stderr),
+        };
+
+        let query_missing_display = query_missing_error.to_string();
+        assert!(query_missing_display.contains("a required CodeQL query file is missing"));
+        assert!(query_missing_display.contains("bundle may be incomplete"));
     }
 
     #[test]
