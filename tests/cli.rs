@@ -450,19 +450,82 @@ fn kalos_check_non_diff_then_diff_reuses_baseline() {
 }
 
 #[test]
-fn kalos_check_missing_config_reports_config_load_error() {
+fn kalos_check_missing_config_json_error_output_is_structured() {
     let temp = TempDir::new().unwrap();
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--format", "json", "--config", "/nonexistent/path"])
+        .assert()
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("failed to load config file")
+    );
+    assert!(
+        parsed["cause"]
+            .as_str()
+            .unwrap()
+            .contains("No such file or directory")
+    );
+}
+
+#[test]
+fn kalos_check_missing_config_sarif_error_output_is_structured() {
+    let temp = TempDir::new().unwrap();
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--format",
+            "sarif",
+            "--config",
+            "/nonexistent/path",
+        ])
+        .assert()
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("failed to load config file")
+    );
+    assert!(
+        parsed["cause"]
+            .as_str()
+            .unwrap()
+            .contains("No such file or directory")
+    );
+}
+
+#[test]
+fn kalos_check_missing_config_human_error_output_remains_plain_text() {
+    let temp = TempDir::new().unwrap();
+
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .args(["check", "--config", "/nonexistent/path"])
         .assert()
-        .code(2)
-        .stderr(
-            predicate::str::contains("failed to load config file")
-                .and(predicate::str::contains("No such file or directory")),
-        );
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(serde_json::from_str::<Value>(&stderr).is_err());
+    assert!(stderr.contains("failed to load config file"));
+    assert!(stderr.contains("No such file or directory"));
 }
 
 #[test]

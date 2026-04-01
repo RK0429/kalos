@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::error::Error as _;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
+use serde_json::json;
 use tracing::debug;
 
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
@@ -111,7 +113,8 @@ impl CheckCommand {
         let cwd = match env::current_dir() {
             Ok(cwd) => cwd,
             Err(error) => {
-                eprintln!("failed to determine current directory: {error}");
+                let message = format!("failed to determine current directory: {error}");
+                emit_error(self.format, &message, Some(&error));
                 return ExitCode::from(2);
             }
         };
@@ -120,7 +123,8 @@ impl CheckCommand {
         let config = match ProjectConfig::load_and_resolve(&options, &Defaults::default()) {
             Ok(config) => config,
             Err(error) => {
-                eprintln!("{error}");
+                let message = error.to_string();
+                emit_error(self.format, &message, error.source());
                 return ExitCode::from(2);
             }
         };
@@ -134,7 +138,8 @@ impl CheckCommand {
             match validate_llm_config() {
                 Ok(config) => Some(HttpLlmAdapter::new(config)),
                 Err(error) => {
-                    eprintln!("{error}");
+                    let message = error.to_string();
+                    emit_error(self.format, &message, error.source());
                     return ExitCode::from(2);
                 }
             }
@@ -145,7 +150,8 @@ impl CheckCommand {
         let manifest = match codeql_bundle_manifest() {
             Ok(manifest) => manifest,
             Err(error) => {
-                eprintln!("{error}");
+                let message = error.to_string();
+                emit_error(self.format, &message, error.source());
                 return ExitCode::from(2);
             }
         };
@@ -193,7 +199,8 @@ impl CheckCommand {
             let cache = match BaselineCacheAdapter::new() {
                 Ok(cache) => cache,
                 Err(error) => {
-                    eprintln!("{error}");
+                    let message = error.to_string();
+                    emit_error(self.format, &message, error.source());
                     return ExitCode::from(2);
                 }
             };
@@ -215,7 +222,8 @@ impl CheckCommand {
                     if let Some(plugin_host) = &plugin_host {
                         emit_evaluation_warnings(plugin_host.evaluation_warnings());
                     }
-                    eprintln!("{error}");
+                    let message = error.to_string();
+                    emit_error(self.format, &message, error.source());
                     return ExitCode::from(2);
                 }
             }
@@ -253,7 +261,8 @@ impl CheckCommand {
                     if let Some(plugin_host) = &plugin_host {
                         emit_evaluation_warnings(plugin_host.evaluation_warnings());
                     }
-                    eprintln!("{error}");
+                    let message = error.to_string();
+                    emit_error(self.format, &message, error.source());
                     return ExitCode::from(2);
                 }
             }
@@ -273,7 +282,8 @@ impl CheckCommand {
         ) {
             Ok(rendered) => rendered,
             Err(error) => {
-                eprintln!("{error}");
+                let message = error.to_string();
+                emit_error(self.format, &message, error.source());
                 return ExitCode::from(2);
             }
         };
@@ -283,16 +293,18 @@ impl CheckCommand {
                 .filter(|parent| !parent.as_os_str().is_empty())
             {
                 if let Err(error) = fs::create_dir_all(parent) {
-                    eprintln!(
+                    let message = format!(
                         "failed to create output directory `{}`: {error}",
                         parent.display()
                     );
+                    emit_error(self.format, &message, Some(&error));
                     return ExitCode::from(2);
                 }
             }
 
             if let Err(error) = fs::write(path, format!("{rendered}\n")) {
-                eprintln!("failed to write output file `{}`: {error}", path.display());
+                let message = format!("failed to write output file `{}`: {error}", path.display());
+                emit_error(self.format, &message, Some(&error));
                 return ExitCode::from(2);
             }
         } else {
@@ -324,6 +336,26 @@ fn builtin_metric_ids() -> BTreeSet<MetricId> {
         .into_iter()
         .map(|definition| definition.id().clone())
         .collect()
+}
+
+fn emit_error(
+    format: OutputFormat,
+    message: &str,
+    source: Option<&(dyn std::error::Error + 'static)>,
+) {
+    match format {
+        OutputFormat::Human => eprintln!("{message}"),
+        OutputFormat::Json | OutputFormat::Sarif => {
+            let mut payload = json!({
+                "error": true,
+                "message": message,
+            });
+            if let Some(source) = source {
+                payload["cause"] = json!(source.to_string());
+            }
+            eprintln!("{payload}");
+        }
+    }
 }
 
 fn emit_module_load_warnings(warnings: &[ModuleLoadWarning]) {
