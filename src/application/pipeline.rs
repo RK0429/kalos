@@ -714,6 +714,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assemble_report(
     config: &ProjectConfig,
     metrics: AnalysisMetrics,

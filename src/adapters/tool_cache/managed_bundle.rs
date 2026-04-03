@@ -14,6 +14,18 @@ use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheReque
 
 pub const BUNDLE_MARKER_FILE: &str = "bundle.marker";
 
+/// Kalos CPG extraction queries embedded in the binary.
+///
+/// These are deployed to the CodeQL bundle cache alongside the CLI so that
+/// `codeql query run` can find them.  The queries are kept as stubs for now;
+/// real extraction logic will be added in a future iteration.
+const BUNDLED_QUERIES: &[(&str, &str)] = &[
+    ("extract-python.ql", "select 1\n"),
+    ("extract-javascript-typescript.ql", "select 1\n"),
+    ("extract-rust.ql", "select 1\n"),
+    ("extract-go.ql", "select 1\n"),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     LinuxX64,
@@ -496,6 +508,13 @@ impl ToolCachePort for ManagedToolCacheAdapter {
             });
         }
 
+        deploy_bundled_queries(&cache_path).map_err(|source| {
+            ManagedToolCacheError::BootstrapExtract {
+                version: self.manifest.version.clone(),
+                source,
+            }
+        })?;
+
         Ok(ResolvedToolBundle {
             tool_name: request.tool_name.clone(),
             version: request.version.clone(),
@@ -503,6 +522,18 @@ impl ToolCachePort for ManagedToolCacheAdapter {
             checksum: self.manifest.sha256.clone(),
         })
     }
+}
+
+fn deploy_bundled_queries(bundle_dir: &Path) -> io::Result<()> {
+    let queries_dir = bundle_dir.join("queries");
+    fs::create_dir_all(&queries_dir)?;
+    for (filename, content) in BUNDLED_QUERIES {
+        let path = queries_dir.join(filename);
+        if !path.exists() {
+            fs::write(&path, content)?;
+        }
+    }
+    Ok(())
 }
 
 fn default_cache_dir() -> PathBuf {
@@ -569,8 +600,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BUNDLE_MARKER_FILE, BundleManifest, ManagedToolCacheAdapter, Platform,
-        codeql_bundle_manifest,
+        BUNDLED_QUERIES, BUNDLE_MARKER_FILE, BundleManifest, ManagedToolCacheAdapter, Platform,
+        codeql_bundle_manifest, deploy_bundled_queries,
     };
     use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
@@ -918,5 +949,41 @@ mod tests {
         });
 
         (format!("http://{addr}/codeql.tgz"), handle)
+    }
+
+    #[test]
+    fn deploy_bundled_queries_creates_missing_query_files() {
+        let temp = TempDir::new().unwrap();
+        let bundle_dir = temp.path().join("codeql").join("2.0.0");
+        fs::create_dir_all(&bundle_dir).unwrap();
+
+        deploy_bundled_queries(&bundle_dir).unwrap();
+
+        for (filename, expected_content) in BUNDLED_QUERIES {
+            let path = bundle_dir.join("queries").join(filename);
+            assert!(path.exists(), "{filename} should be created");
+            assert_eq!(fs::read_to_string(&path).unwrap(), *expected_content);
+        }
+    }
+
+    #[test]
+    fn deploy_bundled_queries_preserves_existing_files() {
+        let temp = TempDir::new().unwrap();
+        let bundle_dir = temp.path().join("codeql").join("2.0.0");
+        let queries_dir = bundle_dir.join("queries");
+        fs::create_dir_all(&queries_dir).unwrap();
+        fs::write(queries_dir.join("extract-rust.ql"), "// custom query\n").unwrap();
+
+        deploy_bundled_queries(&bundle_dir).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(queries_dir.join("extract-rust.ql")).unwrap(),
+            "// custom query\n",
+            "existing file should not be overwritten"
+        );
+        assert!(
+            queries_dir.join("extract-python.ql").exists(),
+            "missing files should be created"
+        );
     }
 }
