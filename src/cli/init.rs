@@ -7,7 +7,14 @@ use clap::Args;
 
 use crate::domains::config::{CONFIG_FILE_NAME, render_default_config};
 
-const KALOS_DIR_ENTRY: &str = ".kalos/";
+pub(super) const KALOS_DIR_ENTRY: &str = ".kalos/";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GitignoreUpdate {
+    Created,
+    Added,
+    Unchanged,
+}
 
 #[derive(Debug, Clone, Default, Args)]
 #[command(about = "create a default configuration file")]
@@ -49,14 +56,23 @@ impl InitCommand {
         }
 
         println!("created {}", config_path.display());
-        if let Err(error) = ensure_gitignore_entry(&cwd) {
-            eprintln!("warning: failed to update .gitignore: {error}");
+        match ensure_gitignore_entry(&cwd) {
+            Ok(GitignoreUpdate::Created) => {
+                println!("created .gitignore with {KALOS_DIR_ENTRY} entry");
+            }
+            Ok(GitignoreUpdate::Added) => {
+                println!("added {KALOS_DIR_ENTRY} to .gitignore");
+            }
+            Ok(GitignoreUpdate::Unchanged) => {}
+            Err(error) => {
+                eprintln!("warning: failed to update .gitignore: {error}");
+            }
         }
         ExitCode::SUCCESS
     }
 }
 
-fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<()> {
+pub(super) fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<GitignoreUpdate> {
     let gitignore_path = cwd.join(".gitignore");
 
     if gitignore_path.exists() {
@@ -67,7 +83,7 @@ fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<()> {
         });
 
         if has_kalos_entry {
-            return Ok(());
+            return Ok(GitignoreUpdate::Unchanged);
         }
 
         let mut updated_contents = contents;
@@ -75,11 +91,93 @@ fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<()> {
         updated_contents.push_str(KALOS_DIR_ENTRY);
         updated_contents.push('\n');
         fs::write(&gitignore_path, updated_contents)?;
-        println!("added {KALOS_DIR_ENTRY} to .gitignore");
-        return Ok(());
+        return Ok(GitignoreUpdate::Added);
     }
 
     fs::write(&gitignore_path, format!("{KALOS_DIR_ENTRY}\n"))?;
-    println!("created .gitignore with {KALOS_DIR_ENTRY} entry");
-    Ok(())
+    Ok(GitignoreUpdate::Created)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::{GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry};
+
+    #[test]
+    fn adds_kalos_entry_to_existing_gitignore() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+        fs::write(&gitignore_path, "target/\n").unwrap();
+
+        let update = ensure_gitignore_entry(temp.path()).unwrap();
+
+        let contents = fs::read_to_string(gitignore_path).unwrap();
+        assert_eq!(update, GitignoreUpdate::Added);
+        assert!(contents.lines().any(|line| line.trim() == KALOS_DIR_ENTRY));
+        assert_eq!(kalos_entry_count(&contents), 1);
+    }
+
+    #[test]
+    fn creates_gitignore_with_kalos_entry_when_missing() {
+        let temp = TempDir::new().unwrap();
+
+        let update = ensure_gitignore_entry(temp.path()).unwrap();
+
+        let contents = fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert_eq!(update, GitignoreUpdate::Created);
+        assert_eq!(contents, format!("{KALOS_DIR_ENTRY}\n"));
+    }
+
+    #[test]
+    fn updates_gitignore_at_specified_path_not_subdirectory() {
+        let temp = TempDir::new().unwrap();
+        let subdirectory = temp.path().join("nested");
+        fs::create_dir(&subdirectory).unwrap();
+
+        let update = ensure_gitignore_entry(temp.path()).unwrap();
+
+        let root_gitignore = temp.path().join(".gitignore");
+        let contents = fs::read_to_string(&root_gitignore).unwrap();
+        assert_eq!(update, GitignoreUpdate::Created);
+        assert_eq!(contents, format!("{KALOS_DIR_ENTRY}\n"));
+        assert!(!subdirectory.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn does_not_duplicate_existing_kalos_entry() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+        fs::write(&gitignore_path, format!("target/\n{KALOS_DIR_ENTRY}\n")).unwrap();
+
+        let update = ensure_gitignore_entry(temp.path()).unwrap();
+
+        let contents = fs::read_to_string(gitignore_path).unwrap();
+        assert_eq!(update, GitignoreUpdate::Unchanged);
+        assert_eq!(kalos_entry_count(&contents), 1);
+    }
+
+    #[test]
+    fn ensure_gitignore_entry_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+        fs::write(&gitignore_path, "target/\n").unwrap();
+
+        let first = ensure_gitignore_entry(temp.path()).unwrap();
+        let second = ensure_gitignore_entry(temp.path()).unwrap();
+
+        let contents = fs::read_to_string(gitignore_path).unwrap();
+        assert_eq!(first, GitignoreUpdate::Added);
+        assert_eq!(second, GitignoreUpdate::Unchanged);
+        assert_eq!(kalos_entry_count(&contents), 1);
+    }
+
+    fn kalos_entry_count(contents: &str) -> usize {
+        contents
+            .lines()
+            .filter(|line| line.trim() == KALOS_DIR_ENTRY)
+            .count()
+    }
 }

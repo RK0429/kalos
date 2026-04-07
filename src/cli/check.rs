@@ -10,6 +10,8 @@ use clap::{Args, ValueEnum};
 use serde_json::json;
 use tracing::debug;
 
+use super::init::{GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry};
+
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
 use crate::adapters::diff_source::GitDiffAdapter;
@@ -128,7 +130,6 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
-
         let options = self.resolve_options(cwd);
         let config = match ProjectConfig::load_and_resolve(&options, &Defaults::default()) {
             Ok(config) => config,
@@ -144,6 +145,18 @@ impl CheckCommand {
             rule_count = config.rules.len(),
             "check config loaded"
         );
+        match ensure_gitignore_entry(&config.workspace_root.abs_path) {
+            Ok(GitignoreUpdate::Created) => {
+                eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+            }
+            Ok(GitignoreUpdate::Added) => {
+                eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
+            }
+            Ok(GitignoreUpdate::Unchanged) => {}
+            Err(error) => {
+                eprintln!("warning: failed to update .gitignore: {error}");
+            }
+        }
         let llm_adapter = if self.llm {
             match validate_llm_config() {
                 Ok(config) => Some(HttpLlmAdapter::new(config)),
