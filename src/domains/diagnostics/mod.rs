@@ -400,6 +400,9 @@ pub fn apply_suppressions(
         .collect()
 }
 
+const RUST_DERIVE_METHOD_NAMES: &[&str] =
+    &["clone", "eq", "ne", "fmt", "hash", "partial_cmp", "cmp"];
+
 impl PatternRule {
     fn detect_god_units(
         &self,
@@ -494,6 +497,14 @@ impl PatternRule {
         candidates
             .into_iter()
             .filter_map(|function| {
+                // Skip Rust derive-generated methods (e.g. Clone::clone, PartialEq::eq).
+                if function.extension.as_ref().is_some_and(|ext| {
+                    ext.language == Language::Rust
+                        && RUST_DERIVE_METHOD_NAMES.contains(&function.name.as_str())
+                }) {
+                    return None;
+                }
+
                 let owner_modules = graph.ownership.get(&function.id)?;
                 let mut foreign_accesses = 0_u32;
                 let mut local_accesses = 0_u32;
@@ -941,7 +952,7 @@ mod tests {
         SummaryScope, apply_suppressions, builtin_metric_rules, builtin_pattern_rules,
         project_subgraph,
     };
-    use crate::domains::cpg::{CpgId, EdgeKind, UnifiedCpg};
+    use crate::domains::cpg::{CpgId, EdgeKind, Language, LanguageExtension, UnifiedCpg};
     use crate::domains::{DiagnosticId, FilePath, MetricId, RuleId, ScopeId};
 
     #[test]
@@ -1213,6 +1224,60 @@ mod tests {
                 .explanation
                 .contains("Move the behavior")
         );
+    }
+
+    #[test]
+    fn feature_envy_skips_rust_derive_methods() {
+        let mut subgraph = CpgBuilder::new()
+            .module_at("module_a", "crate::a", "src/a.rs", 1, 40)
+            .module_at("module_b", "crate::b", "src/b.rs", 1, 20)
+            .function_at("clone", "clone", "src/a.rs", 3, 12)
+            .function_at("local", "local", "src/a.rs", 14, 18)
+            .function_at("b1", "crate::b::f1", "src/b.rs", 3, 3)
+            .function_at("b2", "crate::b::f2", "src/b.rs", 4, 4)
+            .function_at("b3", "crate::b::f3", "src/b.rs", 5, 5)
+            .function_at("b4", "crate::b::f4", "src/b.rs", 6, 6)
+            .function_at("b5", "crate::b::f5", "src/b.rs", 7, 7)
+            .edge("module_a", "clone", EdgeKind::Contains)
+            .edge("module_a", "local", EdgeKind::Contains)
+            .edge("module_b", "b1", EdgeKind::Contains)
+            .edge("module_b", "b2", EdgeKind::Contains)
+            .edge("module_b", "b3", EdgeKind::Contains)
+            .edge("module_b", "b4", EdgeKind::Contains)
+            .edge("module_b", "b5", EdgeKind::Contains)
+            .edge("clone", "b1", EdgeKind::Call)
+            .edge("clone", "b2", EdgeKind::Call)
+            .edge("clone", "b3", EdgeKind::TypeReference)
+            .edge("clone", "b4", EdgeKind::Call)
+            .edge("clone", "b5", EdgeKind::TypeReference)
+            .edge("clone", "local", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        let clone = subgraph
+            .nodes
+            .iter_mut()
+            .find(|node| node.name == "clone")
+            .expect("clone function should exist");
+        clone.extension = Some(LanguageExtension {
+            language: Language::Rust,
+            properties: std::collections::BTreeMap::new(),
+        });
+
+        let diagnostics = builtin_pattern_rules()
+            .into_iter()
+            .find(|rule| rule.id == RuleId::from("KAL-PAT002"))
+            .unwrap()
+            .detect(
+                &subgraph,
+                &empty_metrics(),
+                &RuleConfig {
+                    enabled: Some(true),
+                    threshold: None,
+                    severity: None,
+                },
+            );
+
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
