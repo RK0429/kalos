@@ -68,6 +68,7 @@ pub struct ProjectConfig {
     pub exclude_patterns: Vec<GlobPattern>,
     pub score_weights: ScoreWeights,
     pub plugin_manifest: ResolvedPluginManifest,
+    pub include_tests: bool,
     pub targets_explicitly_specified: bool,
 }
 
@@ -465,6 +466,7 @@ impl ProjectConfig {
             exclude_patterns,
             score_weights,
             plugin_manifest,
+            include_tests: false,
             targets_explicitly_specified: options.targets_explicitly_specified,
         })
     }

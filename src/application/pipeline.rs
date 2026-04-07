@@ -1228,6 +1228,7 @@ fn config_hash(config: &ProjectConfig) -> String {
         .collect::<BTreeMap<_, _>>();
     let payload = json!({
         "rules": rules,
+        "include_tests": config.include_tests,
         "score_weights": {
             "function": config.score_weights.function,
             "module": config.score_weights.module,
@@ -1278,6 +1279,19 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+fn is_test_file(path: &str) -> bool {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+
+    path.starts_with("tests/")
+        || path.contains("/tests/")
+        || path.starts_with("__tests__/")
+        || path.contains("/__tests__/")
+        || file_name.contains("_test.")
+        || file_name.contains(".test.")
+        || file_name.contains(".spec.")
+        || (file_name.starts_with("test_") && file_name.ends_with(".py"))
 }
 
 fn generate_diagnostics(
@@ -1344,6 +1358,12 @@ fn generate_diagnostics(
         })
         .collect::<Vec<_>>();
     let mut diagnostics = apply_suppressions(diagnostics, &suppressions);
+    if !config.include_tests {
+        diagnostics.retain(|diagnostic| {
+            !is_test_file(diagnostic.location.file_path.as_str())
+                || !matches!(diagnostic.rule_id.as_str(), "KAL-M001" | "KAL-M003")
+        });
+    }
     diagnostics.sort_by_key(diagnostic_sort_key);
     diagnostics
 }
@@ -1494,8 +1514,8 @@ mod tests {
     use super::{
         AnalysisPipeline, DiffConfig, FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET,
         apply_dependency_resolution, assemble_report, build_baseline_fingerprint,
-        build_llm_requests, compute_metrics_with_plugins, merge_metrics, metrics_from_scope_map,
-        project_scope_id,
+        build_llm_requests, compute_metrics_with_plugins, generate_diagnostics, is_test_file,
+        merge_metrics, metrics_from_scope_map, project_scope_id,
     };
     use crate::adapters::plugin::PluginHostError;
     use crate::domains::config::{Defaults, ProjectConfig, WorkspaceRoot};
@@ -1815,6 +1835,114 @@ mod tests {
     }
 
     #[test]
+    fn is_test_file_matches_supported_patterns_only() {
+        let cases = [
+            ("tests/foo.rs", true),
+            ("tests/nested/bar.rs", true),
+            ("src/lib.rs", false),
+            ("foo_test.go", true),
+            ("foo.test.ts", true),
+            ("foo.spec.js", true),
+            ("test_foo.py", true),
+            ("src/__tests__/foo.ts", true),
+            ("src/test_utils.rs", false),
+            ("src/contest.rs", false),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(is_test_file(path), expected, "path: {path}");
+        }
+    }
+
+    #[test]
+    fn generate_diagnostics_suppresses_module_fan_out_for_test_files_by_default() {
+        let diagnostics = generate_diagnostics(
+            &diagnostics_test_source_analysis(),
+            &single_scope_metrics(
+                AnalysisLevel::Module,
+                "crate::tests",
+                "tests/foo.rs",
+                0.8,
+                vec![("M-M001", 4.0, 0.8)],
+            ),
+            &fixture_config(),
+        );
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn generate_diagnostics_suppresses_instability_for_test_files_by_default() {
+        let diagnostics = generate_diagnostics(
+            &diagnostics_test_source_analysis(),
+            &single_scope_metrics(
+                AnalysisLevel::Module,
+                "crate::tests",
+                "foo.test.ts",
+                0.9,
+                vec![("M-M003", 1.0, 0.9)],
+            ),
+            &fixture_config(),
+        );
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn generate_diagnostics_keeps_module_diagnostics_when_tests_are_included() {
+        let mut config = fixture_config();
+        config.include_tests = true;
+
+        let diagnostics = generate_diagnostics(
+            &diagnostics_test_source_analysis(),
+            &AnalysisMetrics {
+                function_metrics: Vec::new(),
+                module_metrics: vec![
+                    ScopeMetricsLiteral::new(
+                        ScopeId::new(AnalysisLevel::Module, "crate::rust_tests", "tests/foo.rs"),
+                        0.8,
+                        vec![("M-M001", 4.0, 0.8)],
+                    )
+                    .into(),
+                    ScopeMetricsLiteral::new(
+                        ScopeId::new(AnalysisLevel::Module, "crate::ts_tests", "foo.test.ts"),
+                        0.9,
+                        vec![("M-M003", 1.0, 0.9)],
+                    )
+                    .into(),
+                ],
+                project_metrics: None,
+                overall_score: zero_overall_score(),
+            },
+            &config,
+        );
+
+        let rule_ids = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.rule_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(rule_ids, BTreeSet::from(["KAL-M001", "KAL-M003"]));
+    }
+
+    #[test]
+    fn generate_diagnostics_keeps_other_rules_for_test_files() {
+        let diagnostics = generate_diagnostics(
+            &diagnostics_test_source_analysis(),
+            &single_scope_metrics(
+                AnalysisLevel::Function,
+                "crate::tests::helper",
+                "tests/foo.rs",
+                0.8,
+                vec![("M-F001", 1.0, 0.8)],
+            ),
+            &fixture_config(),
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, RuleId::from("KAL-F001"));
+    }
+
+    #[test]
     fn compute_metrics_includes_report_only_plugin_values_without_affecting_scores() {
         let source_analysis = warning_source_analysis("src/lib.rs", "crate::f");
         let plugin_metric_id = MetricId::from("P-F001");
@@ -1994,6 +2122,21 @@ mod tests {
         assert_ne!(
             build_baseline_fingerprint(&fixture_config(), &snapshot).config_hash,
             build_baseline_fingerprint(&with_plugin, &snapshot).config_hash
+        );
+    }
+
+    #[test]
+    fn baseline_fingerprint_changes_when_include_tests_changes() {
+        let snapshot = DiffSnapshot {
+            base_snapshot_hash: "base-tree".to_owned(),
+            changed_files: BTreeSet::from([FilePath::from("src/lib.rs")]),
+        };
+        let mut with_tests = fixture_config();
+        with_tests.include_tests = true;
+
+        assert_ne!(
+            build_baseline_fingerprint(&fixture_config(), &snapshot).config_hash,
+            build_baseline_fingerprint(&with_tests, &snapshot).config_hash
         );
     }
 
@@ -2622,7 +2765,60 @@ mod tests {
             exclude_patterns: Vec::new(),
             score_weights: Defaults::default().score_weights,
             plugin_manifest: Default::default(),
+            include_tests: false,
             targets_explicitly_specified: false,
+        }
+    }
+
+    fn diagnostics_test_source_analysis() -> SourceAnalysis {
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("diagnostics-test"),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+            source_files: BTreeMap::new(),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn single_scope_metrics(
+        level: AnalysisLevel,
+        qualified_name: &str,
+        file_path: &str,
+        scope_risk: f64,
+        values: Vec<(&'static str, f64, f64)>,
+    ) -> AnalysisMetrics {
+        let scope_metrics: crate::domains::metrics::ScopeMetrics = ScopeMetricsLiteral::new(
+            ScopeId::new(level, qualified_name, file_path),
+            scope_risk,
+            values,
+        )
+        .into();
+
+        AnalysisMetrics {
+            function_metrics: (level == AnalysisLevel::Function)
+                .then_some(vec![scope_metrics.clone()])
+                .unwrap_or_default(),
+            module_metrics: (level == AnalysisLevel::Module)
+                .then_some(vec![scope_metrics])
+                .unwrap_or_default(),
+            project_metrics: None,
+            overall_score: zero_overall_score(),
+        }
+    }
+
+    fn zero_overall_score() -> OverallScore {
+        OverallScore {
+            function_risk: None,
+            module_risk: None,
+            project_risk: None,
+            overall_risk: 0.0,
+            overall_score: 100,
+            function_score: None,
+            module_score: None,
+            project_score: None,
         }
     }
 

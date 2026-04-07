@@ -91,6 +91,11 @@ pub struct CheckCommand {
     pub min_language_ratio: Option<f64>,
     #[arg(
         long,
+        help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)"
+    )]
+    pub include_tests: bool,
+    #[arg(
+        long,
         short = 'o',
         value_name = "path",
         help = "write output to a file instead of stdout"
@@ -131,7 +136,7 @@ impl CheckCommand {
             }
         };
         let options = self.resolve_options(cwd);
-        let config = match ProjectConfig::load_and_resolve(&options, &Defaults::default()) {
+        let mut config = match ProjectConfig::load_and_resolve(&options, &Defaults::default()) {
             Ok(config) => config,
             Err(error) => {
                 let message = error.to_string();
@@ -139,6 +144,7 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
+        config.include_tests = self.include_tests;
         debug!(
             workspace_root = %config.workspace_root.abs_path.display(),
             target_count = config.analysis_targets.len(),

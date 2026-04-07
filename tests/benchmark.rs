@@ -404,6 +404,7 @@ fn fixture_config() -> ProjectConfig {
         exclude_patterns: Vec::new(),
         score_weights: Defaults::default().score_weights,
         plugin_manifest: Default::default(),
+        include_tests: false,
         targets_explicitly_specified: false,
     }
 }
