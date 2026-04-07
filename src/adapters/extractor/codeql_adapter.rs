@@ -143,20 +143,22 @@ where
             .collect::<BTreeSet<_>>();
 
         for language in languages {
+            let lang_dir = Self::language_pack(language).replace('/', "-");
             let database_path = request
                 .workspace_root
                 .join(".kalos")
                 .join("codeql")
-                .join(Self::language_pack(language).replace('/', "-"));
+                .join(&lang_dir);
             let bqrs_path = database_path.with_extension("bqrs");
             let database_dir = database_path
                 .parent()
                 .expect("database path should have parent")
                 .to_path_buf();
-            let query_path = bundle.cache_path.join("queries").join(format!(
-                "extract-{}.ql",
-                Self::language_pack(language).replace('/', "-")
-            ));
+            let query_path = bundle
+                .cache_path
+                .join("queries")
+                .join(&lang_dir)
+                .join(format!("extract-{lang_dir}.ql"));
 
             self.file_system
                 .create_dir_all(&database_dir)
@@ -175,7 +177,7 @@ where
 
             self.run_checked(
                 &codeql_program,
-                build_query_run_args(&database_path, &query_path, &bqrs_path),
+                build_query_run_args(&database_path, &query_path, &bqrs_path, &bundle.cache_path),
                 &request.workspace_root,
                 "query run",
                 language,
@@ -251,7 +253,12 @@ fn build_database_create_args(
     ]
 }
 
-fn build_query_run_args(database_path: &Path, query_path: &Path, bqrs_path: &Path) -> Vec<String> {
+fn build_query_run_args(
+    database_path: &Path,
+    query_path: &Path,
+    bqrs_path: &Path,
+    search_path: &Path,
+) -> Vec<String> {
     vec![
         "query".to_owned(),
         "run".to_owned(),
@@ -260,6 +267,8 @@ fn build_query_run_args(database_path: &Path, query_path: &Path, bqrs_path: &Pat
         database_path.to_string_lossy().into_owned(),
         "--output".to_owned(),
         bqrs_path.to_string_lossy().into_owned(),
+        "--search-path".to_owned(),
+        search_path.to_string_lossy().into_owned(),
     ]
 }
 
@@ -268,7 +277,6 @@ fn build_bqrs_decode_args(bqrs_path: &Path) -> Vec<String> {
         "bqrs".to_owned(),
         "decode".to_owned(),
         "--format=json".to_owned(),
-        "--output=-".to_owned(),
         bqrs_path.to_string_lossy().into_owned(),
     ]
 }
@@ -317,10 +325,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, format_command_guidance,
+        codeql_executable_path, format_command_guidance, CodeQlAdapter, CodeQlAdapterError,
     };
-    use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind};
+    use crate::domains::FilePath;
     use crate::platform::fs::InMemoryFileSystem;
     use crate::platform::process::{MockCommandRunner, ProcessError, ProcessOutput};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
@@ -454,12 +462,25 @@ mod tests {
         assert_eq!(invocations[0].args[5], "python");
         assert_eq!(invocations[1].args[0], "query");
         assert_eq!(invocations[1].args[1], "run");
+        assert_eq!(
+            invocations[1].args[2],
+            "/cache/codeql/2.0.0/queries/python/extract-python.ql"
+        );
         assert!(!invocations[1].args.iter().any(|arg| arg == "--format=json"));
         assert!(invocations[1].args.iter().any(|arg| arg == "--output"));
+        assert!(invocations[1].args.iter().any(|arg| arg == "--search-path"));
+        assert_eq!(
+            invocations[1]
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--search-path")
+                .map(|pair| pair[1].as_str()),
+            Some("/cache/codeql/2.0.0")
+        );
         assert_eq!(invocations[2].args[0], "bqrs");
         assert_eq!(invocations[2].args[1], "decode");
         assert!(invocations[2].args.iter().any(|arg| arg == "--format=json"));
-        assert!(invocations[2].args.iter().any(|arg| arg == "--output=-"));
+        assert!(!invocations[2].args.iter().any(|arg| arg == "--output=-"));
     }
 
     #[test]
@@ -564,11 +585,9 @@ mod tests {
             })
             .unwrap();
 
-        assert!(
-            file_system_for_assertion
-                .created_dirs()
-                .contains(&PathBuf::from("/workspace/.kalos/codeql"))
-        );
+        assert!(file_system_for_assertion
+            .created_dirs()
+            .contains(&PathBuf::from("/workspace/.kalos/codeql")));
     }
 
     #[test]
@@ -684,7 +703,12 @@ mod tests {
             .unwrap();
 
         let invocations = command_runner.invocations().unwrap();
+        assert_eq!(
+            invocations[1].args[2],
+            "/cache/codeql/2.0.0/queries/python/extract-python.ql"
+        );
         assert!(!invocations[1].args.iter().any(|arg| arg == "--format=json"));
+        assert!(invocations[1].args.iter().any(|arg| arg == "--search-path"));
         assert!(invocations[2].args.iter().any(|arg| arg == "--format=json"));
     }
 
@@ -850,10 +874,8 @@ mod tests {
         };
 
         let directory_missing_display = directory_missing_error.to_string();
-        assert!(
-            directory_missing_display
-                .contains("the CodeQL database output directory does not exist")
-        );
+        assert!(directory_missing_display
+            .contains("the CodeQL database output directory does not exist"));
         assert!(!directory_missing_display.contains("bundle may be incomplete"));
 
         let query_missing_stderr = "/path/to/extract-python.ql does not exist".to_owned();

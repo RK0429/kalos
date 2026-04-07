@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::domains::FilePath;
@@ -121,7 +122,13 @@ pub struct CpgNormalizer;
 
 impl CpgNormalizer {
     pub fn parse_output(bytes: &[u8]) -> Result<CodeQlQueryOutput, NormalizationError> {
-        Ok(serde_json::from_slice(bytes)?)
+        let value: Value = serde_json::from_slice(bytes)?;
+        let normalized = if is_bqrs_output(&value) {
+            transform_bqrs_output(value)?
+        } else {
+            value
+        };
+        Ok(serde_json::from_value(normalized)?)
     }
 
     pub fn normalize_fixture_bytes(
@@ -318,6 +325,109 @@ impl CpgNormalizer {
             })
             .collect()
     }
+}
+
+#[derive(Debug, Error)]
+enum BqrsTransformError {
+    #[error(transparent)]
+    Parse(#[from] serde_json::Error),
+    #[error(
+        "CodeQL BQRS output did not contain any named predicates; queries must use `query predicate` instead of `select`"
+    )]
+    MissingNamedPredicates,
+}
+
+impl From<BqrsTransformError> for NormalizationError {
+    fn from(error: BqrsTransformError) -> Self {
+        match error {
+            BqrsTransformError::Parse(error) => Self::Parse(error),
+            BqrsTransformError::MissingNamedPredicates => Self::Parse(serde_json::Error::io(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BqrsPredicate {
+    columns: Vec<BqrsColumn>,
+    tuples: Vec<Vec<Value>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BqrsColumn {
+    name: String,
+}
+
+fn is_bqrs_output(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.values().any(|entry| {
+            entry
+                .as_object()
+                .is_some_and(|entry| entry.contains_key("columns") && entry.contains_key("tuples"))
+        })
+    })
+}
+
+fn transform_bqrs_output(value: Value) -> Result<Value, BqrsTransformError> {
+    let Value::Object(object) = value else {
+        return Ok(value);
+    };
+
+    let mut transformed = Map::new();
+    for (key, value) in object {
+        if key == "#select" {
+            continue;
+        }
+        if value
+            .as_object()
+            .is_some_and(|entry| entry.contains_key("columns") && entry.contains_key("tuples"))
+        {
+            transformed.insert(key, transform_bqrs_predicate(value)?);
+        } else {
+            transformed.insert(key, value);
+        }
+    }
+
+    if !transformed.keys().any(|key| is_known_output_field(key)) {
+        return Err(BqrsTransformError::MissingNamedPredicates);
+    }
+
+    Ok(Value::Object(transformed))
+}
+
+fn transform_bqrs_predicate(value: Value) -> Result<Value, BqrsTransformError> {
+    let predicate: BqrsPredicate = serde_json::from_value(value)?;
+    let rows = predicate
+        .tuples
+        .into_iter()
+        .map(|tuple| {
+            let mut row = Map::new();
+            for (column, value) in predicate.columns.iter().zip(tuple.into_iter()) {
+                row.insert(column.name.clone(), value);
+            }
+            Value::Object(row)
+        })
+        .collect();
+    Ok(Value::Array(rows))
+}
+
+fn is_known_output_field(key: &str) -> bool {
+    matches!(
+        key,
+        "functions"
+            | "classes"
+            | "modules"
+            | "variables"
+            | "parameters"
+            | "external_symbols"
+            | "calls"
+            | "data_flows"
+            | "contains"
+            | "type_references"
+            | "semantic_edges"
+            | "warnings"
+    )
 }
 
 #[derive(Debug)]
@@ -530,6 +640,73 @@ mod tests {
                 "{fixture_name} should produce nodes"
             );
         }
+    }
+
+    #[test]
+    fn parse_output_transforms_bqrs_tabular_json() {
+        let output = CpgNormalizer::parse_output(
+            br##"{
+                "functions": {
+                    "columns": [
+                        {"name": "id", "kind": "String"},
+                        {"name": "name", "kind": "String"},
+                        {"name": "file", "kind": "String"},
+                        {"name": "start_line", "kind": "Int"},
+                        {"name": "end_line", "kind": "Int"}
+                    ],
+                    "tuples": [["fn_src/app.py:3:main", "main", "src/app.py", 3, 7]]
+                },
+                "modules": {
+                    "columns": [
+                        {"name": "id", "kind": "String"},
+                        {"name": "name", "kind": "String"},
+                        {"name": "file", "kind": "String"},
+                        {"name": "start_line", "kind": "Int"},
+                        {"name": "end_line", "kind": "Int"}
+                    ],
+                    "tuples": [["mod_src/app.py", "app", "src/app.py", 1, 10]]
+                },
+                "contains": {
+                    "columns": [
+                        {"name": "source", "kind": "String"},
+                        {"name": "target", "kind": "String"}
+                    ],
+                    "tuples": [["mod_src/app.py", "fn_src/app.py:3:main"]]
+                },
+                "#select": {
+                    "columns": [{"name": "result", "kind": "Int"}],
+                    "tuples": [[1]]
+                }
+            }"##,
+        )
+        .unwrap();
+
+        assert_eq!(output.modules.len(), 1);
+        assert_eq!(output.modules[0].id, "mod_src/app.py");
+        assert_eq!(output.functions.len(), 1);
+        assert_eq!(output.functions[0].name, "main");
+        assert_eq!(output.contains.len(), 1);
+        assert_eq!(output.contains[0].source, "mod_src/app.py");
+    }
+
+    #[test]
+    fn parse_output_rejects_select_only_bqrs_output() {
+        let error = CpgNormalizer::parse_output(
+            br##"{
+                "#select": {
+                    "columns": [{"name": "result", "kind": "Int"}],
+                    "tuples": [[1]]
+                }
+            }"##,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("queries must use `query predicate` instead of `select`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -17,13 +17,390 @@ pub const BUNDLE_MARKER_FILE: &str = "bundle.marker";
 /// Kalos CPG extraction queries embedded in the binary.
 ///
 /// These are deployed to the CodeQL bundle cache alongside the CLI so that
-/// `codeql query run` can find them.  The queries are kept as stubs for now;
-/// real extraction logic will be added in a future iteration.
+/// `codeql query run` can find them. Each query emits named predicates that
+/// decode into the JSON shape expected by `CpgNormalizer`.
 const BUNDLED_QUERIES: &[(&str, &str)] = &[
-    ("extract-python.ql", "select 1\n"),
-    ("extract-javascript-typescript.ql", "select 1\n"),
-    ("extract-rust.ql", "select 1\n"),
-    ("extract-go.ql", "select 1\n"),
+    (
+        "extract-python.ql",
+        r#"import python
+
+private string moduleId(Module m) { result = "mod_" + m.getFile().getRelativePath() }
+
+private string functionId(Function f) {
+  result =
+    "fn_" + f.getLocation().getFile().getRelativePath() + ":" +
+      f.getLocation().getStartLine().toString() + ":" + f.getQualifiedName()
+}
+
+private string classId(Class c) {
+  result =
+    "cls_" + c.getLocation().getFile().getRelativePath() + ":" +
+      c.getLocation().getStartLine().toString() + ":" + c.getQualifiedName()
+}
+
+query predicate modules(string id, string name, string file, int start_line, int end_line) {
+  exists(Module m |
+    m.isTopLevel() and
+    id = moduleId(m) and
+    name = m.getName() and
+    file = m.getFile().getRelativePath() and
+    start_line = m.getLocation().getStartLine() and
+    end_line = m.getLocation().getEndLine()
+  )
+}
+
+query predicate classes(string id, string name, string file, int start_line, int end_line) {
+  exists(Class c |
+    exists(c.getQualifiedName()) and
+    id = classId(c) and
+    name = c.getName() and
+    file = c.getLocation().getFile().getRelativePath() and
+    start_line = c.getLocation().getStartLine() and
+    end_line = c.getLocation().getEndLine()
+  )
+}
+
+query predicate functions(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f |
+    exists(f.getQualifiedName()) and
+    id = functionId(f) and
+    name = f.getName() and
+    file = f.getLocation().getFile().getRelativePath() and
+    start_line = f.getLocation().getStartLine() and
+    end_line = f.getLocation().getEndLine()
+  )
+}
+
+query predicate contains(string source, string target) {
+  exists(Module m, Function f |
+    f.getScope() = m and
+    source = moduleId(m) and
+    target = functionId(f)
+  )
+  or
+  exists(Module m, Class c |
+    c.getScope() = m and
+    source = moduleId(m) and
+    target = classId(c)
+  )
+}
+
+query predicate calls(string source, string target) {
+  exists(Call call, Function caller, Function callee |
+    call.getScope() = caller and
+    call.getFunc().(Name).getId() = callee.getName() and
+    source = functionId(caller) and
+    target = functionId(callee)
+  )
+}
+"#,
+    ),
+    (
+        "extract-javascript-typescript.ql",
+        r#"import javascript
+
+private string moduleId(TopLevel tl) { result = "mod_" + tl.getFile().getRelativePath() }
+
+private string functionId(Function f) {
+  result =
+    "fn_" + f.getLocation().getFile().getRelativePath() + ":" +
+      f.getLocation().getStartLine().toString() + ":" + f.getName()
+}
+
+private string classId(ClassDefinition c) {
+  result =
+    "cls_" + c.getLocation().getFile().getRelativePath() + ":" +
+      c.getLocation().getStartLine().toString() + ":" + c.getName()
+}
+
+query predicate modules(string id, string name, string file, int start_line, int end_line) {
+  exists(TopLevel tl |
+    id = moduleId(tl) and
+    name = tl.getFile().getRelativePath() and
+    file = tl.getFile().getRelativePath() and
+    start_line = tl.getLocation().getStartLine() and
+    end_line = tl.getLocation().getEndLine()
+  )
+}
+
+query predicate classes(string id, string name, string file, int start_line, int end_line) {
+  exists(ClassDefinition c |
+    exists(c.getName()) and
+    id = classId(c) and
+    name = c.getName() and
+    file = c.getLocation().getFile().getRelativePath() and
+    start_line = c.getLocation().getStartLine() and
+    end_line = c.getLocation().getEndLine()
+  )
+}
+
+query predicate functions(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f |
+    exists(f.getName()) and
+    id = functionId(f) and
+    name = f.getName() and
+    file = f.getLocation().getFile().getRelativePath() and
+    start_line = f.getLocation().getStartLine() and
+    end_line = f.getLocation().getEndLine()
+  )
+}
+
+query predicate contains(string source, string target) {
+  exists(TopLevel tl, Function f |
+    f.getTopLevel() = tl and
+    exists(f.getName()) and
+    source = moduleId(tl) and
+    target = functionId(f)
+  )
+  or
+  exists(TopLevel tl, ClassDefinition c |
+    c.getTopLevel() = tl and
+    exists(c.getName()) and
+    source = moduleId(tl) and
+    target = classId(c)
+  )
+}
+
+query predicate calls(string source, string target) {
+  exists(CallExpr call, Function caller, Function callee |
+    call.getEnclosingFunction() = caller and
+    callee = call.getResolvedCallee() and
+    exists(caller.getName()) and
+    exists(callee.getName()) and
+    source = functionId(caller) and
+    target = functionId(callee)
+  )
+}
+"#,
+    ),
+    (
+        "extract-rust.ql",
+        r#"import rust
+import codeql.files.FileSystem
+
+private string moduleId(File f) { result = "mod_" + f.getRelativePath() }
+
+private string functionId(Function f) {
+  result =
+    "fn_" + f.getFile().getRelativePath() + ":" + f.getLocation().getStartLine().toString() +
+      ":" + f.getName().getText()
+}
+
+private string structId(Struct s) {
+  result =
+    "cls_" + s.getFile().getRelativePath() + ":" + s.getLocation().getStartLine().toString() +
+      ":" + s.getName().getText()
+}
+
+private string enumId(Enum e) {
+  result =
+    "cls_" + e.getFile().getRelativePath() + ":" + e.getLocation().getStartLine().toString() +
+      ":" + e.getName().getText()
+}
+
+private string traitId(Trait t) {
+  result =
+    "cls_" + t.getFile().getRelativePath() + ":" + t.getLocation().getStartLine().toString() +
+      ":" + t.getName().getText()
+}
+
+query predicate modules(string id, string name, string file, int start_line, int end_line) {
+  exists(File f |
+    (
+      exists(Function func | func.fromSource() and func.getFile() = f)
+      or
+      exists(Struct s | s.fromSource() and s.getFile() = f)
+      or
+      exists(Enum e | e.fromSource() and e.getFile() = f)
+      or
+      exists(Trait t | t.fromSource() and t.getFile() = f)
+    ) and
+    id = moduleId(f) and
+    name = f.getRelativePath() and
+    file = f.getRelativePath() and
+    start_line = 1 and
+    end_line = 1
+  )
+}
+
+query predicate classes(string id, string name, string file, int start_line, int end_line) {
+  exists(Struct s |
+    s.fromSource() and
+    id = structId(s) and
+    name = s.getName().getText() and
+    file = s.getFile().getRelativePath() and
+    start_line = s.getLocation().getStartLine() and
+    end_line = s.getLocation().getEndLine()
+  )
+  or
+  exists(Enum e |
+    e.fromSource() and
+    id = enumId(e) and
+    name = e.getName().getText() and
+    file = e.getFile().getRelativePath() and
+    start_line = e.getLocation().getStartLine() and
+    end_line = e.getLocation().getEndLine()
+  )
+  or
+  exists(Trait t |
+    t.fromSource() and
+    id = traitId(t) and
+    name = t.getName().getText() and
+    file = t.getFile().getRelativePath() and
+    start_line = t.getLocation().getStartLine() and
+    end_line = t.getLocation().getEndLine()
+  )
+}
+
+query predicate functions(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f |
+    f.fromSource() and
+    id = functionId(f) and
+    name = f.getName().getText() and
+    file = f.getFile().getRelativePath() and
+    start_line = f.getLocation().getStartLine() and
+    end_line = f.getLocation().getEndLine()
+  )
+}
+
+query predicate contains(string source, string target) {
+  exists(Function f |
+    f.fromSource() and
+    source = moduleId(f.getFile()) and
+    target = functionId(f)
+  )
+  or
+  exists(Struct s |
+    s.fromSource() and
+    source = moduleId(s.getFile()) and
+    target = structId(s)
+  )
+  or
+  exists(Enum e |
+    e.fromSource() and
+    source = moduleId(e.getFile()) and
+    target = enumId(e)
+  )
+  or
+  exists(Trait t |
+    t.fromSource() and
+    source = moduleId(t.getFile()) and
+    target = traitId(t)
+  )
+}
+
+query predicate calls(string source, string target) {
+  exists(Call call, Function caller, Function callee |
+    caller = call.getEnclosingCallable() and
+    callee = call.getStaticTarget() and
+    caller.fromSource() and
+    callee.fromSource() and
+    source = functionId(caller) and
+    target = functionId(callee)
+  )
+}
+"#,
+    ),
+    (
+        "extract-go.ql",
+        r#"import go
+
+private string functionId(FuncDecl fd) {
+  result =
+    "fn_" + fd.getFile().getRelativePath() + ":" +
+      fd.getLocation().getStartLine().toString() + ":" + fd.getName()
+}
+
+private string classId(TypeSpec t) {
+  result =
+    "cls_" + t.getFile().getRelativePath() + ":" +
+      t.getLocation().getStartLine().toString() + ":" + t.getName()
+}
+
+query predicate modules(string id, string name, string file, int start_line, int end_line) {
+  exists(FuncDecl fd |
+    id = "mod_" + fd.getFile().getRelativePath() and
+    name = fd.getFile().getRelativePath() and
+    file = fd.getFile().getRelativePath() and
+    start_line = 1 and
+    end_line = 1
+  )
+  or
+  exists(TypeSpec t |
+    id = "mod_" + t.getFile().getRelativePath() and
+    name = t.getFile().getRelativePath() and
+    file = t.getFile().getRelativePath() and
+    start_line = 1 and
+    end_line = 1
+  )
+}
+
+query predicate classes(string id, string name, string file, int start_line, int end_line) {
+  exists(TypeSpec t |
+    id = classId(t) and
+    name = t.getName() and
+    file = t.getFile().getRelativePath() and
+    start_line = t.getLocation().getStartLine() and
+    end_line = t.getLocation().getEndLine()
+  )
+}
+
+query predicate functions(string id, string name, string file, int start_line, int end_line) {
+  exists(FuncDecl fd |
+    id = functionId(fd) and
+    name = fd.getName() and
+    file = fd.getFile().getRelativePath() and
+    start_line = fd.getLocation().getStartLine() and
+    end_line = fd.getLocation().getEndLine()
+  )
+}
+
+query predicate contains(string source, string target) {
+  exists(FuncDecl fd |
+    source = "mod_" + fd.getFile().getRelativePath() and
+    target = functionId(fd)
+  )
+  or
+  exists(TypeSpec t |
+    source = "mod_" + t.getFile().getRelativePath() and
+    target = classId(t)
+  )
+}
+
+query predicate calls(string source, string target) {
+  exists(CallExpr call, FuncDecl caller, FuncDecl callee |
+    call.getEnclosingFunction() = caller and
+    callee.getFunction() = call.getTarget() and
+    source = functionId(caller) and
+    target = functionId(callee)
+  )
+}
+"#,
+    ),
+];
+
+/// Per-language qlpack.yml contents deployed alongside extraction queries.
+///
+/// Each language needs its own qlpack because CodeQL requires a single
+/// dbscheme per pack. The pack name and dependency are derived from the
+/// language identifier.
+const BUNDLED_QLPACKS: &[(&str, &str)] = &[
+    (
+        "python",
+        "name: kalos/extract-python\nversion: 0.0.1\ndependencies:\n  codeql/python-all: \"*\"\n",
+    ),
+    (
+        "javascript-typescript",
+        "name: kalos/extract-js-ts\nversion: 0.0.1\ndependencies:\n  codeql/javascript-all: \"*\"\n",
+    ),
+    (
+        "rust",
+        "name: kalos/extract-rust\nversion: 0.0.1\ndependencies:\n  codeql/rust-all: \"*\"\n",
+    ),
+    (
+        "go",
+        "name: kalos/extract-go\nversion: 0.0.1\ndependencies:\n  codeql/go-all: \"*\"\n",
+    ),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -528,10 +905,18 @@ fn deploy_bundled_queries(bundle_dir: &Path) -> io::Result<()> {
     let queries_dir = bundle_dir.join("queries");
     fs::create_dir_all(&queries_dir)?;
     for (filename, content) in BUNDLED_QUERIES {
-        let path = queries_dir.join(filename);
-        if !path.exists() {
-            fs::write(&path, content)?;
-        }
+        let lang_dir = filename
+            .strip_prefix("extract-")
+            .and_then(|name| name.strip_suffix(".ql"))
+            .unwrap_or(filename);
+        let subdir = queries_dir.join(lang_dir);
+        fs::create_dir_all(&subdir)?;
+        fs::write(subdir.join(filename), content)?;
+    }
+    for (lang_dir, qlpack_content) in BUNDLED_QLPACKS {
+        let subdir = queries_dir.join(lang_dir);
+        fs::create_dir_all(&subdir)?;
+        fs::write(subdir.join("qlpack.yml"), qlpack_content)?;
     }
     Ok(())
 }
@@ -593,17 +978,24 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    use flate2::Compression;
     use flate2::write::GzEncoder;
+    use flate2::Compression;
     use sha2::{Digest, Sha256};
     use tar::{Builder, Header};
     use tempfile::TempDir;
 
     use super::{
-        BUNDLED_QUERIES, BUNDLE_MARKER_FILE, BundleManifest, ManagedToolCacheAdapter, Platform,
-        codeql_bundle_manifest, deploy_bundled_queries,
+        codeql_bundle_manifest, deploy_bundled_queries, BundleManifest, ManagedToolCacheAdapter,
+        Platform, BUNDLED_QLPACKS, BUNDLED_QUERIES, BUNDLE_MARKER_FILE,
     };
     use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
+
+    fn bundled_query_lang_dir(filename: &str) -> &str {
+        filename
+            .strip_prefix("extract-")
+            .and_then(|name| name.strip_suffix(".ql"))
+            .unwrap_or(filename)
+    }
 
     #[test]
     fn codeql_bundle_manifest_returns_pinned_supported_manifest() {
@@ -613,25 +1005,19 @@ mod tests {
         assert_eq!(manifest.sha256.len(), 64);
         match Platform::detect().unwrap() {
             Platform::LinuxX64 | Platform::LinuxArm64 => {
-                assert!(
-                    manifest
-                        .download_url
-                        .ends_with("codeql-bundle-linux64.tar.gz")
-                );
+                assert!(manifest
+                    .download_url
+                    .ends_with("codeql-bundle-linux64.tar.gz"));
             }
             Platform::MacosX64 | Platform::MacosArm64 => {
-                assert!(
-                    manifest
-                        .download_url
-                        .ends_with("codeql-bundle-osx64.tar.gz")
-                );
+                assert!(manifest
+                    .download_url
+                    .ends_with("codeql-bundle-osx64.tar.gz"));
             }
             Platform::WindowsX64 => {
-                assert!(
-                    manifest
-                        .download_url
-                        .ends_with("codeql-bundle-win64.tar.gz")
-                );
+                assert!(manifest
+                    .download_url
+                    .ends_with("codeql-bundle-win64.tar.gz"));
             }
         }
     }
@@ -720,13 +1106,18 @@ mod tests {
 
         assert_eq!(bundle.checksum, checksum);
         assert!(bundle.cache_path.join("codeql").exists());
-        assert!(
-            bundle
-                .cache_path
-                .join("queries")
-                .join("extract-rust.ql")
-                .exists()
-        );
+        assert!(bundle
+            .cache_path
+            .join("queries")
+            .join("rust")
+            .join("extract-rust.ql")
+            .exists());
+        assert!(bundle
+            .cache_path
+            .join("queries")
+            .join("rust")
+            .join("qlpack.yml")
+            .exists());
         assert_eq!(
             fs::read_to_string(bundle.cache_path.join(BUNDLE_MARKER_FILE))
                 .unwrap()
@@ -828,11 +1219,9 @@ mod tests {
             .unwrap_err();
         server.join().unwrap();
 
-        assert!(
-            error
-                .to_string()
-                .contains("failed to download CodeQL bundle v2.0.0")
-        );
+        assert!(error
+            .to_string()
+            .contains("failed to download CodeQL bundle v2.0.0"));
         let temp_archives: Vec<_> = fs::read_dir(temp.path().join("codeql"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -960,30 +1349,71 @@ mod tests {
         deploy_bundled_queries(&bundle_dir).unwrap();
 
         for (filename, expected_content) in BUNDLED_QUERIES {
-            let path = bundle_dir.join("queries").join(filename);
+            let path = bundle_dir
+                .join("queries")
+                .join(bundled_query_lang_dir(filename))
+                .join(filename);
             assert!(path.exists(), "{filename} should be created");
+            assert_eq!(fs::read_to_string(&path).unwrap(), *expected_content);
+        }
+        for (lang_dir, expected_content) in BUNDLED_QLPACKS {
+            let path = bundle_dir.join("queries").join(lang_dir).join("qlpack.yml");
+            assert!(path.exists(), "{lang_dir}/qlpack.yml should be created");
             assert_eq!(fs::read_to_string(&path).unwrap(), *expected_content);
         }
     }
 
     #[test]
-    fn deploy_bundled_queries_preserves_existing_files() {
+    fn deploy_bundled_queries_overwrites_stale_content() {
         let temp = TempDir::new().unwrap();
         let bundle_dir = temp.path().join("codeql").join("2.0.0");
-        let queries_dir = bundle_dir.join("queries");
-        fs::create_dir_all(&queries_dir).unwrap();
-        fs::write(queries_dir.join("extract-rust.ql"), "// custom query\n").unwrap();
+        let query_dir = bundle_dir.join("queries").join("rust");
+        fs::create_dir_all(&query_dir).unwrap();
+        fs::write(query_dir.join("extract-rust.ql"), "select 1\n").unwrap();
 
         deploy_bundled_queries(&bundle_dir).unwrap();
 
-        assert_eq!(
-            fs::read_to_string(queries_dir.join("extract-rust.ql")).unwrap(),
-            "// custom query\n",
-            "existing file should not be overwritten"
+        let content = fs::read_to_string(query_dir.join("extract-rust.ql")).unwrap();
+        assert_ne!(
+            content, "select 1\n",
+            "stale query should be overwritten with bundled content"
         );
         assert!(
-            queries_dir.join("extract-python.ql").exists(),
-            "missing files should be created"
+            content.contains("query predicate"),
+            "overwritten query should contain real predicates"
+        );
+    }
+
+    #[test]
+    fn bundled_queries_use_named_predicates_instead_of_select_stubs() {
+        for (filename, query) in BUNDLED_QUERIES {
+            assert!(
+                !query.contains("select 1"),
+                "{filename} should not contain a select stub"
+            );
+            for predicate in ["modules", "functions", "classes", "contains", "calls"] {
+                assert!(
+                    query.contains(&format!("query predicate {predicate}")),
+                    "{filename} should define `{predicate}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_go_query_matches_bundled_codeql_pack_capabilities() {
+        let (_, query) = BUNDLED_QUERIES
+            .iter()
+            .find(|(filename, _)| *filename == "extract-go.ql")
+            .expect("extract-go.ql should be bundled");
+
+        assert!(
+            !query.contains("import codeql.files.FileSystem"),
+            "Go bundled query should avoid unavailable FileSystem imports"
+        );
+        assert!(
+            query.contains("FuncDecl"),
+            "Go bundled query should use FuncDecl for file and location access"
         );
     }
 }
