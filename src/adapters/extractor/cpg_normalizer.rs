@@ -297,33 +297,38 @@ impl CpgNormalizer {
         fixture_nodes: Vec<FixtureNode>,
         kind: NodeKind,
     ) -> Result<Vec<RawNode>, NormalizationError> {
-        fixture_nodes
-            .into_iter()
-            .map(|node| {
-                let file_path = FilePath::from(normalize_fixture_path(workspace_root, &node.file)?);
-                let language = node
-                    .language
-                    .map(FixtureLanguage::into_domain)
-                    .or_else(|| source_files.get(&file_path).map(|file| file.language))
-                    .or_else(|| infer_language_from_path(file_path.as_str()));
-                let extension = language.map(|language| LanguageExtension {
-                    language,
-                    properties: node.properties.clone(),
-                });
+        let mut raw_nodes = Vec::new();
 
-                Ok(RawNode {
-                    source_id: node.id,
-                    kind,
-                    name: node.name,
-                    location: SourceLocation {
-                        file_path,
-                        start_line: node.start_line,
-                        end_line: node.end_line,
-                    },
-                    extension,
-                })
-            })
-            .collect()
+        for node in fixture_nodes {
+            let file_path = FilePath::from(normalize_fixture_path(workspace_root, &node.file)?);
+            if !source_files.contains_key(&file_path) {
+                continue;
+            }
+
+            let language = node
+                .language
+                .map(FixtureLanguage::into_domain)
+                .or_else(|| source_files.get(&file_path).map(|file| file.language))
+                .or_else(|| infer_language_from_path(file_path.as_str()));
+            let extension = language.map(|language| LanguageExtension {
+                language,
+                properties: node.properties.clone(),
+            });
+
+            raw_nodes.push(RawNode {
+                source_id: node.id,
+                kind,
+                name: node.name,
+                location: SourceLocation {
+                    file_path,
+                    start_line: node.start_line,
+                    end_line: node.end_line,
+                },
+                extension,
+            });
+        }
+
+        Ok(raw_nodes)
     }
 }
 
@@ -739,6 +744,41 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn filters_out_nodes_from_files_not_in_source_files() {
+        let workspace_root = std::path::Path::new("/workspace");
+        let source_files = BTreeMap::from([(
+            FilePath::from("src/lib.rs"),
+            SourceFile {
+                path: FilePath::from("src/lib.rs"),
+                language: Language::Rust,
+            },
+        )]);
+        let fixture = r#"{
+            "functions": [
+                {"id":"fn1","name":"real_fn","file":"src/lib.rs","start_line":1,"end_line":5,"language":"rust"},
+                {"id":"fn2","name":"generated_fn","file":"target/debug/build/out/generated.rs","start_line":1,"end_line":10,"language":"rust"}
+            ],
+            "modules": [
+                {"id":"mod1","name":"lib","file":"src/lib.rs","start_line":1,"end_line":10,"language":"rust"},
+                {"id":"mod2","name":"generated","file":"target/debug/build/out/generated.rs","start_line":1,"end_line":20,"language":"rust"}
+            ]
+        }"#;
+
+        let analysis = CpgNormalizer
+            .normalize_fixture_bytes(workspace_root, source_files, fixture.as_bytes())
+            .unwrap();
+
+        assert_eq!(analysis.cpg.nodes.len(), 2);
+        assert!(
+            analysis
+                .cpg
+                .nodes
+                .iter()
+                .all(|node| node.location.file_path == FilePath::from("src/lib.rs"))
+        );
     }
 
     fn load_fixture(name: &str) -> String {

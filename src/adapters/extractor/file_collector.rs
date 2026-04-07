@@ -6,6 +6,17 @@ use crate::domains::FilePath;
 use crate::domains::cpg::{Language, SourceFile};
 use crate::platform::fs::{FileSystem, path_to_forward_slashes};
 
+/// Well-known build and artifact directories excluded by default.
+/// These are always excluded regardless of `.gitignore` or `--exclude` settings.
+const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
+    "target/**",
+    "node_modules/**",
+    "__pycache__/**",
+    ".venv/**",
+    ".git/**",
+    ".kalos/**",
+];
+
 #[derive(Debug)]
 pub struct FileCollector<'a, F> {
     file_system: &'a F,
@@ -78,6 +89,9 @@ where
 
     fn merged_exclude_rules(&self) -> Result<Vec<String>, io::Error> {
         let mut merged = BTreeSet::new();
+        for pattern in DEFAULT_EXCLUDE_PATTERNS {
+            merged.insert((*pattern).to_owned());
+        }
         if let Some(gitignore) = self.load_gitignore()? {
             for pattern in parse_ignore_file(&gitignore) {
                 merged.insert(pattern);
@@ -359,6 +373,62 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         assert!(files.contains_key(&FilePath::from("src/main.py")));
+    }
+
+    #[test]
+    fn excludes_default_build_artifact_directories() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = fs::canonicalize(temp.path()).unwrap();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::create_dir_all(workspace_root.join("target/debug/build/some-crate/out")).unwrap();
+        fs::create_dir_all(workspace_root.join("node_modules/pkg")).unwrap();
+        fs::create_dir_all(workspace_root.join("__pycache__")).unwrap();
+        fs::create_dir_all(workspace_root.join(".venv/bin")).unwrap();
+        fs::create_dir_all(workspace_root.join(".git/hooks")).unwrap();
+        fs::create_dir_all(workspace_root.join(".kalos/cache")).unwrap();
+        fs::write(workspace_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            workspace_root.join("target/debug/build/some-crate/out/generated.rs"),
+            "fn generated() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join("node_modules/pkg/index.ts"),
+            "export const x = 1;\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join("__pycache__/module.py"),
+            "print('skip')\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join(".venv/bin/activate.py"),
+            "print('skip')\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join(".git/hooks/pre-commit.py"),
+            "print('skip')\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join(".kalos/cache/generated.ts"),
+            "export const generated = true;\n",
+        )
+        .unwrap();
+
+        let collector = FileCollector::new(
+            &RealFileSystem,
+            &workspace_root,
+            &[".py", ".ts", ".rs"],
+            &[],
+        );
+
+        let files = collector.collect(&[FilePath::from(".")]).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert!(files.contains_key(&FilePath::from("src/main.rs")));
     }
 
     #[test]
