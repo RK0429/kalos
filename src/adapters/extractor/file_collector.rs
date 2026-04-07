@@ -483,6 +483,38 @@ mod tests {
     }
 
     #[test]
+    fn gitignore_directory_pattern_excludes_nested_files() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = fs::canonicalize(temp.path()).unwrap();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::create_dir_all(workspace_root.join("tmp/cache")).unwrap();
+        fs::write(workspace_root.join(".gitignore"), "tmp/\n").unwrap();
+        fs::write(workspace_root.join("src/main.py"), "print('keep')\n").unwrap();
+        fs::write(
+            workspace_root.join("tmp/scratch.py"),
+            "print('exclude')\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join("tmp/cache/data.py"),
+            "print('exclude')\n",
+        )
+        .unwrap();
+
+        let collector = FileCollector::new(
+            &RealFileSystem,
+            &workspace_root,
+            &[".py", ".ts", ".tsx", ".rs", ".go"],
+            &[],
+        );
+
+        let files = collector.collect(&[FilePath::from(".")]).unwrap();
+
+        assert_eq!(files.len(), 1, "only src/main.py should remain, got: {files:?}");
+        assert!(files.contains_key(&FilePath::from("src/main.py")));
+    }
+
+    #[test]
     fn exclude_matcher_edge_cases() {
         assert!(!matches_pattern("logs/debug.log", ""));
         assert!(matches_pattern(

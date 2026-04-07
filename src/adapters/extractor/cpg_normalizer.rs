@@ -546,7 +546,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
 
-    use super::{CpgNormalizer, NormalizationError};
+    use super::{
+        CodeQlQueryOutput, CpgNormalizer, FixtureLanguage, FixtureNode, NormalizationError,
+    };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
 
@@ -612,6 +614,54 @@ mod tests {
         assert_eq!(
             analysis.cpg.nodes[0].location.file_path,
             FilePath::from("tests/fixtures/codeql/tmp.rs")
+        );
+    }
+
+    #[test]
+    fn normalize_filters_out_nodes_for_files_missing_from_source_files() {
+        let workspace_root = std::path::Path::new("/workspace");
+        let source_files = BTreeMap::from([(
+            FilePath::from("src/main.rs"),
+            SourceFile {
+                path: FilePath::from("src/main.rs"),
+                language: Language::Rust,
+            },
+        )]);
+        let output = CodeQlQueryOutput {
+            functions: vec![
+                FixtureNode {
+                    id: "fn_src/main.rs:1:main".to_string(),
+                    name: "main".to_string(),
+                    file: "src/main.rs".to_string(),
+                    start_line: 1,
+                    end_line: 3,
+                    language: Some(FixtureLanguage::Rust),
+                    properties: BTreeMap::new(),
+                },
+                FixtureNode {
+                    id: "fn_tmp/scratch.rs:1:scratch".to_string(),
+                    name: "scratch".to_string(),
+                    file: "tmp/scratch.rs".to_string(),
+                    start_line: 1,
+                    end_line: 1,
+                    language: Some(FixtureLanguage::Rust),
+                    properties: BTreeMap::new(),
+                },
+            ],
+            ..CodeQlQueryOutput::default()
+        };
+
+        let analysis = CpgNormalizer
+            .normalize(workspace_root, source_files, output)
+            .unwrap();
+
+        assert_eq!(analysis.cpg.nodes.len(), 1);
+        assert!(
+            analysis
+                .cpg
+                .nodes
+                .iter()
+                .all(|node| node.location.file_path == FilePath::from("src/main.rs"))
         );
     }
 
