@@ -26,6 +26,7 @@ pub struct CodeQlAdapter<F, R, T> {
     bundle_version: String,
     exclude_patterns: Vec<String>,
     normalizer: CpgNormalizer,
+    progress: bool,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -43,7 +44,13 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             bundle_version: bundle_version.into(),
             exclude_patterns,
             normalizer: CpgNormalizer,
+            progress: false,
         }
+    }
+
+    pub fn with_progress(mut self) -> Self {
+        self.progress = true;
+        self
     }
 
     pub fn language_pack(language: Language) -> &'static str {
@@ -144,6 +151,9 @@ where
 
         for language in languages {
             let lang_dir = Self::language_pack(language).replace('/', "-");
+            if self.progress {
+                eprintln!("  codeql: analyzing {} ...", language_name(language));
+            }
             let database_path = request
                 .workspace_root
                 .join(".kalos")
@@ -167,6 +177,9 @@ where
                     source,
                 })?;
 
+            if self.progress {
+                eprintln!("    database create ...");
+            }
             self.run_checked(
                 &codeql_program,
                 build_database_create_args(&database_path, &request.workspace_root, language),
@@ -175,6 +188,9 @@ where
                 language,
             )?;
 
+            if self.progress {
+                eprintln!("    query run ...");
+            }
             self.run_checked(
                 &codeql_program,
                 build_query_run_args(&database_path, &query_path, &bqrs_path, &bundle.cache_path),
@@ -183,6 +199,9 @@ where
                 language,
             )?;
 
+            if self.progress {
+                eprintln!("    bqrs decode ...");
+            }
             let decode_output = self.run_checked(
                 &codeql_program,
                 build_bqrs_decode_args(&bqrs_path),
@@ -325,10 +344,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        codeql_executable_path, format_command_guidance, CodeQlAdapter, CodeQlAdapterError,
+        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, format_command_guidance,
     };
-    use crate::domains::cpg::{EdgeKind, Language, NodeKind};
     use crate::domains::FilePath;
+    use crate::domains::cpg::{EdgeKind, Language, NodeKind};
     use crate::platform::fs::InMemoryFileSystem;
     use crate::platform::process::{MockCommandRunner, ProcessError, ProcessOutput};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
@@ -585,9 +604,11 @@ mod tests {
             })
             .unwrap();
 
-        assert!(file_system_for_assertion
-            .created_dirs()
-            .contains(&PathBuf::from("/workspace/.kalos/codeql")));
+        assert!(
+            file_system_for_assertion
+                .created_dirs()
+                .contains(&PathBuf::from("/workspace/.kalos/codeql"))
+        );
     }
 
     #[test]
@@ -874,8 +895,10 @@ mod tests {
         };
 
         let directory_missing_display = directory_missing_error.to_string();
-        assert!(directory_missing_display
-            .contains("the CodeQL database output directory does not exist"));
+        assert!(
+            directory_missing_display
+                .contains("the CodeQL database output directory does not exist")
+        );
         assert!(!directory_missing_display.contains("bundle may be incomplete"));
 
         let query_missing_stderr = "/path/to/extract-python.ql does not exist".to_owned();

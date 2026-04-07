@@ -19,7 +19,7 @@ use crate::adapters::llm::http::validate_llm_config;
 use crate::adapters::plugin::{
     EvaluationWarning, ModuleLoadWarning, PluginHostError, WasmPluginHost,
 };
-use crate::adapters::tool_cache::{ManagedToolCacheAdapter, codeql_bundle_manifest};
+use crate::adapters::tool_cache::{ManagedToolCacheAdapter, Platform, codeql_bundle_manifest};
 use crate::application::pipeline::{AnalysisPipeline, DiffConfig};
 use crate::domains::MetricId;
 use crate::domains::Severity;
@@ -33,7 +33,11 @@ use crate::platform::process::SystemCommandRunner;
 use crate::ports::PluginPort;
 
 #[derive(Debug, Clone, Args)]
-#[command(about = "run code quality analysis")]
+#[command(
+    about = "run code quality analysis",
+    after_help = "NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
+                  which may cause significantly slower analysis on first invocation."
+)]
 pub struct CheckCommand {
     #[arg(
         value_name = "path",
@@ -155,6 +159,13 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
+        if self.format == OutputFormat::Human {
+            if let Some(notice) =
+                Platform::detect().and_then(|platform| platform.emulation_notice())
+            {
+                eprintln!("{notice}");
+            }
+        }
         let codeql_version = manifest.version.clone();
         let tool_cache = ManagedToolCacheAdapter::new(manifest);
         let exclude_patterns = config
@@ -162,13 +173,16 @@ impl CheckCommand {
             .iter()
             .map(|pattern| pattern.pattern.clone())
             .collect::<Vec<_>>();
-        let extractor = CodeQlAdapter::new(
+        let mut extractor = CodeQlAdapter::new(
             RealFileSystem,
             SystemCommandRunner,
             tool_cache,
             codeql_version,
             exclude_patterns,
         );
+        if self.format == OutputFormat::Human {
+            extractor = extractor.with_progress();
+        }
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
         let mut plugin_host = Some(WasmPluginHost::load(

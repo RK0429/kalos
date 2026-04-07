@@ -428,6 +428,30 @@ impl Platform {
             None
         }
     }
+
+    /// Returns true when the CodeQL bundle uses x86_64 binary on a non-x86_64 host.
+    /// On Apple Silicon this means Rosetta 2 emulation; on Linux ARM64 this means
+    /// QEMU or similar emulation.
+    pub fn is_emulated(&self) -> bool {
+        matches!(self, Self::MacosArm64 | Self::LinuxArm64)
+    }
+
+    /// Returns a user-facing notice about emulation overhead, if applicable.
+    pub fn emulation_notice(&self) -> Option<&'static str> {
+        match self {
+            Self::MacosArm64 => Some(
+                "note: CodeQL does not provide a native ARM64 bundle for macOS. \
+                 The x86_64 bundle will run via Rosetta 2, which may be significantly \
+                 slower on first invocation.",
+            ),
+            Self::LinuxArm64 => Some(
+                "note: CodeQL does not provide a native aarch64 bundle for Linux. \
+                 The x86_64 bundle requires emulation (e.g. QEMU), which may be \
+                 significantly slower.",
+            ),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -978,15 +1002,15 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use sha2::{Digest, Sha256};
     use tar::{Builder, Header};
     use tempfile::TempDir;
 
     use super::{
-        codeql_bundle_manifest, deploy_bundled_queries, BundleManifest, ManagedToolCacheAdapter,
-        Platform, BUNDLED_QLPACKS, BUNDLED_QUERIES, BUNDLE_MARKER_FILE,
+        BUNDLE_MARKER_FILE, BUNDLED_QLPACKS, BUNDLED_QUERIES, BundleManifest,
+        ManagedToolCacheAdapter, Platform, codeql_bundle_manifest, deploy_bundled_queries,
     };
     use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
@@ -1005,21 +1029,51 @@ mod tests {
         assert_eq!(manifest.sha256.len(), 64);
         match Platform::detect().unwrap() {
             Platform::LinuxX64 | Platform::LinuxArm64 => {
-                assert!(manifest
-                    .download_url
-                    .ends_with("codeql-bundle-linux64.tar.gz"));
+                assert!(
+                    manifest
+                        .download_url
+                        .ends_with("codeql-bundle-linux64.tar.gz")
+                );
             }
             Platform::MacosX64 | Platform::MacosArm64 => {
-                assert!(manifest
-                    .download_url
-                    .ends_with("codeql-bundle-osx64.tar.gz"));
+                assert!(
+                    manifest
+                        .download_url
+                        .ends_with("codeql-bundle-osx64.tar.gz")
+                );
             }
             Platform::WindowsX64 => {
-                assert!(manifest
-                    .download_url
-                    .ends_with("codeql-bundle-win64.tar.gz"));
+                assert!(
+                    manifest
+                        .download_url
+                        .ends_with("codeql-bundle-win64.tar.gz")
+                );
             }
         }
+    }
+
+    #[test]
+    fn platform_is_emulated_returns_true_for_arm64_variants() {
+        assert!(Platform::MacosArm64.is_emulated());
+        assert!(Platform::LinuxArm64.is_emulated());
+        assert!(!Platform::MacosX64.is_emulated());
+        assert!(!Platform::LinuxX64.is_emulated());
+        assert!(!Platform::WindowsX64.is_emulated());
+    }
+
+    #[test]
+    fn platform_emulation_notice_present_for_arm64_variants() {
+        assert!(Platform::MacosArm64.emulation_notice().is_some());
+        assert!(Platform::LinuxArm64.emulation_notice().is_some());
+        assert!(Platform::MacosX64.emulation_notice().is_none());
+        assert!(Platform::LinuxX64.emulation_notice().is_none());
+        assert!(Platform::WindowsX64.emulation_notice().is_none());
+    }
+
+    #[test]
+    fn platform_emulation_notice_mentions_rosetta_for_macos_arm64() {
+        let notice = Platform::MacosArm64.emulation_notice().unwrap();
+        assert!(notice.contains("Rosetta 2"));
     }
 
     #[test]
@@ -1106,18 +1160,22 @@ mod tests {
 
         assert_eq!(bundle.checksum, checksum);
         assert!(bundle.cache_path.join("codeql").exists());
-        assert!(bundle
-            .cache_path
-            .join("queries")
-            .join("rust")
-            .join("extract-rust.ql")
-            .exists());
-        assert!(bundle
-            .cache_path
-            .join("queries")
-            .join("rust")
-            .join("qlpack.yml")
-            .exists());
+        assert!(
+            bundle
+                .cache_path
+                .join("queries")
+                .join("rust")
+                .join("extract-rust.ql")
+                .exists()
+        );
+        assert!(
+            bundle
+                .cache_path
+                .join("queries")
+                .join("rust")
+                .join("qlpack.yml")
+                .exists()
+        );
         assert_eq!(
             fs::read_to_string(bundle.cache_path.join(BUNDLE_MARKER_FILE))
                 .unwrap()
@@ -1219,9 +1277,11 @@ mod tests {
             .unwrap_err();
         server.join().unwrap();
 
-        assert!(error
-            .to_string()
-            .contains("failed to download CodeQL bundle v2.0.0"));
+        assert!(
+            error
+                .to_string()
+                .contains("failed to download CodeQL bundle v2.0.0")
+        );
         let temp_archives: Vec<_> = fs::read_dir(temp.path().join("codeql"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
