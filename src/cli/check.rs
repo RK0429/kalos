@@ -83,6 +83,12 @@ pub struct CheckCommand {
     pub strict: bool,
     #[arg(
         long,
+        value_name = "ratio",
+        help = "minimum file ratio (0.0-1.0) for a language to be analyzed (default: 0.05)"
+    )]
+    pub min_language_ratio: Option<f64>,
+    #[arg(
+        long,
         short = 'o',
         value_name = "path",
         help = "write output to a file instead of stdout"
@@ -182,6 +188,9 @@ impl CheckCommand {
         );
         if self.format == OutputFormat::Human {
             extractor = extractor.with_progress();
+        }
+        if let Some(ratio) = self.min_language_ratio {
+            extractor = extractor.with_min_language_ratio(ratio);
         }
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);

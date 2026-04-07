@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -6,13 +6,15 @@ use thiserror::Error;
 
 use super::cpg_normalizer::{CodeQlQueryOutput, CpgNormalizer, NormalizationError};
 use super::file_collector::FileCollector;
-use crate::domains::cpg::{Language, SourceAnalysis, UnifiedCpg};
+use crate::domains::FilePath;
+use crate::domains::cpg::{AnalysisWarning, Language, SourceAnalysis, SourceFile, UnifiedCpg};
 use crate::platform::fs::FileSystem;
 use crate::platform::process::{CommandRunner, ProcessError, ProcessOutput};
 use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
 use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
 const DEFAULT_EXTENSIONS: [&str; 5] = [".py", ".ts", ".tsx", ".rs", ".go"];
+const DEFAULT_MIN_LANGUAGE_RATIO: f64 = 0.05;
 
 fn codeql_executable_path(bundle_cache_path: &Path) -> PathBuf {
     bundle_cache_path.join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
@@ -27,6 +29,7 @@ pub struct CodeQlAdapter<F, R, T> {
     exclude_patterns: Vec<String>,
     normalizer: CpgNormalizer,
     progress: bool,
+    min_language_ratio: f64,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -45,11 +48,17 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             exclude_patterns,
             normalizer: CpgNormalizer,
             progress: false,
+            min_language_ratio: DEFAULT_MIN_LANGUAGE_RATIO,
         }
     }
 
     pub fn with_progress(mut self) -> Self {
         self.progress = true;
+        self
+    }
+
+    pub fn with_min_language_ratio(mut self, ratio: f64) -> Self {
+        self.min_language_ratio = ratio;
         self
     }
 
@@ -144,10 +153,24 @@ where
             })?;
         let codeql_program = codeql_executable_path(&bundle.cache_path);
         let mut combined_output = CodeQlQueryOutput::default();
-        let languages = source_files
-            .values()
-            .map(|source_file| source_file.language)
-            .collect::<BTreeSet<_>>();
+        let language_counts = count_source_files_by_language(&source_files);
+        let (languages, language_warnings) =
+            filter_incidental_languages(&source_files, self.min_language_ratio);
+
+        if self.progress {
+            let total_files = source_files.len();
+            for (language, count) in &language_counts {
+                if !languages.contains(language) {
+                    eprintln!(
+                        "  codeql: skipping {} ({} of {} files, below {:.0}% threshold)",
+                        language_name(*language),
+                        count,
+                        total_files,
+                        self.min_language_ratio * 100.0
+                    );
+                }
+            }
+        }
 
         for language in languages {
             let lang_dir = Self::language_pack(language).replace('/', "-");
@@ -212,9 +235,11 @@ where
             combined_output.extend_from(CpgNormalizer::parse_output(&decode_output.stdout)?);
         }
 
-        Ok(self
-            .normalizer
-            .normalize(&request.workspace_root, source_files, combined_output)?)
+        let mut analysis =
+            self.normalizer
+                .normalize(&request.workspace_root, source_files, combined_output)?;
+        analysis.warnings.extend(language_warnings);
+        Ok(analysis)
     }
 }
 
@@ -300,6 +325,65 @@ fn build_bqrs_decode_args(bqrs_path: &Path) -> Vec<String> {
     ]
 }
 
+fn count_source_files_by_language(
+    source_files: &BTreeMap<FilePath, SourceFile>,
+) -> BTreeMap<Language, usize> {
+    let mut counts = BTreeMap::new();
+    for source_file in source_files.values() {
+        *counts.entry(source_file.language).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn filter_incidental_languages(
+    source_files: &BTreeMap<FilePath, SourceFile>,
+    min_ratio: f64,
+) -> (BTreeSet<Language>, Vec<AnalysisWarning>) {
+    let total_file_count = source_files.len();
+    if total_file_count == 0 {
+        return (BTreeSet::new(), Vec::new());
+    }
+
+    let language_counts = count_source_files_by_language(source_files);
+    let mut languages = language_counts
+        .iter()
+        .filter_map(|(language, count)| {
+            let ratio = (*count as f64) / (total_file_count as f64);
+            (ratio >= min_ratio).then_some(*language)
+        })
+        .collect::<BTreeSet<_>>();
+
+    if languages.is_empty() {
+        if let Some((language, _)) = language_counts
+            .iter()
+            .max_by_key(|(language, count)| (**count, **language))
+        {
+            languages.insert(*language);
+        }
+    }
+
+    let warnings = language_counts
+        .into_iter()
+        .filter(|(language, _)| !languages.contains(language))
+        .map(|(language, count)| {
+            let percentage = (count as f64) * 100.0 / (total_file_count as f64);
+            AnalysisWarning {
+                file_path: FilePath::from("."),
+                message: format!(
+                    "skipped CodeQL database creation for {} ({} of {} files, {:.1}%): below minimum language ratio ({:.1}%)",
+                    language_name(language),
+                    count,
+                    total_file_count,
+                    percentage,
+                    min_ratio * 100.0
+                ),
+            }
+        })
+        .collect();
+
+    (languages, warnings)
+}
+
 fn format_command_guidance(stderr: &str) -> String {
     let (cause, hint) = classify_codeql_error(stderr);
     let detail = stderr.trim();
@@ -336,6 +420,7 @@ fn language_name(language: Language) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
     use std::convert::Infallible;
     use std::fs;
     use std::io;
@@ -344,10 +429,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, format_command_guidance,
+        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, filter_incidental_languages,
+        format_command_guidance,
     };
     use crate::domains::FilePath;
-    use crate::domains::cpg::{EdgeKind, Language, NodeKind};
+    use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
     use crate::platform::fs::InMemoryFileSystem;
     use crate::platform::process::{MockCommandRunner, ProcessError, ProcessOutput};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
@@ -734,6 +820,99 @@ mod tests {
     }
 
     #[test]
+    fn incidental_language_is_skipped_by_default() {
+        let file_system = mixed_language_file_system(20, 1);
+        let command_runner = MockCommandRunner::new();
+        push_successful_language_results(&command_runner, 1);
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        let analysis = adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(invocations.len(), 3);
+        assert_eq!(analysis.warnings.len(), 1);
+        assert!(
+            analysis.warnings[0]
+                .message
+                .contains("skipped CodeQL database creation for python")
+        );
+    }
+
+    #[test]
+    fn incidental_language_included_when_ratio_set_to_zero() {
+        let file_system = mixed_language_file_system(20, 1);
+        let command_runner = MockCommandRunner::new();
+        push_successful_language_results(&command_runner, 2);
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_min_language_ratio(0.0);
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(invocations.len(), 6);
+    }
+
+    #[test]
+    fn filter_incidental_languages_keeps_dominant() {
+        let source_files = source_files_from_counts(20, 1);
+
+        let (languages, warnings) = filter_incidental_languages(&source_files, 0.05);
+
+        assert_eq!(languages, BTreeSet::from([Language::Rust]));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("python"));
+    }
+
+    #[test]
+    fn filter_incidental_languages_keeps_all_when_above_threshold() {
+        let source_files = source_files_from_counts(10, 10);
+
+        let (languages, warnings) = filter_incidental_languages(&source_files, 0.05);
+
+        assert_eq!(
+            languages,
+            BTreeSet::from([Language::Python, Language::Rust])
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn filter_incidental_languages_never_skips_all() {
+        let source_files = source_files_from_counts(1, 1);
+
+        let (languages, warnings) = filter_incidental_languages(&source_files, 0.99);
+
+        assert_eq!(languages.len(), 1);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
     fn codeql_adapter_returns_error_on_command_failure() {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/web/app.tsx", "export const App = () => null;\n");
@@ -935,5 +1114,85 @@ mod tests {
             .join("tests/fixtures/codeql")
             .join(name);
         fs::read_to_string(path).unwrap()
+    }
+
+    fn mixed_language_file_system(rust_count: usize, python_count: usize) -> InMemoryFileSystem {
+        let mut file_system = InMemoryFileSystem::new();
+        for index in 0..rust_count {
+            file_system.insert(
+                &format!("/workspace/src/module_{index}.rs"),
+                "pub fn placeholder() -> i32 { 1 }\n",
+            );
+        }
+        for index in 0..python_count {
+            file_system.insert(
+                &format!("/workspace/scripts/task_{index}.py"),
+                "def task():\n    return 1\n",
+            );
+        }
+        file_system
+    }
+
+    fn source_files_from_counts(
+        rust_count: usize,
+        python_count: usize,
+    ) -> BTreeMap<FilePath, SourceFile> {
+        let mut source_files = BTreeMap::new();
+        for index in 0..rust_count {
+            let path = FilePath::from(format!("src/module_{index}.rs"));
+            source_files.insert(
+                path.clone(),
+                SourceFile {
+                    path,
+                    language: Language::Rust,
+                },
+            );
+        }
+        for index in 0..python_count {
+            let path = FilePath::from(format!("scripts/task_{index}.py"));
+            source_files.insert(
+                path.clone(),
+                SourceFile {
+                    path,
+                    language: Language::Python,
+                },
+            );
+        }
+        source_files
+    }
+
+    fn push_successful_language_results(command_runner: &MockCommandRunner, language_count: usize) {
+        for _ in 0..language_count {
+            command_runner
+                .push_result(Ok(ProcessOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }))
+                .unwrap();
+            command_runner
+                .push_result(Ok(ProcessOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }))
+                .unwrap();
+            command_runner
+                .push_result(Ok(ProcessOutput {
+                    stdout: b"{}".to_vec(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }))
+                .unwrap();
+        }
+    }
+
+    fn mock_bundle() -> ResolvedToolBundle {
+        ResolvedToolBundle {
+            tool_name: "codeql".to_owned(),
+            version: "2.0.0".to_owned(),
+            cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+            checksum: "a".repeat(64),
+        }
     }
 }

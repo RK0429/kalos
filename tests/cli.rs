@@ -246,6 +246,39 @@ fn kalos_check_emits_codeql_phase_progress_on_stderr() {
 }
 
 #[test]
+fn kalos_check_skips_incidental_language_database_creation() {
+    let temp = seeded_mixed_language_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("skipping python"))
+        .stderr(predicate::str::contains("analyzing python").not())
+        .stderr(predicate::str::contains("analyzing rust"));
+}
+
+#[test]
+fn kalos_check_analyzes_all_languages_when_min_ratio_zero() {
+    let temp = seeded_mixed_language_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--min-language-ratio", "0.0"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("analyzing rust"))
+        .stderr(predicate::str::contains("analyzing python"));
+}
+
+#[test]
 fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
@@ -737,6 +770,30 @@ fn seeded_workspace() -> TempDir {
     temp
 }
 
+fn seeded_mixed_language_workspace() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "pub fn placeholder() -> i32 { 1 }\n",
+    )
+    .unwrap();
+    for index in 1..20 {
+        fs::write(
+            temp.path().join(format!("src/module_{index}.rs")),
+            format!("pub fn module_{index}() -> i32 {{ {index} }}\n"),
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(temp.path().join("scripts")).unwrap();
+    fs::write(
+        temp.path().join("scripts/tool.py"),
+        "def tool() -> int:\n    return 1\n",
+    )
+    .unwrap();
+    temp
+}
+
 fn seeded_git_workspace() -> TempDir {
     let temp = seeded_workspace();
     run_git(temp.path(), &["init"]);
@@ -767,7 +824,15 @@ fn seed_fake_codeql_bundle_with_fixture(workspace_root: &Path, fixture: &str) ->
     let queries_dir = bundle_dir.join("queries");
     fs::create_dir_all(&queries_dir).unwrap();
     fs::write(bundle_dir.join("bundle.marker"), manifest.sha256.as_bytes()).unwrap();
-    fs::write(queries_dir.join("extract-rust.ql"), "// fixture query\n").unwrap();
+    for language in ["python", "javascript-typescript", "rust", "go"] {
+        let language_dir = queries_dir.join(language);
+        fs::create_dir_all(&language_dir).unwrap();
+        fs::write(
+            language_dir.join(format!("extract-{language}.ql")),
+            "// fixture query\n",
+        )
+        .unwrap();
+    }
     write_fake_codeql_executable(&codeql_executable_path(&bundle_dir), fixture);
     cache_dir
 }
