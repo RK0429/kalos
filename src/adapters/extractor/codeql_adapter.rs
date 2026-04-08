@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::cpg_normalizer::{CodeQlQueryOutput, CpgNormalizer, NormalizationError};
@@ -18,6 +19,32 @@ const DEFAULT_MIN_LANGUAGE_RATIO: f64 = 0.05;
 
 fn codeql_executable_path(bundle_cache_path: &Path) -> PathBuf {
     bundle_cache_path.join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Compute a content-based fingerprint from source files for a given language.
+/// Returns None if any file cannot be read (falls through to normal execution).
+fn compute_source_fingerprint<F: FileSystem>(
+    file_system: &F,
+    workspace_root: &Path,
+    source_files: &BTreeMap<FilePath, SourceFile>,
+    language: Language,
+    bundle_version: &str,
+) -> Option<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(bundle_version.as_bytes());
+    hasher.update(b"|");
+    for (path, source_file) in source_files {
+        if source_file.language != language {
+            continue;
+        }
+        let abs_path = workspace_root.join(path.as_str());
+        let content = file_system.read_to_string(&abs_path).ok()?;
+        hasher.update(path.as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(content.as_bytes());
+        hasher.update(b"\0");
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +209,8 @@ where
                 .join(".kalos")
                 .join("codeql")
                 .join(&lang_dir);
+            let cache_key_path = database_path.with_extension("cache_key");
+            let decoded_cache_path = database_path.with_extension("decoded.json");
             let bqrs_path = database_path.with_extension("bqrs");
             let database_dir = database_path
                 .parent()
@@ -199,6 +228,30 @@ where
                     path: database_dir.clone(),
                     source,
                 })?;
+
+            let source_fingerprint = compute_source_fingerprint(
+                &self.file_system,
+                &request.workspace_root,
+                &source_files,
+                language,
+                &self.bundle_version,
+            );
+
+            if let Some(ref fingerprint) = source_fingerprint {
+                if let Ok(stored_key) = std::fs::read_to_string(&cache_key_path) {
+                    if stored_key.trim() == *fingerprint {
+                        if let Ok(cached_bytes) = std::fs::read(&decoded_cache_path) {
+                            if let Ok(parsed) = CpgNormalizer::parse_output(&cached_bytes) {
+                                if self.progress {
+                                    eprintln!("    cached");
+                                }
+                                combined_output.extend_from(parsed);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
 
             if self.progress {
                 eprintln!("    database create ...");
@@ -232,6 +285,10 @@ where
                 "bqrs decode",
                 language,
             )?;
+            if let Some(ref fingerprint) = source_fingerprint {
+                let _ = std::fs::write(&decoded_cache_path, &decode_output.stdout);
+                let _ = std::fs::write(&cache_key_path, fingerprint.as_str());
+            }
             combined_output.extend_from(CpgNormalizer::parse_output(&decode_output.stdout)?);
         }
 
@@ -429,12 +486,12 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, filter_incidental_languages,
-        format_command_guidance,
+        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, compute_source_fingerprint,
+        filter_incidental_languages, format_command_guidance,
     };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
-    use crate::platform::fs::InMemoryFileSystem;
+    use crate::platform::fs::{InMemoryFileSystem, RealFileSystem};
     use crate::platform::process::{MockCommandRunner, ProcessError, ProcessOutput};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
     use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
@@ -820,6 +877,196 @@ mod tests {
     }
 
     #[test]
+    fn codeql_adapter_skips_extraction_on_cache_hit() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = temp.path();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::write(workspace_root.join("src/lib.rs"), "fn main() {}\n").unwrap();
+        fs::create_dir_all(workspace_root.join(".kalos/codeql")).unwrap();
+        let source_files = single_source_file("src/lib.rs", Language::Rust);
+        let fingerprint = compute_source_fingerprint(
+            &RealFileSystem,
+            workspace_root,
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join(".kalos/codeql/rust.cache_key"),
+            fingerprint,
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join(".kalos/codeql/rust.decoded.json"),
+            load_fixture("rust.json"),
+        )
+        .unwrap();
+
+        let command_runner = MockCommandRunner::new();
+        let adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        let analysis = adapter
+            .extract(&ExtractionRequest {
+                workspace_root: workspace_root.to_path_buf(),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        assert_eq!(
+            analysis.source_files.keys().cloned().collect::<Vec<_>>(),
+            vec![FilePath::from("src/lib.rs")]
+        );
+        assert!(command_runner.invocations().unwrap().is_empty());
+    }
+
+    #[test]
+    fn codeql_adapter_runs_extraction_on_cache_miss() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = temp.path();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::write(workspace_root.join("src/lib.rs"), "fn main() {}\n").unwrap();
+        fs::create_dir_all(workspace_root.join(".kalos/codeql")).unwrap();
+        fs::write(
+            workspace_root.join(".kalos/codeql/rust.cache_key"),
+            "stale-hash",
+        )
+        .unwrap();
+
+        let command_runner = MockCommandRunner::new();
+        push_successful_language_results(&command_runner, 1);
+        let adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: workspace_root.to_path_buf(),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        assert_eq!(command_runner.invocations().unwrap().len(), 3);
+        let source_files = single_source_file("src/lib.rs", Language::Rust);
+        let fingerprint = compute_source_fingerprint(
+            &RealFileSystem,
+            workspace_root,
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(workspace_root.join(".kalos/codeql/rust.cache_key"))
+                .unwrap()
+                .trim(),
+            fingerprint
+        );
+        assert!(
+            workspace_root
+                .join(".kalos/codeql/rust.decoded.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn codeql_adapter_cache_miss_when_source_modified() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = temp.path();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::create_dir_all(workspace_root.join(".kalos/codeql")).unwrap();
+        let source_path = workspace_root.join("src/lib.rs");
+        fs::write(&source_path, "fn main() {}\n").unwrap();
+
+        let first_runner = MockCommandRunner::new();
+        push_successful_language_results(&first_runner, 1);
+        let first_adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            first_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        first_adapter
+            .extract(&ExtractionRequest {
+                workspace_root: workspace_root.to_path_buf(),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let source_files = single_source_file("src/lib.rs", Language::Rust);
+        let initial_fingerprint = compute_source_fingerprint(
+            &RealFileSystem,
+            workspace_root,
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(workspace_root.join(".kalos/codeql/rust.cache_key"))
+                .unwrap()
+                .trim(),
+            initial_fingerprint
+        );
+
+        fs::write(&source_path, "fn main() { println!(\"changed\"); }\n").unwrap();
+
+        let second_runner = MockCommandRunner::new();
+        push_successful_language_results(&second_runner, 1);
+        let second_adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            second_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        second_adapter
+            .extract(&ExtractionRequest {
+                workspace_root: workspace_root.to_path_buf(),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let updated_fingerprint = compute_source_fingerprint(
+            &RealFileSystem,
+            workspace_root,
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+        )
+        .unwrap();
+        assert_ne!(updated_fingerprint, initial_fingerprint);
+        assert_eq!(second_runner.invocations().unwrap().len(), 3);
+        assert_eq!(
+            fs::read_to_string(workspace_root.join(".kalos/codeql/rust.cache_key"))
+                .unwrap()
+                .trim(),
+            updated_fingerprint
+        );
+    }
+
+    #[test]
     fn incidental_language_is_skipped_by_default() {
         let file_system = mixed_language_file_system(20, 1);
         let command_runner = MockCommandRunner::new();
@@ -1159,6 +1406,11 @@ mod tests {
             );
         }
         source_files
+    }
+
+    fn single_source_file(path: &str, language: Language) -> BTreeMap<FilePath, SourceFile> {
+        let path = FilePath::from(path);
+        BTreeMap::from([(path.clone(), SourceFile { path, language })])
     }
 
     fn push_successful_language_results(command_runner: &MockCommandRunner, language_count: usize) {
