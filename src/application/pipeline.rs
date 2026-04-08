@@ -25,7 +25,7 @@ use crate::domains::metrics::{
     builtin_metric_definitions, metric_catalog_from_definitions,
 };
 use crate::domains::reporting::{
-    AnalysisReport, ReportMetadata, ReportViewOptions, summary_scope_for,
+    AnalysisReport, ReportMetadata, ReportViewOptions, materialize_summary, summary_scope_for,
 };
 use crate::domains::{AnalysisLevel, FilePath, MetricId, ScopeId, Severity};
 use crate::ports::cache::CachePort;
@@ -384,17 +384,19 @@ where
             if let Some(host) = plugin_host.as_mut() {
                 host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
             }
-            return self
+            let mut result = self
                 .run_and_store_full_baseline(
                     config,
-                    view_options,
+                    view_options.clone(),
                     fingerprint,
                     cache,
                     &plugin_metrics,
                     plugin_host,
                     llm,
                 )
-                .map_err(DiffPipelineError::from_pipeline_or_cache);
+                .map_err(DiffPipelineError::from_pipeline_or_cache)?;
+            narrow_to_diff_scope(&mut result, &snapshot.changed_files, &view_options);
+            return Ok(result);
         }
 
         if impact.invalidation_plan.fallback_to_full {
@@ -404,17 +406,19 @@ where
             if let Some(host) = plugin_host.as_mut() {
                 host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
             }
-            return self
+            let mut result = self
                 .run_and_store_full_baseline(
                     config,
-                    view_options,
+                    view_options.clone(),
                     fingerprint,
                     cache,
                     &plugin_metrics,
                     plugin_host,
                     llm,
                 )
-                .map_err(DiffPipelineError::from_pipeline_or_cache);
+                .map_err(DiffPipelineError::from_pipeline_or_cache)?;
+            narrow_to_diff_scope(&mut result, &snapshot.changed_files, &view_options);
+            return Ok(result);
         }
 
         let baseline = baseline.expect("baseline existence checked above");
@@ -894,6 +898,28 @@ fn finalize_result(
         exit_code,
         llm_suggestions,
     }
+}
+
+fn narrow_to_diff_scope(
+    result: &mut PipelineResult,
+    changed_files: &BTreeSet<FilePath>,
+    view_options: &ReportViewOptions,
+) {
+    result
+        .report
+        .diagnostics
+        .diagnostics
+        .retain(|diagnostic| changed_files.contains(&diagnostic.location.file_path));
+    result.report.diagnostics.diagnostics_scope = DiagnosticsScope::AffectedOnly;
+    if summary_scope_for(view_options.requested_level) == SummaryScope::ListedDiagnostics {
+        result.report.diagnostics.summary =
+            materialize_summary(&result.report.diagnostics.diagnostics);
+    }
+    result.report.metadata.file_count = changed_files.len();
+    result.exit_code = result
+        .report
+        .diagnostics
+        .determine_exit_code(result.report.view.strict);
 }
 
 fn empty_metrics(
@@ -1522,8 +1548,9 @@ mod tests {
     use super::{
         AnalysisPipeline, DiffConfig, FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET,
         apply_dependency_resolution, assemble_report, build_baseline_fingerprint,
-        build_llm_requests, compute_metrics_with_plugins, generate_diagnostics, is_test_file,
-        merge_metrics, metrics_from_scope_map, project_scope_id,
+        build_llm_requests, compute_metrics_with_plugins, finalize_result, generate_diagnostics,
+        is_test_file, merge_metrics, metrics_from_scope_map, narrow_to_diff_scope,
+        project_scope_id,
     };
     use crate::adapters::plugin::PluginHostError;
     use crate::domains::config::{Defaults, ProjectConfig, WorkspaceRoot};
@@ -1840,6 +1867,69 @@ mod tests {
         assert_eq!(
             report.diagnostics.determine_exit_code(report.view.strict),
             crate::domains::diagnostics::ExitCode::DiagnosticFailure
+        );
+    }
+
+    #[test]
+    fn narrow_to_diff_scope_recomputes_exit_code_for_listed_diagnostics() {
+        let view_options = fixture_view_options(RequestedLevel::Function, false);
+        let report = assemble_report(
+            &fixture_config(),
+            fixture_metrics(),
+            &fixture_metric_catalog(),
+            vec![
+                metric_diagnostic(
+                    "diag-changed-warning",
+                    AnalysisLevel::Function,
+                    "crate::changed",
+                    "src/changed.rs",
+                    Severity::Warning,
+                    "KAL-F001",
+                    "M-F001",
+                ),
+                metric_diagnostic(
+                    "diag-unchanged-error",
+                    AnalysisLevel::Function,
+                    "crate::unchanged",
+                    "src/unchanged.rs",
+                    Severity::Error,
+                    "KAL-F001",
+                    "M-F001",
+                ),
+            ],
+            DiagnosticsScope::WholeProject,
+            view_options.clone(),
+            2,
+            None,
+        );
+        let mut result = finalize_result(report, None);
+
+        assert_eq!(
+            result.exit_code,
+            crate::domains::diagnostics::ExitCode::DiagnosticFailure
+        );
+
+        narrow_to_diff_scope(
+            &mut result,
+            &BTreeSet::from([FilePath::from("src/changed.rs")]),
+            &view_options,
+        );
+
+        assert_eq!(
+            result.report.diagnostics.diagnostics_scope,
+            DiagnosticsScope::AffectedOnly
+        );
+        assert_eq!(
+            result.report.diagnostics.summary_scope,
+            SummaryScope::ListedDiagnostics
+        );
+        assert_eq!(result.report.diagnostics.diagnostics.len(), 1);
+        assert_eq!(result.report.diagnostics.summary.error_count, 0);
+        assert_eq!(result.report.diagnostics.summary.warning_count, 1);
+        assert_eq!(result.report.metadata.file_count, 1);
+        assert_eq!(
+            result.exit_code,
+            crate::domains::diagnostics::ExitCode::Success
         );
     }
 
@@ -2307,7 +2397,10 @@ mod tests {
                 ),
                 (
                     request_key(&config.analysis_targets),
-                    warning_source_analysis("src/lib.rs", "crate::full"),
+                    combined_warning_source_analysis(&[
+                        ("src/changed.rs", "crate::changed", 10),
+                        ("src/unchanged.rs", "crate::unchanged", 20),
+                    ]),
                 ),
             ])),
             NullDependencyResolver,
@@ -2332,8 +2425,14 @@ mod tests {
 
         assert_eq!(
             result.report.diagnostics.diagnostics_scope,
-            DiagnosticsScope::WholeProject
+            DiagnosticsScope::AffectedOnly
         );
+        assert_eq!(result.report.diagnostics.diagnostics.len(), 1);
+        assert_eq!(
+            result.report.diagnostics.diagnostics[0].location.file_path,
+            FilePath::from("src/changed.rs")
+        );
+        assert_eq!(result.report.metadata.file_count, 1);
         assert_eq!(
             pipeline.extractor.requests.borrow().as_slice(),
             &[
@@ -2581,7 +2680,10 @@ mod tests {
                 ),
                 (
                     request_key(&config.analysis_targets),
-                    warning_source_analysis("src/lib.rs", "crate::full"),
+                    combined_warning_source_analysis(&[
+                        ("src/changed.rs", "crate::changed", 10),
+                        ("src/unchanged.rs", "crate::unchanged", 20),
+                    ]),
                 ),
             ])),
             NullDependencyResolver,
@@ -2606,8 +2708,14 @@ mod tests {
 
         assert_eq!(
             result.report.diagnostics.diagnostics_scope,
-            DiagnosticsScope::WholeProject
+            DiagnosticsScope::AffectedOnly
         );
+        assert_eq!(result.report.diagnostics.diagnostics.len(), 1);
+        assert_eq!(
+            result.report.diagnostics.diagnostics[0].location.file_path,
+            FilePath::from("src/changed.rs")
+        );
+        assert_eq!(result.report.metadata.file_count, 1);
         assert_eq!(
             pipeline.extractor.requests.borrow().as_slice(),
             &[
@@ -2892,11 +3000,41 @@ mod tests {
             .join("|")
     }
 
+    fn combined_warning_source_analysis(entries: &[(&str, &str, u64)]) -> SourceAnalysis {
+        let mut analysis = SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("graph:combined"),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+            source_files: BTreeMap::new(),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        };
+        for (file_path, function_name, seed) in entries {
+            let sub_analysis = warning_source_analysis_with_seed(file_path, function_name, *seed);
+            analysis.cpg.nodes.extend(sub_analysis.cpg.nodes);
+            analysis.cpg.edges.extend(sub_analysis.cpg.edges);
+            analysis.source_files.extend(sub_analysis.source_files);
+            analysis.suppressions.extend(sub_analysis.suppressions);
+            analysis.warnings.extend(sub_analysis.warnings);
+        }
+        analysis
+    }
+
     fn warning_source_analysis(file_path: &str, function_name: &str) -> SourceAnalysis {
-        let function_id = NodeId::from(1);
-        let branch_a = NodeId::from(2);
-        let branch_b = NodeId::from(3);
-        let branch_c = NodeId::from(4);
+        warning_source_analysis_with_seed(file_path, function_name, 1)
+    }
+
+    fn warning_source_analysis_with_seed(
+        file_path: &str,
+        function_name: &str,
+        seed: u64,
+    ) -> SourceAnalysis {
+        let function_id = NodeId::from(seed);
+        let branch_a = NodeId::from(seed + 1);
+        let branch_b = NodeId::from(seed + 2);
+        let branch_c = NodeId::from(seed + 3);
 
         SourceAnalysis {
             cpg: UnifiedCpg {

@@ -718,6 +718,26 @@ fn kalos_check_diff_falls_back_to_full_analysis_when_baseline_is_missing() {
 }
 
 #[test]
+fn kalos_check_diff_first_run_json_reports_affected_only_scope() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1", "--format", "json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(parsed["diagnostics_scope"], "affected_only");
+    assert_eq!(parsed["summary_scope"], "whole_project");
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
+}
+
+#[test]
 fn kalos_check_diff_uses_cached_baseline_on_subsequent_run() {
     let temp = seeded_git_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
