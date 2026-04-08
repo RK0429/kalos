@@ -142,7 +142,7 @@ impl_builtin_metric!(
     "Cyclomatic Complexity Risk",
     AnalysisLevel::Function,
     "KAL-F002",
-    "McCabe cyclomatic complexity normalized to the Wave 2 risk scale.",
+    "McCabe cyclomatic complexity normalized to a 0–1 risk scale.",
     compute_cyclomatic_complexity_risk
 );
 impl_builtin_metric!(

@@ -282,7 +282,7 @@ pub fn builtin_metric_rules() -> Vec<MetricRule> {
         (
             "KAL-F002",
             "M-F002",
-            "Flags functions whose cyclomatic complexity has drifted beyond the Wave 3 threshold.",
+            "Flags functions whose cyclomatic complexity exceeds the configured threshold.",
             "Lower cyclomatic complexity by splitting independent branches into smaller functions and simplifying guard logic.",
         ),
         (

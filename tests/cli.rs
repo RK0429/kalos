@@ -37,6 +37,34 @@ fn kalos_init_creates_default_config_file() {
 }
 
 #[test]
+fn kalos_init_config_excludes_internal_milestone_terms() {
+    let temp = TempDir::new().unwrap();
+    let f002_description = builtin_metric_rules()
+        .into_iter()
+        .find(|rule| rule.id.as_str() == "KAL-F002")
+        .map(|rule| rule.description)
+        .unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let config = fs::read_to_string(temp.path().join(".kalos.toml")).unwrap();
+    assert!(config.contains(&format!("# {f002_description}")));
+    assert!(
+        !config.contains("Wave 2"),
+        ".kalos.toml must not contain internal milestone term 'Wave 2'"
+    );
+    assert!(
+        !config.contains("Wave 3"),
+        ".kalos.toml must not contain internal milestone term 'Wave 3'"
+    );
+}
+
+#[test]
 fn kalos_init_preserves_existing_config_when_declined() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");
