@@ -60,6 +60,7 @@ pub struct ReportViewOptions {
     pub output_format: OutputFormat,
     pub strict: bool,
     pub minimum_severity: Option<Severity>,
+    pub verbose: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,7 +271,7 @@ impl AnalysisReport {
             self.diagnostics.summary.warning_count,
             self.diagnostics.summary.info_count
         );
-        if !self.metrics.is_empty() {
+        if self.view.verbose && !self.metrics.is_empty() {
             let _ = writeln!(output, "\n── Metrics ───────────────────────────");
             for scope_metrics in &self.metrics {
                 let _ = writeln!(
@@ -1039,6 +1040,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: true,
                 minimum_severity: Some(Severity::Error),
+                verbose: false,
             },
             None,
         );
@@ -1063,6 +1065,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity: None,
+                verbose: false,
             },
             Some(crate::domains::diagnostics::DiagnosticSummary {
                 error_count: 2,
@@ -1214,6 +1217,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                verbose: true,
             },
             None,
         );
@@ -1261,6 +1265,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                verbose: false,
             },
             None,
         );
@@ -1287,6 +1292,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                verbose: false,
             },
             None,
         );
@@ -1294,6 +1300,78 @@ mod tests {
         let rendered = report.render_human(None, false);
 
         assert!(rendered.starts_with("Analyzed 42 files in src/, tests/\n\n"));
+    }
+
+    #[test]
+    fn human_output_omits_metrics_by_default() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                verbose: false,
+            },
+            None,
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(!rendered.contains("── Metrics ──"));
+    }
+
+    #[test]
+    fn human_output_includes_metrics_when_verbose() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                verbose: true,
+            },
+            None,
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains("── Metrics ──"));
+    }
+
+    #[test]
+    fn json_output_always_includes_metrics_regardless_of_verbose() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Json,
+                strict: false,
+                minimum_severity: None,
+                verbose: false,
+            },
+            None,
+        );
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+
+        assert!(
+            !parsed["metrics"]
+                .as_array()
+                .expect("metrics array")
+                .is_empty()
+        );
     }
 
     fn project_report(
@@ -1317,6 +1395,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity,
+                verbose: false,
             },
             None,
         )

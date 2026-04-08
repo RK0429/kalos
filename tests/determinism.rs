@@ -39,6 +39,7 @@ fn determinism_10_runs_produce_identical_json_hash() {
         output_format: OutputFormat::Json,
         strict: false,
         minimum_severity: Some(Severity::Info),
+        verbose: false,
     };
 
     let hashes = (0..10)

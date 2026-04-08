@@ -415,6 +415,7 @@ fn fixture_view_options() -> ReportViewOptions {
         output_format: OutputFormat::Json,
         strict: false,
         minimum_severity: Some(Severity::Info),
+        verbose: false,
     }
 }
 

@@ -176,6 +176,7 @@ fn analysis_pipeline_runs_end_to_end_with_codeql_adapter_and_stub_dependency_res
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity: Some(Severity::Info),
+                verbose: false,
             },
             None,
             None,

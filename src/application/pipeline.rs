@@ -1821,6 +1821,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: true,
                 minimum_severity: None,
+                verbose: false,
             },
             1,
             None,
@@ -2166,6 +2167,7 @@ mod tests {
                     output_format: OutputFormat::Json,
                     strict: false,
                     minimum_severity: None,
+                    verbose: false,
                 },
                 None,
                 None,
@@ -2691,6 +2693,7 @@ mod tests {
                     output_format: OutputFormat::Json,
                     strict: false,
                     minimum_severity: None,
+                    verbose: false,
                 },
                 None,
                 None,
@@ -2715,6 +2718,7 @@ mod tests {
                     output_format: OutputFormat::Json,
                     strict: false,
                     minimum_severity: None,
+                    verbose: false,
                 },
                 None,
                 Some(&llm_port),
@@ -2744,6 +2748,7 @@ mod tests {
             output_format: OutputFormat::Json,
             strict,
             minimum_severity: None,
+            verbose: false,
         }
     }
 

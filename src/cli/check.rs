@@ -83,6 +83,8 @@ pub struct CheckCommand {
     pub llm: bool,
     #[arg(long, help = "treat warnings as errors")]
     pub strict: bool,
+    #[arg(long, help = "show per-scope metrics in human output")]
+    pub verbose: bool,
     #[arg(
         long,
         value_name = "ratio",
@@ -231,6 +233,7 @@ impl CheckCommand {
             output_format: self.format.into(),
             strict: self.strict,
             minimum_severity: self.severity.map(Severity::from),
+            verbose: self.verbose,
         };
         debug!(
             mode = if self.diff.is_some() { "diff" } else { "full" },

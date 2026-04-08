@@ -56,6 +56,7 @@ mod tests {
         assert_eq!(command.format, OutputFormat::Human);
         assert_eq!(command.level, RequestedLevel::All);
         assert_eq!(command.output, None);
+        assert!(!command.verbose);
     }
 
     #[test]
@@ -140,6 +141,16 @@ mod tests {
     }
 
     #[test]
+    fn check_parses_verbose_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "--verbose"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.verbose);
+    }
+
+    #[test]
     fn init_parses() {
         let cli = Cli::try_parse_from(["kalos", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Init(_)));
@@ -170,6 +181,7 @@ mod tests {
         assert!(help.contains("git base ref for differential analysis"));
         assert!(help.contains("enable llm-assisted analysis"));
         assert!(help.contains("treat warnings as errors"));
+        assert!(help.contains("show per-scope metrics in human output"));
         assert!(help.contains("write output to a file instead of stdout"));
     }
 
