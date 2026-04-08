@@ -162,6 +162,7 @@ impl AnalysisReport {
         let projected_metrics = project_metrics(metrics, view.requested_level, metric_catalog);
         let projected_diagnostics = project_diagnostics(&diagnostics, view.requested_level);
         let summary_scope = summary_scope_for(view.requested_level);
+        let file_count = metadata.file_count;
         let summary = summary_override.unwrap_or_else(|| {
             materialize_summary(match summary_scope {
                 SummaryScope::WholeProject => &diagnostics,
@@ -172,7 +173,7 @@ impl AnalysisReport {
         Self {
             metadata,
             view: view.clone(),
-            scores: project_scores(metrics, view.requested_level),
+            scores: project_scores(metrics, view.requested_level, file_count),
             metrics: projected_metrics,
             diagnostics: DiagnosticReport {
                 diagnostics: projected_diagnostics,
@@ -582,7 +583,21 @@ pub fn project_diagnostics(
 pub fn project_scores(
     metrics: &AnalysisMetrics,
     requested_level: RequestedLevel,
+    file_count: usize,
 ) -> ProjectedScores {
+    if file_count == 0 {
+        return ProjectedScores {
+            overall: None,
+            function: None,
+            module: None,
+            project: None,
+            score_notes: vec![ScoreNote {
+                level: AnalysisLevel::Project,
+                reason: "no source files were analyzed".to_owned(),
+            }],
+        };
+    }
+
     let overall_score = metrics.overall_score();
     let function = requested_level
         .includes(AnalysisLevel::Function)
@@ -1157,7 +1172,7 @@ mod tests {
         let metrics = fixture_metrics();
 
         assert_eq!(
-            project_scores(&metrics, RequestedLevel::Function),
+            project_scores(&metrics, RequestedLevel::Function, 10),
             ProjectedScores {
                 overall: Some(45),
                 function: Some(45),
@@ -1167,7 +1182,7 @@ mod tests {
             }
         );
         assert_eq!(
-            project_scores(&metrics, RequestedLevel::All),
+            project_scores(&metrics, RequestedLevel::All, 10),
             ProjectedScores {
                 overall: Some(44),
                 function: Some(45),
@@ -1184,7 +1199,7 @@ mod tests {
 
     #[test]
     fn score_notes_is_empty_when_all_levels_have_scores() {
-        let scores = project_scores(&fixture_metrics(), RequestedLevel::All);
+        let scores = project_scores(&fixture_metrics(), RequestedLevel::All, 10);
 
         assert!(scores.score_notes.is_empty());
     }
@@ -1763,5 +1778,65 @@ mod tests {
                 code_example: None,
             },
         }
+    }
+
+    #[test]
+    fn project_scores_returns_none_when_zero_files() {
+        let metrics = fixture_metrics();
+        let scores = project_scores(&metrics, RequestedLevel::All, 0);
+        assert_eq!(scores.overall, None);
+        assert_eq!(scores.function, None);
+        assert_eq!(scores.module, None);
+        assert_eq!(scores.project, None);
+        assert_eq!(scores.score_notes.len(), 1);
+        assert!(scores.score_notes[0].reason.contains("no source files"));
+    }
+
+    #[test]
+    fn human_output_shows_na_score_when_zero_files() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from(".")], 0, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            vec![],
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                verbose: false,
+            },
+            None,
+        );
+        let rendered = report.render_human(None, false);
+        assert!(
+            rendered.contains("Score: n/a"),
+            "expected 'Score: n/a' but got:\n{rendered}"
+        );
+        assert!(rendered.contains("no source files were analyzed"));
+    }
+
+    #[test]
+    fn json_output_has_null_overall_when_zero_files() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from(".")], 0, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            vec![],
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Json,
+                strict: false,
+                minimum_severity: None,
+                verbose: false,
+            },
+            None,
+        );
+        let rendered = report.render_json(None).unwrap();
+        let json: Value = serde_json::from_str(&rendered).unwrap();
+        assert!(json["scores"]["overall"].is_null());
+        assert!(json["scores"]["function"].is_null());
+        assert!(json["scores"]["module"].is_null());
+        assert!(json["scores"]["project"].is_null());
     }
 }
