@@ -1365,6 +1365,12 @@ fn generate_diagnostics(
         });
     }
     diagnostics.sort_by_key(diagnostic_sort_key);
+    diagnostics.dedup_by(|left, right| {
+        left.location.file_path == right.location.file_path
+            && left.location.start_line == right.location.start_line
+            && left.rule_id == right.rule_id
+            && left.message == right.message
+    });
     diagnostics
 }
 
@@ -1422,6 +1428,7 @@ fn function_scope_ids(cpg: &UnifiedCpg) -> Vec<ScopeId> {
         })
         .collect::<Vec<_>>();
     scope_ids.sort();
+    scope_ids.dedup();
     scope_ids
 }
 
@@ -1438,6 +1445,7 @@ fn module_scope_ids(cpg: &UnifiedCpg) -> Vec<ScopeId> {
         })
         .collect::<Vec<_>>();
     scope_ids.sort();
+    scope_ids.dedup();
     scope_ids
 }
 
@@ -1941,6 +1949,55 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_id, RuleId::from("KAL-F001"));
+    }
+
+    #[test]
+    fn generate_diagnostics_deduplicates_identical_diagnostics() {
+        let mut source_analysis = warning_source_analysis("src/lib.rs", "crate::f");
+        source_analysis.cpg.nodes.push(CpgNode {
+            id: NodeId::from(99),
+            kind: NodeKind::Function,
+            name: "crate::f".to_owned(),
+            location: SourceLocation {
+                file_path: FilePath::from("src/lib.rs"),
+                start_line: 1,
+                end_line: 5,
+            },
+            extension: None,
+        });
+        let (metrics, _) =
+            compute_metrics_with_plugins(&source_analysis.cpg, &fixture_config(), None, &[], None)
+                .expect("metrics should compute for duplicated function nodes");
+        let diagnostics = generate_diagnostics(&source_analysis, &metrics, &fixture_config());
+
+        assert!(!diagnostics.is_empty());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == RuleId::from("KAL-F001"))
+        );
+
+        let unique_combinations = diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.rule_id.clone(),
+                    diagnostic.location.file_path.clone(),
+                    diagnostic.location.start_line,
+                    diagnostic.message.clone(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(diagnostics.len(), unique_combinations.len());
+        for diagnostic in &diagnostics {
+            assert!(unique_combinations.contains(&(
+                diagnostic.rule_id.clone(),
+                diagnostic.location.file_path.clone(),
+                diagnostic.location.start_line,
+                diagnostic.message.clone(),
+            )));
+        }
     }
 
     #[test]
