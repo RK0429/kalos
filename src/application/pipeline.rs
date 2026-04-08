@@ -2889,6 +2889,24 @@ mod tests {
                     CpgEdge {
                         source: function_id,
                         target: branch_a,
+                        kind: EdgeKind::Contains,
+                        extension: None,
+                    },
+                    CpgEdge {
+                        source: function_id,
+                        target: branch_b,
+                        kind: EdgeKind::Contains,
+                        extension: None,
+                    },
+                    CpgEdge {
+                        source: function_id,
+                        target: branch_c,
+                        kind: EdgeKind::Contains,
+                        extension: None,
+                    },
+                    CpgEdge {
+                        source: function_id,
+                        target: branch_a,
                         kind: EdgeKind::ControlFlow,
                         extension: None,
                     },

@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
-use super::{FilePath, RuleId, ScopeId};
+use super::{AnalysisLevel, FilePath, RuleId, ScopeId};
 
 macro_rules! string_newtype {
     ($name:ident) => {
@@ -68,10 +68,67 @@ pub struct UnifiedCpg {
 
 impl UnifiedCpg {
     pub fn subgraph(&self, scope_id: &ScopeId) -> CpgSubgraph {
+        if scope_id.level == AnalysisLevel::Project {
+            return CpgSubgraph {
+                scope_id: scope_id.clone(),
+                nodes: self.nodes.clone(),
+                edges: self.edges.clone(),
+            };
+        }
+
+        let root_kind = match scope_id.level {
+            AnalysisLevel::Function => NodeKind::Function,
+            AnalysisLevel::Module => NodeKind::Module,
+            AnalysisLevel::Project => unreachable!("project scopes are handled above"),
+        };
+        let Some(root_id) = self
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == root_kind
+                    && node.name == scope_id.qualified_name
+                    && node.location.file_path == scope_id.file_path
+            })
+            .map(|node| node.id)
+        else {
+            return CpgSubgraph {
+                scope_id: scope_id.clone(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            };
+        };
+
+        let mut scoped_node_ids = BTreeSet::from([root_id]);
+        let mut queue = VecDeque::from([root_id]);
+        while let Some(node_id) = queue.pop_front() {
+            for child_id in self
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == EdgeKind::Contains && edge.source == node_id)
+                .map(|edge| edge.target)
+            {
+                if scoped_node_ids.insert(child_id) {
+                    queue.push_back(child_id);
+                }
+            }
+        }
+
         CpgSubgraph {
             scope_id: scope_id.clone(),
-            nodes: self.nodes.clone(),
-            edges: self.edges.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .filter(|node| scoped_node_ids.contains(&node.id))
+                .cloned()
+                .collect(),
+            edges: self
+                .edges
+                .iter()
+                .filter(|edge| {
+                    scoped_node_ids.contains(&edge.source) && scoped_node_ids.contains(&edge.target)
+                })
+                .cloned()
+                .collect(),
         }
     }
 
@@ -224,27 +281,90 @@ mod tests {
 
     #[test]
     fn subgraph_stub_preserves_scope_and_content() {
-        let location = SourceLocation {
-            file_path: FilePath::from("src/lib.rs"),
+        let foo_location = SourceLocation {
+            file_path: FilePath::from("src/foo.rs"),
+            start_line: 1,
+            end_line: 1,
+        };
+        let bar_location = SourceLocation {
+            file_path: FilePath::from("src/bar.rs"),
             start_line: 1,
             end_line: 1,
         };
         let graph = UnifiedCpg {
             id: CpgId::from("graph"),
-            nodes: vec![CpgNode {
-                id: NodeId::from(1),
-                kind: NodeKind::Function,
-                name: "f".to_owned(),
-                location,
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Function,
+                    name: "crate::foo".to_owned(),
+                    location: foo_location,
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Function,
+                    name: "crate::bar".to_owned(),
+                    location: bar_location,
+                    extension: None,
+                },
+            ],
+            edges: vec![CpgEdge {
+                source: NodeId::from(1),
+                target: NodeId::from(2),
+                kind: EdgeKind::Call,
                 extension: None,
             }],
-            edges: Vec::new(),
         };
-        let scope = ScopeId::new(AnalysisLevel::Function, "crate::f", "src/lib.rs");
+        let scope = ScopeId::new(AnalysisLevel::Function, "crate::foo", "src/foo.rs");
         let subgraph = graph.subgraph(&scope);
 
         assert_eq!(subgraph.scope_id, scope);
         assert_eq!(subgraph.nodes.len(), 1);
+        assert_eq!(subgraph.nodes[0].name, "crate::foo");
         assert!(subgraph.edges.is_empty());
+    }
+
+    #[test]
+    fn subgraph_returns_full_graph_for_project_scope() {
+        let graph = UnifiedCpg {
+            id: CpgId::from("graph"),
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Module,
+                    name: "crate".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Function,
+                    name: "crate::f".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 2,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+            ],
+            edges: vec![CpgEdge {
+                source: NodeId::from(1),
+                target: NodeId::from(2),
+                kind: EdgeKind::Contains,
+                extension: None,
+            }],
+        };
+        let scope = ScopeId::new(AnalysisLevel::Project, "<project>", ".");
+        let subgraph = graph.subgraph(&scope);
+
+        assert_eq!(subgraph.scope_id, scope);
+        assert_eq!(subgraph.nodes, graph.nodes);
+        assert_eq!(subgraph.edges, graph.edges);
     }
 }

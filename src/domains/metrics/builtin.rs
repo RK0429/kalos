@@ -739,9 +739,11 @@ mod tests {
         IdentifierRepetitionRisk, InstabilityRisk, MetricConfig, MetricDefinition,
         ModuleFanOutRisk, ModuleSizeEntropyImbalanceRisk, builtin_metric_definitions,
     };
-    use crate::domains::cpg::EdgeKind;
+    use crate::domains::cpg::{
+        CpgEdge, CpgId, CpgNode, EdgeKind, NodeId, NodeKind, SourceLocation, UnifiedCpg,
+    };
     use crate::domains::metrics::test_fixtures::CpgBuilder;
-    use crate::domains::{AnalysisLevel, ScopeId};
+    use crate::domains::{AnalysisLevel, FilePath, ScopeId};
 
     fn config() -> MetricConfig {
         MetricConfig {
@@ -828,6 +830,160 @@ mod tests {
         assert_eq!(complex.normalized_risk, 0.066667);
         assert_eq!(simple.raw_value, 1.0);
         assert_eq!(simple.normalized_risk, 0.0);
+    }
+
+    #[test]
+    fn subgraph_filters_by_function_scope_for_cyclomatic_complexity() {
+        let metric = CyclomaticComplexityRisk::new();
+        let graph = UnifiedCpg {
+            id: CpgId::from("graph"),
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Function,
+                    name: "crate::a".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 1,
+                        end_line: 6,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Variable,
+                    name: "cond".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 2,
+                        end_line: 2,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(3),
+                    kind: NodeKind::Variable,
+                    name: "then".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 3,
+                        end_line: 3,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(4),
+                    kind: NodeKind::Variable,
+                    name: "exit".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 4,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(5),
+                    kind: NodeKind::Function,
+                    name: "crate::b".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/b.rs"),
+                        start_line: 1,
+                        end_line: 3,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(6),
+                    kind: NodeKind::Variable,
+                    name: "exit".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/b.rs"),
+                        start_line: 2,
+                        end_line: 2,
+                    },
+                    extension: None,
+                },
+            ],
+            edges: vec![
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(2),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(3),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(5),
+                    target: NodeId::from(6),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(2),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(3),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(3),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(5),
+                    target: NodeId::from(6),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+            ],
+        };
+
+        let function_a = graph.subgraph(&ScopeId::new(
+            AnalysisLevel::Function,
+            "crate::a",
+            "src/a.rs",
+        ));
+        let function_b = graph.subgraph(&ScopeId::new(
+            AnalysisLevel::Function,
+            "crate::b",
+            "src/b.rs",
+        ));
+
+        let value_a = metric.compute(&function_a, &config()).unwrap();
+        let value_b = metric.compute(&function_b, &config()).unwrap();
+
+        assert_eq!(value_a.raw_value, 2.0);
+        assert_eq!(value_a.normalized_risk, 0.066667);
+        assert_eq!(value_b.raw_value, 1.0);
+        assert_eq!(value_b.normalized_risk, 0.0);
+        assert!(value_a.raw_value >= 0.0);
+        assert!(value_b.raw_value >= 0.0);
+        assert_ne!(value_a.raw_value, value_b.raw_value);
     }
 
     #[test]
