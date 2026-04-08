@@ -289,7 +289,27 @@ impl ProjectConfig {
             });
         }
 
-        if let Some(config_path) = find_upward(&options.cwd, CONFIG_FILE_NAME) {
+        let search_start = if options.targets_explicitly_specified {
+            options
+                .analysis_targets
+                .first()
+                .map(|target| absolute_from_base(&options.cwd, target))
+                .map(|target| {
+                    if fs::metadata(&target)
+                        .map(|metadata| metadata.is_dir())
+                        .unwrap_or(false)
+                    {
+                        target
+                    } else {
+                        target.parent().map(Path::to_path_buf).unwrap_or(target)
+                    }
+                })
+                .unwrap_or_else(|| options.cwd.clone())
+        } else {
+            options.cwd.clone()
+        };
+
+        if let Some(config_path) = find_upward(&search_start, CONFIG_FILE_NAME) {
             let parent = config_path
                 .parent()
                 .ok_or_else(|| ConfigError::MissingConfigParent {
@@ -305,7 +325,7 @@ impl ProjectConfig {
             });
         }
 
-        if let Some(git_path) = find_upward(&options.cwd, ".git") {
+        if let Some(git_path) = find_upward(&search_start, ".git") {
             let parent = git_path.parent().unwrap_or_else(|| Path::new("/"));
             return Ok(DiscoveredWorkspace {
                 workspace_root: WorkspaceRoot {
@@ -317,7 +337,7 @@ impl ProjectConfig {
 
         Ok(DiscoveredWorkspace {
             workspace_root: WorkspaceRoot {
-                abs_path: canonicalize_workspace_root(&options.cwd)?,
+                abs_path: canonicalize_workspace_root(&search_start)?,
             },
             config_path: None,
         })
@@ -857,6 +877,61 @@ mod tests {
         assert_eq!(
             discovery.workspace_root.abs_path,
             fs::canonicalize(&cwd).unwrap()
+        );
+    }
+
+    #[test]
+    fn discover_workspace_uses_explicit_target_path_as_search_start() {
+        let cwd_temp = TempDir::new().unwrap();
+        let target_temp = TempDir::new().unwrap();
+        let cwd_dir = cwd_temp.path().join("external-cwd");
+        let target_dir = target_temp.path().join("target-repo");
+        fs::create_dir_all(&cwd_dir).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::create_dir(target_dir.join(".git")).unwrap();
+
+        let options = ResolveOptions {
+            cwd: cwd_dir,
+            config_path: None,
+            analysis_targets: vec![target_dir.clone()],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let discovery = ProjectConfig::discover_workspace(&options).unwrap();
+        assert_eq!(
+            discovery.workspace_root.abs_path,
+            fs::canonicalize(&target_dir).unwrap()
+        );
+    }
+
+    #[test]
+    fn discover_workspace_uses_explicit_target_with_kalos_config() {
+        let cwd_temp = TempDir::new().unwrap();
+        let target_temp = TempDir::new().unwrap();
+        let cwd_dir = cwd_temp.path().join("external-cwd");
+        let target_dir = target_temp.path().join("target-repo");
+        let config_path = target_dir.join(".kalos.toml");
+        fs::create_dir_all(&cwd_dir).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(&config_path, "").unwrap();
+
+        let options = ResolveOptions {
+            cwd: cwd_dir,
+            config_path: None,
+            analysis_targets: vec![target_dir.clone()],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let discovery = ProjectConfig::discover_workspace(&options).unwrap();
+        assert_eq!(
+            discovery.workspace_root.abs_path,
+            fs::canonicalize(&target_dir).unwrap()
+        );
+        assert_eq!(
+            discovery.config_path,
+            Some(fs::canonicalize(&config_path).unwrap())
         );
     }
 

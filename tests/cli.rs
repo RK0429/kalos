@@ -229,6 +229,24 @@ fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
 }
 
 #[test]
+fn kalos_check_with_external_target_path_succeeds() {
+    let target_workspace = seeded_workspace();
+    let external_cwd = TempDir::new().unwrap();
+    let cache_dir = seed_fake_codeql_bundle(target_workspace.path());
+    let target_workspace_path = fs::canonicalize(target_workspace.path()).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(external_cwd.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .arg(&target_workspace_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
 fn kalos_check_emits_codeql_phase_progress_on_stderr() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
