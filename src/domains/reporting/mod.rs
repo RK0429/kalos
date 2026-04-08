@@ -64,11 +64,18 @@ pub struct ReportViewOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScoreNote {
+    pub level: AnalysisLevel,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectedScores {
     pub overall: Option<u8>,
     pub function: Option<u8>,
     pub module: Option<u8>,
     pub project: Option<u8>,
+    pub score_notes: Vec<ScoreNote>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -264,6 +271,9 @@ impl AnalysisReport {
 
         let _ = writeln!(output, "── Summary ──────────────────────────");
         let _ = writeln!(output, "{}", self.human_score_line());
+        for note in self.human_score_notes() {
+            let _ = writeln!(output, "{note}");
+        }
         let _ = writeln!(
             output,
             "{} errors, {} warnings, {} info",
@@ -325,6 +335,12 @@ impl AnalysisReport {
                 "function": self.scores.function,
                 "module": self.scores.module,
                 "project": self.scores.project,
+                "score_notes": self
+                    .scores
+                    .score_notes
+                    .iter()
+                    .map(score_note_json)
+                    .collect::<Vec<_>>(),
             },
             "metrics": metrics,
             "diagnostics": diagnostics,
@@ -501,6 +517,21 @@ impl AnalysisReport {
             }
         )
     }
+
+    fn human_score_notes(&self) -> Vec<String> {
+        self.scores
+            .score_notes
+            .iter()
+            .filter(|note| self.view.requested_level.includes(note.level))
+            .map(|note| {
+                format!(
+                    "note: {} score is not available — {}",
+                    analysis_level_str(note.level),
+                    note.reason
+                )
+            })
+            .collect()
+    }
 }
 
 pub fn project_metrics(
@@ -553,32 +584,32 @@ pub fn project_scores(
     requested_level: RequestedLevel,
 ) -> ProjectedScores {
     let overall_score = metrics.overall_score();
+    let function = requested_level
+        .includes(AnalysisLevel::Function)
+        .then_some(overall_score.function_score)
+        .flatten();
+    let module = requested_level
+        .includes(AnalysisLevel::Module)
+        .then_some(overall_score.module_score)
+        .flatten();
+    let project = requested_level
+        .includes(AnalysisLevel::Project)
+        .then_some(overall_score.project_score)
+        .flatten();
 
-    match requested_level {
-        RequestedLevel::All => ProjectedScores {
-            overall: Some(overall_score.overall_score),
-            function: overall_score.function_score,
-            module: overall_score.module_score,
-            project: overall_score.project_score,
-        },
-        RequestedLevel::Function => ProjectedScores {
-            overall: overall_score.function_score,
-            function: overall_score.function_score,
-            module: None,
-            project: None,
-        },
-        RequestedLevel::Module => ProjectedScores {
-            overall: overall_score.module_score,
-            function: None,
-            module: overall_score.module_score,
-            project: None,
-        },
-        RequestedLevel::Project => ProjectedScores {
-            overall: overall_score.project_score,
-            function: None,
-            module: None,
-            project: overall_score.project_score,
-        },
+    let overall = match requested_level {
+        RequestedLevel::All => Some(overall_score.overall_score),
+        RequestedLevel::Function => function,
+        RequestedLevel::Module => module,
+        RequestedLevel::Project => project,
+    };
+
+    ProjectedScores {
+        overall,
+        function,
+        module,
+        project,
+        score_notes: collect_score_notes(requested_level, function, module, project),
     }
 }
 
@@ -771,6 +802,13 @@ fn scope_json(scope_id: &ScopeId) -> Value {
     })
 }
 
+fn score_note_json(note: &ScoreNote) -> Value {
+    json!({
+        "level": analysis_level_str(note.level),
+        "reason": note.reason,
+    })
+}
+
 fn severity_str(severity: Severity) -> &'static str {
     match severity {
         Severity::Error => "error",
@@ -799,6 +837,37 @@ fn analysis_level_str(level: AnalysisLevel) -> &'static str {
         AnalysisLevel::Function => "function",
         AnalysisLevel::Module => "module",
         AnalysisLevel::Project => "project",
+    }
+}
+
+fn collect_score_notes(
+    requested_level: RequestedLevel,
+    function: Option<u8>,
+    module: Option<u8>,
+    project: Option<u8>,
+) -> Vec<ScoreNote> {
+    let mut notes = Vec::new();
+    if requested_level.includes(AnalysisLevel::Function) && function.is_none() {
+        notes.push(missing_score_note(AnalysisLevel::Function));
+    }
+    if requested_level.includes(AnalysisLevel::Module) && module.is_none() {
+        notes.push(missing_score_note(AnalysisLevel::Module));
+    }
+    if requested_level.includes(AnalysisLevel::Project) && project.is_none() {
+        notes.push(missing_score_note(AnalysisLevel::Project));
+    }
+    notes
+}
+
+fn missing_score_note(level: AnalysisLevel) -> ScoreNote {
+    ScoreNote {
+        level,
+        reason: match level {
+            AnalysisLevel::Function => "no function-level analysis scopes were detected",
+            AnalysisLevel::Module => "no module-level analysis scopes were detected",
+            AnalysisLevel::Project => "no project-level analysis scopes were detected",
+        }
+        .to_owned(),
     }
 }
 
@@ -917,6 +986,7 @@ mod tests {
                 function: Some(45),
                 module: Some(20),
                 project: Some(75),
+                score_notes: vec![],
             }
         );
         assert_eq!(
@@ -951,6 +1021,7 @@ mod tests {
                 function: Some(45),
                 module: None,
                 project: None,
+                score_notes: vec![],
             }
         );
         assert_eq!(function_report.diagnostics.summary.error_count, 0);
@@ -973,6 +1044,7 @@ mod tests {
                 function: None,
                 module: Some(20),
                 project: None,
+                score_notes: vec![],
             }
         );
 
@@ -991,6 +1063,7 @@ mod tests {
                 function: None,
                 module: None,
                 project: Some(75),
+                score_notes: vec![],
             }
         );
     }
@@ -1090,6 +1163,7 @@ mod tests {
                 function: Some(45),
                 module: None,
                 project: None,
+                score_notes: vec![],
             }
         );
         assert_eq!(
@@ -1099,12 +1173,20 @@ mod tests {
                 function: Some(45),
                 module: Some(20),
                 project: Some(75),
+                score_notes: vec![],
             }
         );
         assert_eq!(
             summary_scope_for(RequestedLevel::Project),
             crate::domains::diagnostics::SummaryScope::ListedDiagnostics
         );
+    }
+
+    #[test]
+    fn score_notes_is_empty_when_all_levels_have_scores() {
+        let scores = project_scores(&fixture_metrics(), RequestedLevel::All);
+
+        assert!(scores.score_notes.is_empty());
     }
 
     #[test]
@@ -1138,6 +1220,13 @@ mod tests {
         assert_eq!(parsed["scores"]["overall"], 45);
         assert!(parsed["scores"]["module"].is_null());
         assert!(parsed["scores"]["project"].is_null());
+        assert_eq!(
+            parsed["scores"]["score_notes"]
+                .as_array()
+                .expect("score notes array")
+                .len(),
+            0
+        );
         assert_eq!(
             parsed["metrics"]
                 .as_array()
@@ -1303,6 +1392,31 @@ mod tests {
     }
 
     #[test]
+    fn human_output_shows_note_when_module_score_is_na() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics_without_module_score(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                verbose: false,
+            },
+            None,
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains("Score: 100/100  (function: 100, module: n/a, project: 100)"));
+        assert!(rendered.contains(
+            "note: module score is not available — no module-level analysis scopes were detected"
+        ));
+    }
+
+    #[test]
     fn human_output_omits_metrics_by_default() {
         let report = AnalysisReport::project(
             ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
@@ -1374,6 +1488,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn json_output_includes_score_notes_for_na_levels() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics_without_module_score(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Json,
+                strict: false,
+                minimum_severity: None,
+                verbose: false,
+            },
+            None,
+        );
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let score_notes = parsed["scores"]["score_notes"]
+            .as_array()
+            .expect("score notes array");
+
+        assert_eq!(score_notes.len(), 1);
+        assert_eq!(score_notes[0]["level"], "module");
+        assert_eq!(
+            score_notes[0]["reason"],
+            "no module-level analysis scopes were detected"
+        );
+    }
+
     fn project_report(
         requested_level: RequestedLevel,
         minimum_severity: Option<Severity>,
@@ -1439,6 +1584,40 @@ mod tests {
                 function_score: Some(45),
                 module_score: Some(20),
                 project_score: Some(75),
+            },
+        }
+    }
+
+    fn fixture_metrics_without_module_score() -> AnalysisMetrics {
+        AnalysisMetrics {
+            function_metrics: vec![ScopeMetrics {
+                scope_id: ScopeId::new(AnalysisLevel::Function, "crate::f", "src/lib.rs"),
+                scope_risk: 0.0,
+                values: vec![MetricValue {
+                    metric_id: MetricId::from("M-F001"),
+                    raw_value: 1.0,
+                    normalized_risk: 0.0,
+                }],
+            }],
+            module_metrics: vec![],
+            project_metrics: Some(ScopeMetrics {
+                scope_id: ScopeId::new(AnalysisLevel::Project, "<project>", "."),
+                scope_risk: 0.0,
+                values: vec![MetricValue {
+                    metric_id: MetricId::from("M-P001"),
+                    raw_value: 1.0,
+                    normalized_risk: 0.0,
+                }],
+            }),
+            overall_score: OverallScore {
+                function_risk: Some(0.0),
+                module_risk: None,
+                project_risk: Some(0.0),
+                overall_risk: 0.0,
+                overall_score: 100,
+                function_score: Some(100),
+                module_score: None,
+                project_score: Some(100),
             },
         }
     }
