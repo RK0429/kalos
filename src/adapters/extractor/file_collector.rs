@@ -490,11 +490,7 @@ mod tests {
         fs::create_dir_all(workspace_root.join("tmp/cache")).unwrap();
         fs::write(workspace_root.join(".gitignore"), "tmp/\n").unwrap();
         fs::write(workspace_root.join("src/main.py"), "print('keep')\n").unwrap();
-        fs::write(
-            workspace_root.join("tmp/scratch.py"),
-            "print('exclude')\n",
-        )
-        .unwrap();
+        fs::write(workspace_root.join("tmp/scratch.py"), "print('exclude')\n").unwrap();
         fs::write(
             workspace_root.join("tmp/cache/data.py"),
             "print('exclude')\n",
@@ -510,7 +506,11 @@ mod tests {
 
         let files = collector.collect(&[FilePath::from(".")]).unwrap();
 
-        assert_eq!(files.len(), 1, "only src/main.py should remain, got: {files:?}");
+        assert_eq!(
+            files.len(),
+            1,
+            "only src/main.py should remain, got: {files:?}"
+        );
         assert!(files.contains_key(&FilePath::from("src/main.py")));
     }
 
