@@ -203,6 +203,7 @@ impl AnalysisReport {
     ) -> String {
         let mut output = String::new();
         let diagnostics = self.visible_diagnostics();
+        let summary = self.visible_summary();
         let analysis_targets = self
             .metadata
             .analysis_targets
@@ -278,9 +279,9 @@ impl AnalysisReport {
         let _ = writeln!(
             output,
             "{} errors, {} warnings, {} info",
-            self.diagnostics.summary.error_count,
-            self.diagnostics.summary.warning_count,
-            self.diagnostics.summary.info_count
+            summary.error_count,
+            summary.warning_count,
+            summary.info_count
         );
         if self.view.verbose && !self.metrics.is_empty() {
             let _ = writeln!(output, "\n── Metrics ───────────────────────────");
@@ -317,6 +318,7 @@ impl AnalysisReport {
             .into_iter()
             .map(|diagnostic| diagnostic_json(diagnostic, llm_suggestions))
             .collect::<Vec<_>>();
+        let visible_summary = self.visible_summary();
         let metrics = self
             .metrics
             .iter()
@@ -347,9 +349,9 @@ impl AnalysisReport {
             "diagnostics": diagnostics,
             "diagnostics_scope": diagnostics_scope_str(self.diagnostics.diagnostics_scope),
             "summary": {
-                "error_count": self.diagnostics.summary.error_count,
-                "warning_count": self.diagnostics.summary.warning_count,
-                "info_count": self.diagnostics.summary.info_count,
+                "error_count": visible_summary.error_count,
+                "warning_count": visible_summary.warning_count,
+                "info_count": visible_summary.info_count,
             },
             "summary_scope": summary_scope_str(self.diagnostics.summary_scope),
             "tool_version": self.metadata.tool_version,
@@ -476,6 +478,28 @@ impl AnalysisReport {
                     .is_none_or(|severity| diagnostic.severity >= severity)
             })
             .collect()
+    }
+
+    fn visible_summary(&self) -> DiagnosticSummary {
+        if self.view.minimum_severity.is_none() {
+            return self.diagnostics.summary.clone();
+        }
+
+        let mut summary = DiagnosticSummary {
+            error_count: 0,
+            warning_count: 0,
+            info_count: 0,
+        };
+
+        for diagnostic in self.visible_diagnostics() {
+            match diagnostic.severity {
+                Severity::Error => summary.error_count += 1,
+                Severity::Warning => summary.warning_count += 1,
+                Severity::Info => summary.info_count += 1,
+            }
+        }
+
+        summary
     }
 
     fn human_score_line(&self) -> String {
@@ -1114,6 +1138,66 @@ mod tests {
         assert_eq!(report.diagnostics.summary.error_count, 0);
         assert_eq!(report.diagnostics.summary.warning_count, 1);
         assert_eq!(report.diagnostics.summary.info_count, 1);
+        assert_eq!(
+            report.visible_summary(),
+            crate::domains::diagnostics::DiagnosticSummary {
+                error_count: 0,
+                warning_count: 0,
+                info_count: 0,
+            }
+        );
+        assert!(report.render_human(None, false).contains("0 errors, 0 warnings, 0 info"));
+    }
+
+    #[test]
+    fn json_summary_reflects_severity_filter() {
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(Diagnostic {
+            id: DiagnosticId::from("diag-function-error"),
+            primary_scope_id: ScopeId::new(AnalysisLevel::Function, "crate::h", "src/lib.rs"),
+            rule_id: RuleId::from("KAL-F099"),
+            kind: DiagnosticKind::Metric,
+            severity: Severity::Error,
+            location: FileLocation {
+                file_path: FilePath::from("src/lib.rs"),
+                start_line: 30,
+                end_line: 36,
+                column: Some(7),
+            },
+            message: "function metric error".to_owned(),
+            metric: Some(MetricObservation {
+                metric_id: MetricId::from("M-F099"),
+                raw_value: 5.0,
+                normalized_risk: 0.95,
+                threshold: 0.50,
+                overflow_ratio: 0.90,
+            }),
+            pattern: None,
+            template_suggestion: TemplateSuggestion {
+                explanation: "split function".to_owned(),
+                code_example: None,
+            },
+        });
+
+        let report = project_report(
+            RequestedLevel::All,
+            Some(Severity::Error),
+            &fixture_metrics(),
+            diagnostics,
+        );
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+
+        assert_eq!(parsed["summary"]["error_count"], 2);
+        assert_eq!(parsed["summary"]["warning_count"], 0);
+        assert_eq!(parsed["summary"]["info_count"], 0);
+        assert_eq!(
+            parsed["diagnostics"]
+                .as_array()
+                .expect("diagnostics array")
+                .len(),
+            2
+        );
     }
 
     #[test]
