@@ -287,8 +287,87 @@ fn kalos_check_emits_codeql_phase_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("database create"))
+        .stderr(predicate::str::contains("database create done"))
         .stderr(predicate::str::contains("query run"))
-        .stderr(predicate::str::contains("bqrs decode"));
+        .stderr(predicate::str::contains("query run done"))
+        .stderr(predicate::str::contains("bqrs decode"))
+        .stderr(predicate::str::contains("bqrs decode done"));
+}
+
+#[test]
+fn kalos_check_emits_first_run_hint_on_initial_run() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("database create (first run"))
+        .stderr(predicate::str::contains("first run"));
+}
+
+#[test]
+fn kalos_check_emits_elapsed_time_on_database_create() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::is_match(r"database create done \(([0-9]+\.[0-9]s|[0-9]+m [0-9]+s)\)")
+                .unwrap(),
+        );
+}
+
+#[test]
+fn kalos_check_cached_run_does_not_emit_first_run_hint() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("cached"))
+        .stderr(predicate::str::contains("first run").not())
+        .stderr(predicate::str::contains("database create done").not())
+        .stderr(predicate::str::contains("query run").not())
+        .stderr(predicate::str::contains("bqrs decode").not());
+}
+
+#[test]
+fn kalos_check_json_format_does_not_emit_first_run_hint() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("first run").not());
 }
 
 #[test]
@@ -337,6 +416,7 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Apple Silicon").not())
+        .stderr(predicate::str::contains("first run").not())
         .stderr(predicate::str::contains("database create").not())
         .stderr(predicate::str::contains("query run").not())
         .stderr(predicate::str::contains("bqrs decode").not());
@@ -355,6 +435,7 @@ fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Apple Silicon").not())
+        .stderr(predicate::str::contains("first run").not())
         .stderr(predicate::str::contains("database create").not())
         .stderr(predicate::str::contains("query run").not())
         .stderr(predicate::str::contains("bqrs decode").not());

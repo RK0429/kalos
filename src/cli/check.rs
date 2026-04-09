@@ -192,10 +192,9 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
         };
+        let platform = Platform::detect();
         if self.format == OutputFormat::Human {
-            if let Some(notice) =
-                Platform::detect().and_then(|platform| platform.emulation_notice())
-            {
+            if let Some(notice) = platform.and_then(|platform| platform.emulation_notice()) {
                 eprintln!("{notice}");
             }
         }
@@ -215,6 +214,9 @@ impl CheckCommand {
         );
         if self.format == OutputFormat::Human {
             extractor = extractor.with_progress();
+        }
+        if platform.map_or(false, |platform| platform.is_emulated()) {
+            extractor = extractor.with_emulated();
         }
         if let Some(ratio) = self.min_language_ratio {
             extractor = extractor.with_min_language_ratio(ratio);

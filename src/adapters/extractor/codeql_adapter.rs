@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -56,6 +57,7 @@ pub struct CodeQlAdapter<F, R, T> {
     exclude_patterns: Vec<String>,
     normalizer: CpgNormalizer,
     progress: bool,
+    is_emulated: bool,
     min_language_ratio: f64,
 }
 
@@ -75,12 +77,18 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             exclude_patterns,
             normalizer: CpgNormalizer,
             progress: false,
+            is_emulated: false,
             min_language_ratio: DEFAULT_MIN_LANGUAGE_RATIO,
         }
     }
 
     pub fn with_progress(mut self) -> Self {
         self.progress = true;
+        self
+    }
+
+    pub fn with_emulated(mut self) -> Self {
+        self.is_emulated = true;
         self
     }
 
@@ -253,9 +261,15 @@ where
                 }
             }
 
-            if self.progress {
-                eprintln!("    database create ...");
-            }
+            let database_create_started = if self.progress {
+                eprintln!(
+                    "    {} ...",
+                    database_create_progress_message(self.is_emulated)
+                );
+                Some(Instant::now())
+            } else {
+                None
+            };
             self.run_checked(
                 &codeql_program,
                 build_database_create_args(&database_path, &request.workspace_root, language),
@@ -263,10 +277,19 @@ where
                 "database create",
                 language,
             )?;
-
-            if self.progress {
-                eprintln!("    query run ...");
+            if let Some(started) = database_create_started {
+                eprintln!(
+                    "    database create done ({})",
+                    format_elapsed(started.elapsed())
+                );
             }
+
+            let query_run_started = if self.progress {
+                eprintln!("    query run ...");
+                Some(Instant::now())
+            } else {
+                None
+            };
             self.run_checked(
                 &codeql_program,
                 build_query_run_args(&database_path, &query_path, &bqrs_path, &bundle.cache_path),
@@ -274,10 +297,16 @@ where
                 "query run",
                 language,
             )?;
-
-            if self.progress {
-                eprintln!("    bqrs decode ...");
+            if let Some(started) = query_run_started {
+                eprintln!("    query run done ({})", format_elapsed(started.elapsed()));
             }
+
+            let bqrs_decode_started = if self.progress {
+                eprintln!("    bqrs decode ...");
+                Some(Instant::now())
+            } else {
+                None
+            };
             let decode_output = self.run_checked(
                 &codeql_program,
                 build_bqrs_decode_args(&bqrs_path),
@@ -285,6 +314,12 @@ where
                 "bqrs decode",
                 language,
             )?;
+            if let Some(started) = bqrs_decode_started {
+                eprintln!(
+                    "    bqrs decode done ({})",
+                    format_elapsed(started.elapsed())
+                );
+            }
             if let Some(ref fingerprint) = source_fingerprint {
                 let _ = std::fs::write(&decoded_cache_path, &decode_output.stdout);
                 let _ = std::fs::write(&cache_key_path, fingerprint.as_str());
@@ -380,6 +415,25 @@ fn build_bqrs_decode_args(bqrs_path: &Path) -> Vec<String> {
         "--format=json".to_owned(),
         bqrs_path.to_string_lossy().into_owned(),
     ]
+}
+
+fn database_create_progress_message(is_emulated: bool) -> &'static str {
+    if is_emulated {
+        "database create (first run — this may take several minutes; running under emulation)"
+    } else {
+        "database create (first run — this may take several minutes)"
+    }
+}
+
+fn format_elapsed(elapsed: Duration) -> String {
+    if elapsed.as_secs() < 60 {
+        let secs = elapsed.as_secs();
+        let tenths = elapsed.subsec_millis() / 100;
+        format!("{secs}.{tenths}s")
+    } else {
+        let secs = elapsed.as_secs();
+        format!("{}m {}s", secs / 60, secs % 60)
+    }
 }
 
 fn count_source_files_by_language(
@@ -482,12 +536,14 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use tempfile::TempDir;
 
     use super::{
         CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, compute_source_fingerprint,
-        filter_incidental_languages, format_command_guidance,
+        database_create_progress_message, filter_incidental_languages, format_command_guidance,
+        format_elapsed,
     };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
@@ -981,6 +1037,57 @@ mod tests {
                 .join(".kalos/codeql/rust.decoded.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn progress_emits_first_run_hint_on_cache_miss() {
+        let adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            MockCommandRunner::new(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_progress();
+
+        assert!(adapter.progress);
+        assert!(database_create_progress_message(adapter.is_emulated).contains("first run"));
+    }
+
+    #[test]
+    fn progress_emits_emulation_hint_when_enabled() {
+        let adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            MockCommandRunner::new(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_progress()
+        .with_emulated();
+
+        assert!(adapter.progress);
+        assert!(adapter.is_emulated);
+        assert!(
+            database_create_progress_message(adapter.is_emulated)
+                .contains("running under emulation")
+        );
+    }
+
+    #[test]
+    fn format_elapsed_renders_sub_minute_durations() {
+        assert_eq!(format_elapsed(Duration::from_millis(3_240)), "3.2s");
+        assert_eq!(format_elapsed(Duration::from_millis(59_990)), "59.9s");
+    }
+
+    #[test]
+    fn format_elapsed_renders_minute_durations() {
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m 0s");
+        assert_eq!(format_elapsed(Duration::from_secs(1_629)), "27m 9s");
     }
 
     #[test]
