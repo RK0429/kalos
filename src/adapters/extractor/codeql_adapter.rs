@@ -38,9 +38,12 @@ fn compute_source_fingerprint<F: FileSystem>(
     source_files: &BTreeMap<FilePath, SourceFile>,
     language: Language,
     bundle_version: &str,
+    query_content: &str,
 ) -> Option<String> {
     let mut hasher = Sha256::new();
     hasher.update(bundle_version.as_bytes());
+    hasher.update(b"|");
+    hasher.update(query_content.as_bytes());
     hasher.update(b"|");
     for (path, source_file) in source_files {
         if source_file.language != language {
@@ -272,12 +275,18 @@ where
                     source,
                 })?;
 
+            let query_content = self
+                .file_system
+                .read_to_string(&query_path)
+                .unwrap_or_default();
+
             let source_fingerprint = compute_source_fingerprint(
                 &self.file_system,
                 &request.workspace_root,
                 &source_files,
                 language,
                 &self.bundle_version,
+                &query_content,
             );
 
             if let Some(ref fingerprint) = source_fingerprint {
@@ -1126,6 +1135,7 @@ mod tests {
             &source_files,
             Language::Rust,
             "2.0.0",
+            "",
         )
         .unwrap();
         fs::write(
@@ -1204,6 +1214,7 @@ mod tests {
             &source_files,
             Language::Rust,
             "2.0.0",
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -1305,6 +1316,7 @@ mod tests {
             &source_files,
             Language::Rust,
             "2.0.0",
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -1341,6 +1353,7 @@ mod tests {
             &source_files,
             Language::Rust,
             "2.0.0",
+            "",
         )
         .unwrap();
         assert_ne!(updated_fingerprint, initial_fingerprint);
@@ -1350,6 +1363,38 @@ mod tests {
                 .unwrap()
                 .trim(),
             updated_fingerprint
+        );
+    }
+
+    #[test]
+    fn query_content_change_invalidates_cache() {
+        let source_files = single_source_file("src/lib.rs", Language::Rust);
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/lib.rs", "fn main() {}\n");
+
+        let fp_old = compute_source_fingerprint(
+            &file_system,
+            Path::new("/workspace"),
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+            "query predicate modules() { m.isTopLevel() }",
+        )
+        .unwrap();
+
+        let fp_new = compute_source_fingerprint(
+            &file_system,
+            Path::new("/workspace"),
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+            "query predicate modules() { exists(Module m | ...) }",
+        )
+        .unwrap();
+
+        assert_ne!(
+            fp_old, fp_new,
+            "changing query content must invalidate the cache fingerprint"
         );
     }
 
@@ -1403,6 +1448,7 @@ mod tests {
             &source_files,
             Language::Rust,
             "2.0.0",
+            "",
         )
         .unwrap();
         assert_eq!(
