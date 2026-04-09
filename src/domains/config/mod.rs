@@ -394,10 +394,15 @@ impl ProjectConfig {
         config_file: Option<&ConfigFile>,
         defaults: &Defaults,
     ) -> Result<Self, ConfigError> {
+        let canonical_cwd = canonicalize_if_exists(&options.cwd)?;
         let effective_targets = if options.analysis_targets.is_empty() {
             vec![PathBuf::from(".")]
         } else {
-            options.analysis_targets.clone()
+            options
+                .analysis_targets
+                .iter()
+                .map(|target| absolute_from_base(&canonical_cwd, target))
+                .collect()
         };
 
         let analysis_targets = effective_targets
@@ -936,6 +941,30 @@ mod tests {
     }
 
     #[test]
+    fn explicit_child_target_normalizes_to_workspace_dot_when_workspace_is_child() {
+        let temp = TempDir::new().unwrap();
+        let parent_dir = temp.path().join("parent");
+        let child_dir = parent_dir.join("child");
+        fs::create_dir_all(&child_dir).unwrap();
+        fs::create_dir(child_dir.join(".git")).unwrap();
+
+        let options = ResolveOptions {
+            cwd: parent_dir,
+            config_path: None,
+            analysis_targets: vec![PathBuf::from("child")],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let project = ProjectConfig::load_and_resolve(&options, &Defaults::default()).unwrap();
+        assert_eq!(
+            project.workspace_root.abs_path,
+            fs::canonicalize(&child_dir).unwrap()
+        );
+        assert_eq!(project.analysis_targets, vec![FilePath::from(".")]);
+    }
+
+    #[test]
     fn config_file_parsing_and_resolution_merge_expected_values() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("repo");
@@ -1078,6 +1107,9 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("repo");
         fs::create_dir_all(workspace.join("src/inner")).unwrap();
+        let workspace_root = WorkspaceRoot {
+            abs_path: fs::canonicalize(&workspace).unwrap(),
+        };
         let options = ResolveOptions {
             cwd: workspace.clone(),
             config_path: None,
@@ -1086,7 +1118,13 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             exclude_patterns: Vec::new(),
         };
 
-        let project = ProjectConfig::resolve(&options, None, &Defaults::default()).unwrap();
+        let project = ProjectConfig::resolve_with_workspace(
+            workspace_root.clone(),
+            &options,
+            None,
+            &Defaults::default(),
+        )
+        .unwrap();
         assert_eq!(
             project.analysis_targets,
             vec![FilePath::from("src/lib.rs"), FilePath::from(".")]
@@ -1097,7 +1135,13 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             ..options
         };
 
-        let error = ProjectConfig::resolve(&escaping, None, &Defaults::default()).unwrap_err();
+        let error = ProjectConfig::resolve_with_workspace(
+            workspace_root,
+            &escaping,
+            None,
+            &Defaults::default(),
+        )
+        .unwrap_err();
         assert!(matches!(error, ConfigError::PathOutsideWorkspace { .. }));
     }
 
