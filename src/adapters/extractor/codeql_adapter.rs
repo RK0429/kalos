@@ -380,9 +380,23 @@ where
             combined_output.extend_from(CpgNormalizer::parse_output(&decode_output.stdout)?);
         }
 
+        let source_file_count = source_files.len();
         let mut analysis =
             self.normalizer
                 .normalize(&request.workspace_root, source_files, combined_output)?;
+        if source_file_count > 0
+            && analysis.cpg.functions().is_empty()
+            && analysis.cpg.modules().is_empty()
+        {
+            analysis.warnings.push(AnalysisWarning {
+                file_path: FilePath::from("."),
+                message: format!(
+                    "CodeQL extraction produced no function or module scopes despite finding {} source files; the CodeQL database may be incomplete - try deleting .kalos/codeql/ and re-running",
+                    source_file_count
+                ),
+                user_facing: true,
+            });
+        }
         analysis.warnings.extend(language_warnings);
         Ok(analysis)
     }
@@ -607,6 +621,64 @@ mod tests {
     use crate::platform::process::{CommandRunner, MockCommandRunner, ProcessError, ProcessOutput};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
     use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
+
+    mod empty_scope {
+        use super::*;
+
+        #[test]
+        fn extract_warns_when_codeql_output_has_no_scopes_despite_source_files() {
+            let mut file_system = InMemoryFileSystem::new();
+            file_system.insert("/workspace/src/main.rs", "fn main() {}\n");
+            let command_runner = MockCommandRunner::new();
+            command_runner
+                .push_result(Ok(ProcessOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }))
+                .unwrap();
+            command_runner
+                .push_result(Ok(ProcessOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }))
+                .unwrap();
+            command_runner
+                .push_result(Ok(ProcessOutput {
+                    stdout: b"{}".to_vec(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }))
+                .unwrap();
+            let adapter = CodeQlAdapter::new(
+                file_system,
+                command_runner,
+                MockToolCachePort {
+                    bundle: mock_bundle(),
+                },
+                "2.0.0",
+                Vec::new(),
+            );
+
+            let analysis = adapter
+                .extract(&ExtractionRequest {
+                    workspace_root: PathBuf::from("/workspace"),
+                    analysis_targets: vec![FilePath::from(".")],
+                })
+                .unwrap();
+
+            assert!(analysis.cpg.functions().is_empty());
+            assert!(analysis.cpg.modules().is_empty());
+            assert!(analysis.warnings.iter().any(|warning| {
+                warning.user_facing
+                    && warning
+                        .message
+                        .contains("produced no function or module scopes")
+                    && warning.message.contains(".kalos/codeql/")
+            }));
+        }
+    }
 
     #[derive(Clone, Debug)]
     struct MockToolCachePort {
@@ -1370,13 +1442,12 @@ mod tests {
 
         let invocations = command_runner.invocations().unwrap();
         assert_eq!(invocations.len(), 3);
-        assert_eq!(analysis.warnings.len(), 1);
-        assert!(analysis.warnings[0].user_facing);
-        assert!(
-            analysis.warnings[0]
-                .message
-                .contains("skipped CodeQL database creation for python")
-        );
+        assert!(analysis.warnings.iter().any(|warning| {
+            warning.user_facing
+                && warning
+                    .message
+                    .contains("skipped CodeQL database creation for python")
+        }));
     }
 
     #[test]

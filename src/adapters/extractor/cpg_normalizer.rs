@@ -147,43 +147,77 @@ impl CpgNormalizer {
         source_files: BTreeMap<FilePath, SourceFile>,
         output: CodeQlQueryOutput,
     ) -> Result<SourceAnalysis, NormalizationError> {
-        let mut raw_nodes = Vec::new();
-        raw_nodes.extend(self.build_nodes(
+        let CodeQlQueryOutput {
+            functions,
+            classes,
+            modules,
+            variables,
+            parameters,
+            external_symbols,
+            calls,
+            data_flows,
+            contains,
+            type_references,
+            semantic_edges,
+            warnings: fixture_warnings,
+        } = output;
+
+        tracing::debug!(
+            raw_modules = modules.len(),
+            raw_classes = classes.len(),
+            raw_functions = functions.len(),
+            raw_variables = variables.len(),
+            raw_parameters = parameters.len(),
+            raw_external_symbols = external_symbols.len(),
+            "CodeQL normalizer raw node counts before filtering"
+        );
+
+        let mut module_nodes =
+            self.build_nodes(workspace_root, &source_files, modules, NodeKind::Module)?;
+        let mut class_nodes =
+            self.build_nodes(workspace_root, &source_files, classes, NodeKind::Class)?;
+        let mut function_nodes =
+            self.build_nodes(workspace_root, &source_files, functions, NodeKind::Function)?;
+        let mut variable_nodes =
+            self.build_nodes(workspace_root, &source_files, variables, NodeKind::Variable)?;
+        let mut parameter_nodes = self.build_nodes(
             workspace_root,
             &source_files,
-            output.modules,
-            NodeKind::Module,
-        )?);
-        raw_nodes.extend(self.build_nodes(
-            workspace_root,
-            &source_files,
-            output.classes,
-            NodeKind::Class,
-        )?);
-        raw_nodes.extend(self.build_nodes(
-            workspace_root,
-            &source_files,
-            output.functions,
-            NodeKind::Function,
-        )?);
-        raw_nodes.extend(self.build_nodes(
-            workspace_root,
-            &source_files,
-            output.variables,
-            NodeKind::Variable,
-        )?);
-        raw_nodes.extend(self.build_nodes(
-            workspace_root,
-            &source_files,
-            output.parameters,
+            parameters,
             NodeKind::Parameter,
-        )?);
-        raw_nodes.extend(self.build_nodes(
+        )?;
+        let mut external_symbol_nodes = self.build_nodes(
             workspace_root,
             &source_files,
-            output.external_symbols,
+            external_symbols,
             NodeKind::ExternalSymbol,
-        )?);
+        )?;
+
+        let filtered_node_count = module_nodes.len()
+            + class_nodes.len()
+            + function_nodes.len()
+            + variable_nodes.len()
+            + parameter_nodes.len()
+            + external_symbol_nodes.len();
+        tracing::debug!(
+            filtered_modules = module_nodes.len(),
+            filtered_classes = class_nodes.len(),
+            filtered_functions = function_nodes.len(),
+            filtered_variables = variable_nodes.len(),
+            filtered_parameters = parameter_nodes.len(),
+            filtered_external_symbols = external_symbol_nodes.len(),
+            filtered_total = filtered_node_count,
+            source_file_count = source_files.len(),
+            "CodeQL normalizer node counts after filtering by source_files"
+        );
+
+        let mut raw_nodes = Vec::with_capacity(filtered_node_count);
+        raw_nodes.append(&mut module_nodes);
+        raw_nodes.append(&mut class_nodes);
+        raw_nodes.append(&mut function_nodes);
+        raw_nodes.append(&mut variable_nodes);
+        raw_nodes.append(&mut parameter_nodes);
+        raw_nodes.append(&mut external_symbol_nodes);
 
         raw_nodes.sort_by(|left, right| {
             (
@@ -221,8 +255,7 @@ impl CpgNormalizer {
             })
             .collect::<Vec<_>>();
 
-        let mut warnings = output
-            .warnings
+        let mut warnings = fixture_warnings
             .into_iter()
             .map(|warning| {
                 Ok(AnalysisWarning {
@@ -241,35 +274,35 @@ impl CpgNormalizer {
             &mut edges,
             &mut warnings,
             &node_lookup,
-            output.calls,
+            calls,
             EdgeKind::Call,
         );
         append_edges(
             &mut edges,
             &mut warnings,
             &node_lookup,
-            output.data_flows,
+            data_flows,
             EdgeKind::DataFlow,
         );
         append_edges(
             &mut edges,
             &mut warnings,
             &node_lookup,
-            output.contains,
+            contains,
             EdgeKind::Contains,
         );
         append_edges(
             &mut edges,
             &mut warnings,
             &node_lookup,
-            output.type_references,
+            type_references,
             EdgeKind::TypeReference,
         );
         append_edges(
             &mut edges,
             &mut warnings,
             &node_lookup,
-            output.semantic_edges,
+            semantic_edges,
             EdgeKind::Semantic,
         );
 
@@ -922,6 +955,46 @@ mod tests {
                 .iter()
                 .all(|node| node.location.file_path == FilePath::from("src/lib.rs"))
         );
+    }
+
+    #[test]
+    fn normalize_produces_empty_cpg_when_all_nodes_filtered_by_source_files() {
+        let workspace_root = std::path::Path::new("/workspace");
+        let source_files = BTreeMap::from([(
+            FilePath::from("src/main.rs"),
+            SourceFile {
+                path: FilePath::from("src/main.rs"),
+                language: Language::Rust,
+            },
+        )]);
+        let output = CodeQlQueryOutput {
+            functions: vec![FixtureNode {
+                id: "fn_target/generated.rs:1:generated".to_string(),
+                name: "generated".to_string(),
+                file: "target/generated.rs".to_string(),
+                start_line: 1,
+                end_line: 3,
+                language: Some(FixtureLanguage::Rust),
+                properties: BTreeMap::new(),
+            }],
+            modules: vec![FixtureNode {
+                id: "mod_target/generated.rs".to_string(),
+                name: "target/generated.rs".to_string(),
+                file: "target/generated.rs".to_string(),
+                start_line: 1,
+                end_line: 1,
+                language: Some(FixtureLanguage::Rust),
+                properties: BTreeMap::new(),
+            }],
+            ..CodeQlQueryOutput::default()
+        };
+
+        let analysis = CpgNormalizer
+            .normalize(workspace_root, source_files, output)
+            .unwrap();
+
+        assert_eq!(analysis.cpg.functions().len(), 0);
+        assert_eq!(analysis.cpg.modules().len(), 0);
     }
 
     fn load_fixture(name: &str) -> String {
