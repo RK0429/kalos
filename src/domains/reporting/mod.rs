@@ -351,6 +351,7 @@ impl AnalysisReport {
                 .iter()
                 .map(FilePath::as_str)
                 .collect::<Vec<_>>(),
+            "files_analyzed": self.metadata.file_count,
             "analysis_warnings": self.analysis_warnings,
             "scores": {
                 "overall": self.scores.overall,
@@ -1401,6 +1402,7 @@ mod tests {
         for field in [
             "schema_version",
             "analysis_targets",
+            "files_analyzed",
             "analysis_warnings",
             "scores",
             "metrics",
@@ -1414,6 +1416,7 @@ mod tests {
         }
 
         assert_eq!(parsed["schema_version"], "1.0.0");
+        assert_eq!(parsed["files_analyzed"], 10);
         assert_eq!(parsed["diagnostics_scope"], "whole_project");
         assert_eq!(parsed["summary_scope"], "listed_diagnostics");
         assert_eq!(parsed["scores"]["overall"], 45);
@@ -1442,6 +1445,37 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn json_output_files_analyzed_matches_metadata() {
+        let expected_file_count = 42;
+        let report = AnalysisReport::project(
+            ReportMetadata::new(
+                vec![FilePath::from("src/")],
+                expected_file_count,
+                "0.1.0",
+                "1.0.0",
+            ),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Json,
+                strict: false,
+                minimum_severity: None,
+                min_risk: None,
+                verbose: false,
+            },
+            Vec::new(),
+            None,
+        );
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+
+        assert_eq!(parsed["files_analyzed"], expected_file_count);
     }
 
     #[test]
