@@ -644,6 +644,42 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_python_package_modules_into_module_nodes() {
+        let workspace_root = std::path::Path::new("/workspace");
+        let source_files = BTreeMap::from([(
+            FilePath::from("pkg/app.py"),
+            SourceFile {
+                path: FilePath::from("pkg/app.py"),
+                language: Language::Python,
+            },
+        )]);
+        let fixture = r#"{
+            "modules": [
+                {
+                    "id":"mod_pkg/app.py",
+                    "name":"pkg/app.py",
+                    "file":"pkg/app.py",
+                    "start_line":1,
+                    "end_line":1,
+                    "language":"python"
+                }
+            ]
+        }"#;
+
+        let analysis = CpgNormalizer
+            .normalize_fixture_bytes(workspace_root, source_files, fixture.as_bytes())
+            .unwrap();
+
+        assert!(analysis.cpg.nodes.iter().any(|node| {
+            node.kind == NodeKind::Module
+                && node.name == "pkg/app.py"
+                && node.location.file_path == FilePath::from("pkg/app.py")
+                && node.location.start_line == 1
+                && node.location.end_line == 1
+        }));
+    }
+
+    #[test]
     fn normalizes_workspace_relative_paths_from_absolute_fixture_paths() {
         let workspace_root = fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
         let fixture = format!(

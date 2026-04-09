@@ -40,7 +40,6 @@ private string classId(Class c) {
 
 query predicate modules(string id, string name, string file, int start_line, int end_line) {
   exists(Module m |
-    m.isTopLevel() and
     id = moduleId(m) and
     name = m.getFile().getRelativePath() and
     file = m.getFile().getRelativePath() and
