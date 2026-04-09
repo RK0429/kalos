@@ -21,6 +21,7 @@ impl DependencyResolverPort for StubDependencyResolver {
             warnings: vec![AnalysisWarning {
                 file_path: FilePath::from("."),
                 message: "External symbol resolution is not yet implemented (REQ-FUNC-007). Analysis results may be incomplete for cross-crate/cross-package references.".to_owned(),
+                user_facing: false,
             }],
         })
     }

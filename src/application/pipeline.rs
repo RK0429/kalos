@@ -51,6 +51,7 @@ impl<E, D> AnalysisPipeline<E, D> {
 
 pub struct PipelineResult {
     pub report: AnalysisReport,
+    pub analysis_warnings: Vec<String>,
     pub exit_code: ExitCode,
     pub llm_suggestions: Option<LlmSuggestionBundle>,
 }
@@ -194,6 +195,7 @@ where
         .map_err(PipelineError::Plugin)?;
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
+        let analysis_warnings = analysis_warning_messages(&artifacts.source_analysis);
         let file_count = artifacts.source_analysis.source_files.len();
         Ok(finalize_result(
             assemble_report(
@@ -204,6 +206,7 @@ where
                 DiagnosticsScope::WholeProject,
                 view_options,
                 file_count,
+                analysis_warnings,
                 None,
             ),
             llm_suggestions,
@@ -250,6 +253,7 @@ where
         let scope_metrics = scope_metrics_map(&artifacts.metrics);
         let diagnostic_snapshots = diagnostic_snapshots_from_diagnostics(&artifacts.diagnostics);
         let overall_score = artifacts.metrics.overall_score.clone();
+        let analysis_warnings = analysis_warning_messages(&artifacts.source_analysis);
         let file_count = artifacts.source_analysis.source_files.len();
         let report = assemble_report(
             config,
@@ -259,6 +263,7 @@ where
             DiagnosticsScope::WholeProject,
             view_options,
             file_count,
+            analysis_warnings,
             None,
         );
         let exit_code = report.diagnostics.determine_exit_code(report.view.strict);
@@ -357,6 +362,7 @@ where
                     DiagnosticsScope::AffectedOnly,
                     view_options,
                     snapshot.changed_files.len(),
+                    Vec::new(),
                     summary_override,
                 ),
                 None,
@@ -472,6 +478,7 @@ where
         let overall_score = merged_metrics.overall_score.clone();
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &affected_diagnostics, &diff_source_analysis);
+        let analysis_warnings = analysis_warning_messages(&diff_source_analysis);
         let file_count = diff_source_analysis.source_files.len();
         let report = assemble_report(
             config,
@@ -481,6 +488,7 @@ where
             DiagnosticsScope::AffectedOnly,
             view_options,
             file_count,
+            analysis_warnings,
             summary_override,
         );
         cache
@@ -564,6 +572,7 @@ where
         cache
             .store(&baseline)
             .map_err(FullRunWithCacheError::Cache)?;
+        let analysis_warnings = analysis_warning_messages(&artifacts.source_analysis);
         let file_count = artifacts.source_analysis.source_files.len();
 
         Ok(finalize_result(
@@ -575,6 +584,7 @@ where
                 DiagnosticsScope::WholeProject,
                 view_options,
                 file_count,
+                analysis_warnings,
                 None,
             ),
             llm_suggestions,
@@ -727,6 +737,7 @@ fn assemble_report(
     diagnostics_scope: DiagnosticsScope,
     view_options: ReportViewOptions,
     file_count: usize,
+    analysis_warnings: Vec<String>,
     summary_override: Option<DiagnosticSummary>,
 ) -> AnalysisReport {
     AnalysisReport::project_with_metric_catalog(
@@ -741,8 +752,18 @@ fn assemble_report(
         diagnostics,
         diagnostics_scope,
         view_options,
+        analysis_warnings,
         summary_override,
     )
+}
+
+fn analysis_warning_messages(source_analysis: &SourceAnalysis) -> Vec<String> {
+    source_analysis
+        .warnings
+        .iter()
+        .filter(|warning| warning.user_facing)
+        .map(|warning| warning.message.clone())
+        .collect()
 }
 
 fn compute_metrics_with_plugins(
@@ -894,6 +915,7 @@ fn finalize_result(
 ) -> PipelineResult {
     let exit_code = report.diagnostics.determine_exit_code(report.view.strict);
     PipelineResult {
+        analysis_warnings: report.analysis_warnings.clone(),
         report,
         exit_code,
         llm_suggestions,
@@ -1860,6 +1882,7 @@ mod tests {
                 verbose: false,
             },
             1,
+            Vec::new(),
             None,
         );
 
@@ -1901,6 +1924,7 @@ mod tests {
             DiagnosticsScope::WholeProject,
             view_options.clone(),
             2,
+            Vec::new(),
             None,
         );
         let mut result = finalize_result(report, None);
@@ -2334,10 +2358,98 @@ mod tests {
             result.report.metadata.analysis_targets,
             vec![FilePath::from(".")]
         );
+        assert!(result.report.analysis_warnings.is_empty());
+        assert!(result.analysis_warnings.is_empty());
         assert!(matches!(
             result.report.metrics.last(),
             Some(ReportScopeMetrics { scope_id, .. }) if *scope_id == project_scope_id()
         ));
+    }
+
+    #[test]
+    fn analysis_pipeline_propagates_analysis_warnings_to_report_and_result() {
+        let warning = "no files with supported extensions (.py, .ts, .tsx, .rs, .go) were found in the analysis targets";
+        let pipeline = AnalysisPipeline::new(
+            MockExtractor {
+                source_analysis: SourceAnalysis {
+                    cpg: UnifiedCpg {
+                        id: CpgId::from("stub"),
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                    },
+                    source_files: BTreeMap::new(),
+                    suppressions: Vec::new(),
+                    warnings: vec![AnalysisWarning {
+                        file_path: FilePath::from("."),
+                        message: warning.to_owned(),
+                        user_facing: true,
+                    }],
+                },
+            },
+            NullDependencyResolver,
+        );
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Human,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        assert_eq!(result.report.analysis_warnings, vec![warning.to_owned()]);
+        assert_eq!(result.analysis_warnings, vec![warning.to_owned()]);
+    }
+
+    #[test]
+    fn analysis_pipeline_filters_non_user_facing_warnings_from_report_and_result() {
+        let warning = "External symbol resolution is not yet implemented (REQ-FUNC-007). Analysis results may be incomplete for cross-crate/cross-package references.";
+        let pipeline = AnalysisPipeline::new(
+            MockExtractor {
+                source_analysis: SourceAnalysis {
+                    cpg: UnifiedCpg {
+                        id: CpgId::from("stub"),
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                    },
+                    source_files: BTreeMap::new(),
+                    suppressions: Vec::new(),
+                    warnings: vec![AnalysisWarning {
+                        file_path: FilePath::from("."),
+                        message: warning.to_owned(),
+                        user_facing: false,
+                    }],
+                },
+            },
+            NullDependencyResolver,
+        );
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Human,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        assert!(result.report.analysis_warnings.is_empty());
+        assert!(result.analysis_warnings.is_empty());
     }
 
     #[test]
@@ -2768,6 +2880,7 @@ mod tests {
                     warnings: vec![AnalysisWarning {
                         file_path: FilePath::from("src/lib.rs"),
                         message: "External symbol resolution is not yet implemented (REQ-FUNC-007). Analysis results may be incomplete for cross-crate/cross-package references.".to_owned(),
+                        user_facing: false,
                     }],
                 },
             },

@@ -228,6 +228,7 @@ pub struct SuppressionComment {
 pub struct AnalysisWarning {
     pub file_path: FilePath,
     pub message: String,
+    pub user_facing: bool,
 }
 
 #[cfg(test)]

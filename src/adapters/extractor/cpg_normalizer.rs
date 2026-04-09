@@ -231,6 +231,7 @@ impl CpgNormalizer {
                         &warning.file,
                     )?),
                     message: warning.message,
+                    user_facing: false,
                 })
             })
             .collect::<Result<Vec<_>, NormalizationError>>()?;
@@ -459,6 +460,7 @@ fn append_edges(
                     "CodeQL output referenced unknown source node `{}`",
                     edge.source
                 ),
+                user_facing: false,
             });
             continue;
         };
@@ -469,6 +471,7 @@ fn append_edges(
                     "CodeQL output referenced unknown target node `{}`",
                     edge.target
                 ),
+                user_facing: false,
             });
             continue;
         };

@@ -257,6 +257,23 @@ fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
 }
 
 #[test]
+fn kalos_check_human_output_explains_when_no_supported_files_are_found() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("README.md"), "# placeholder\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Analyzed 0 files"))
+        .stdout(predicate::str::contains(
+            "no files with supported extensions (.py, .ts, .tsx, .rs, .go) were found in the analysis targets",
+        ));
+}
+
+#[test]
 fn kalos_check_with_external_target_path_succeeds() {
     let target_workspace = seeded_workspace();
     let external_cwd = TempDir::new().unwrap();
@@ -459,6 +476,7 @@ fn kalos_check_json_output_has_required_top_level_fields() {
     for field in [
         "schema_version",
         "analysis_targets",
+        "analysis_warnings",
         "scores",
         "metrics",
         "diagnostics",

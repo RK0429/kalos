@@ -18,6 +18,14 @@ use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 const DEFAULT_EXTENSIONS: [&str; 5] = [".py", ".ts", ".tsx", ".rs", ".go"];
 const DEFAULT_MIN_LANGUAGE_RATIO: f64 = 0.05;
 
+fn supported_extensions_display() -> String {
+    DEFAULT_EXTENSIONS
+        .iter()
+        .map(|extension| extension.trim_start_matches('*'))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn codeql_executable_path(bundle_cache_path: &Path) -> PathBuf {
     bundle_cache_path.join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
 }
@@ -173,7 +181,14 @@ where
                 },
                 source_files,
                 suppressions: Vec::new(),
-                warnings: Vec::new(),
+                warnings: vec![AnalysisWarning {
+                    file_path: FilePath::from("."),
+                    message: format!(
+                        "no files with supported extensions ({}) were found in the analysis targets",
+                        supported_extensions_display()
+                    ),
+                    user_facing: true,
+                }],
             });
         }
 
@@ -488,6 +503,7 @@ fn filter_incidental_languages(
                     percentage,
                     min_ratio * 100.0
                 ),
+                user_facing: true,
             }
         })
         .collect();
@@ -543,7 +559,7 @@ mod tests {
     use super::{
         CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, compute_source_fingerprint,
         database_create_progress_message, filter_incidental_languages, format_command_guidance,
-        format_elapsed,
+        format_elapsed, supported_extensions_display,
     };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
@@ -1198,11 +1214,48 @@ mod tests {
         let invocations = command_runner.invocations().unwrap();
         assert_eq!(invocations.len(), 3);
         assert_eq!(analysis.warnings.len(), 1);
+        assert!(analysis.warnings[0].user_facing);
         assert!(
             analysis.warnings[0]
                 .message
                 .contains("skipped CodeQL database creation for python")
         );
+    }
+
+    #[test]
+    fn empty_source_file_set_emits_supported_extensions_warning() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/README.md", "# placeholder\n");
+        let command_runner = MockCommandRunner::new();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        let analysis = adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        assert!(analysis.source_files.is_empty());
+        assert_eq!(analysis.warnings.len(), 1);
+        assert_eq!(analysis.warnings[0].file_path, FilePath::from("."));
+        assert!(analysis.warnings[0].user_facing);
+        assert_eq!(
+            analysis.warnings[0].message,
+            format!(
+                "no files with supported extensions ({}) were found in the analysis targets",
+                supported_extensions_display()
+            )
+        );
+        assert!(command_runner.invocations().unwrap().is_empty());
     }
 
     #[test]

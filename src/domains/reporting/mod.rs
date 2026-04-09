@@ -100,6 +100,7 @@ pub struct AnalysisReport {
     pub metadata: ReportMetadata,
     pub view: ReportViewOptions,
     pub scores: ProjectedScores,
+    pub analysis_warnings: Vec<String>,
     pub metrics: Vec<ReportScopeMetrics>,
     pub diagnostics: DiagnosticReport,
 }
@@ -132,6 +133,7 @@ impl AnalysisReport {
         diagnostics: Vec<Diagnostic>,
         diagnostics_scope: DiagnosticsScope,
         view: ReportViewOptions,
+        analysis_warnings: Vec<String>,
         summary_override: Option<DiagnosticSummary>,
     ) -> Self {
         let definitions = builtin_metric_definitions();
@@ -148,6 +150,7 @@ impl AnalysisReport {
             diagnostics,
             diagnostics_scope,
             view,
+            analysis_warnings,
             summary_override,
         )
     }
@@ -159,6 +162,7 @@ impl AnalysisReport {
         diagnostics: Vec<Diagnostic>,
         diagnostics_scope: DiagnosticsScope,
         view: ReportViewOptions,
+        analysis_warnings: Vec<String>,
         summary_override: Option<DiagnosticSummary>,
     ) -> Self {
         let projected_metrics = project_metrics(metrics, view.requested_level, metric_catalog);
@@ -176,6 +180,7 @@ impl AnalysisReport {
             metadata,
             view: view.clone(),
             scores: project_scores(metrics, view.requested_level, file_count),
+            analysis_warnings,
             metrics: projected_metrics,
             diagnostics: DiagnosticReport {
                 diagnostics: projected_diagnostics,
@@ -281,6 +286,9 @@ impl AnalysisReport {
         if let Some(deduction_line) = self.human_project_deduction_line() {
             let _ = writeln!(output, "{deduction_line}");
         }
+        for warning in &self.analysis_warnings {
+            let _ = writeln!(output, "note: {warning}");
+        }
         let _ = writeln!(
             output,
             "{} errors, {} warnings, {} info",
@@ -343,6 +351,7 @@ impl AnalysisReport {
                 .iter()
                 .map(FilePath::as_str)
                 .collect::<Vec<_>>(),
+            "analysis_warnings": self.analysis_warnings,
             "scores": {
                 "overall": self.scores.overall,
                 "function": self.scores.function,
@@ -466,6 +475,7 @@ impl AnalysisReport {
                     }
                 },
                 "properties": {
+                    "analysis_warnings": self.analysis_warnings,
                     "kalos": {
                         "scores": {
                             "overall": self.scores.overall,
@@ -1072,7 +1082,7 @@ impl RequestedLevelExt for RequestedLevel {
 mod tests {
     use std::collections::BTreeMap;
 
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::{
         AnalysisReport, OutputFormat, ProjectedScores, ReportMetadata, ReportViewOptions,
@@ -1300,6 +1310,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1326,6 +1337,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             Some(crate::domains::diagnostics::DiagnosticSummary {
                 error_count: 2,
                 warning_count: 3,
@@ -1389,6 +1401,7 @@ mod tests {
         for field in [
             "schema_version",
             "analysis_targets",
+            "analysis_warnings",
             "scores",
             "metrics",
             "diagnostics",
@@ -1473,15 +1486,22 @@ mod tests {
         assert!(cross_scope_result["properties"]["kalos"]["template_suggestion"].is_object());
 
         let kalos_props = &run["properties"]["kalos"];
-        assert!(kalos_props["scores"].is_object(), "scores should be present in SARIF properties");
+        assert!(
+            kalos_props["scores"].is_object(),
+            "scores should be present in SARIF properties"
+        );
         assert_eq!(kalos_props["scores"]["overall"], 44);
         assert!(kalos_props["scores"]["function"].is_number());
         assert!(kalos_props["scores"]["score_notes"].is_array());
 
-        assert!(kalos_props["summary"].is_object(), "summary should be present in SARIF properties");
+        assert!(
+            kalos_props["summary"].is_object(),
+            "summary should be present in SARIF properties"
+        );
         assert!(kalos_props["summary"]["error_count"].is_number());
         assert!(kalos_props["summary"]["warning_count"].is_number());
         assert!(kalos_props["summary"]["info_count"].is_number());
+        assert!(run["properties"]["analysis_warnings"].is_array());
     }
 
     #[test]
@@ -1506,6 +1526,7 @@ mod tests {
                 min_risk: None,
                 verbose: true,
             },
+            Vec::new(),
             None,
         );
 
@@ -1555,6 +1576,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1583,6 +1605,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1606,6 +1629,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1666,6 +1690,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1689,6 +1714,7 @@ mod tests {
                 min_risk: None,
                 verbose: true,
             },
+            Vec::new(),
             None,
         );
 
@@ -1772,6 +1798,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1801,6 +1828,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         );
 
@@ -1842,6 +1870,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            Vec::new(),
             None,
         )
     }
@@ -1993,6 +2022,7 @@ mod tests {
                 min_risk,
                 verbose,
             },
+            Vec::new(),
             None,
         )
     }
@@ -2141,6 +2171,10 @@ mod tests {
         }
     }
 
+    fn fixture_analysis_warning() -> String {
+        "no files with supported extensions (.py, .ts, .tsx, .rs, .go) were found in the analysis targets".to_owned()
+    }
+
     #[test]
     fn project_scores_returns_none_when_zero_files() {
         let metrics = fixture_metrics();
@@ -2168,6 +2202,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            vec![fixture_analysis_warning()],
             None,
         );
         let rendered = report.render_human(None, false);
@@ -2176,6 +2211,9 @@ mod tests {
             "expected 'Score: n/a' but got:\n{rendered}"
         );
         assert!(rendered.contains("no source files were analyzed"));
+        assert!(rendered.contains(
+            "note: no files with supported extensions (.py, .ts, .tsx, .rs, .go) were found in the analysis targets"
+        ));
     }
 
     #[test]
@@ -2193,6 +2231,7 @@ mod tests {
                 min_risk: None,
                 verbose: false,
             },
+            vec![fixture_analysis_warning()],
             None,
         );
         let rendered = report.render_json(None).unwrap();
@@ -2201,6 +2240,10 @@ mod tests {
         assert!(json["scores"]["function"].is_null());
         assert!(json["scores"]["module"].is_null());
         assert!(json["scores"]["project"].is_null());
+        assert_eq!(
+            json["analysis_warnings"],
+            json!([fixture_analysis_warning()])
+        );
     }
 
     #[test]
@@ -2222,10 +2265,26 @@ mod tests {
         assert_eq!(kalos["scores"]["function"], json["scores"]["function"]);
         assert_eq!(kalos["scores"]["module"], json["scores"]["module"]);
         assert_eq!(kalos["scores"]["project"], json["scores"]["project"]);
-        assert_eq!(kalos["scores"]["score_notes"], json["scores"]["score_notes"]);
+        assert_eq!(
+            kalos["scores"]["score_notes"],
+            json["scores"]["score_notes"]
+        );
 
-        assert_eq!(kalos["summary"]["error_count"], json["summary"]["error_count"]);
-        assert_eq!(kalos["summary"]["warning_count"], json["summary"]["warning_count"]);
-        assert_eq!(kalos["summary"]["info_count"], json["summary"]["info_count"]);
+        assert_eq!(
+            kalos["summary"]["error_count"],
+            json["summary"]["error_count"]
+        );
+        assert_eq!(
+            kalos["summary"]["warning_count"],
+            json["summary"]["warning_count"]
+        );
+        assert_eq!(
+            kalos["summary"]["info_count"],
+            json["summary"]["info_count"]
+        );
+        assert_eq!(
+            sarif["runs"][0]["properties"]["analysis_warnings"],
+            json["analysis_warnings"]
+        );
     }
 }
