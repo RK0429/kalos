@@ -56,6 +56,20 @@ fn compute_source_fingerprint<F: FileSystem>(
     Some(format!("{:x}", hasher.finalize()))
 }
 
+fn try_load_cache(
+    fingerprint: &str,
+    cache_key_path: &Path,
+    decoded_cache_path: &Path,
+) -> Option<CodeQlQueryOutput> {
+    let stored_key = std::fs::read_to_string(cache_key_path).ok()?;
+    if stored_key.trim() != fingerprint {
+        return None;
+    }
+
+    let cached_bytes = std::fs::read(decoded_cache_path).ok()?;
+    CpgNormalizer::parse_output(&cached_bytes).ok()
+}
+
 #[derive(Clone, Debug)]
 pub struct CodeQlAdapter<F, R, T> {
     file_system: F,
@@ -127,6 +141,12 @@ pub enum CodeQlAdapterError {
     ResolveBundle { message: String },
     #[error("failed to create CodeQL database directory `{path}`: {source}")]
     CreateDatabaseDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to acquire lock on `{path}`: {source}")]
+    AcquireLock {
         path: PathBuf,
         #[source]
         source: io::Error,
@@ -261,18 +281,36 @@ where
             );
 
             if let Some(ref fingerprint) = source_fingerprint {
-                if let Ok(stored_key) = std::fs::read_to_string(&cache_key_path) {
-                    if stored_key.trim() == *fingerprint {
-                        if let Ok(cached_bytes) = std::fs::read(&decoded_cache_path) {
-                            if let Ok(parsed) = CpgNormalizer::parse_output(&cached_bytes) {
-                                if self.progress {
-                                    eprintln!("    cached");
-                                }
-                                combined_output.extend_from(parsed);
-                                continue;
-                            }
-                        }
+                if let Some(parsed) =
+                    try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path)
+                {
+                    if self.progress {
+                        eprintln!("    cached");
                     }
+                    combined_output.extend_from(parsed);
+                    continue;
+                }
+            }
+
+            let lock_path = database_path.with_extension("lock");
+            let _lock_guard = self
+                .file_system
+                .lock_exclusive(&lock_path)
+                .map_err(|source| CodeQlAdapterError::AcquireLock {
+                    path: lock_path.clone(),
+                    source,
+                })?;
+
+            // Re-check cache: another process may have completed while we waited for the lock.
+            if let Some(ref fingerprint) = source_fingerprint {
+                if let Some(parsed) =
+                    try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path)
+                {
+                    if self.progress {
+                        eprintln!("    cached (after lock)");
+                    }
+                    combined_output.extend_from(parsed);
+                    continue;
                 }
             }
 
@@ -552,6 +590,8 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     use tempfile::TempDir;
@@ -564,7 +604,7 @@ mod tests {
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
     use crate::platform::fs::{InMemoryFileSystem, RealFileSystem};
-    use crate::platform::process::{MockCommandRunner, ProcessError, ProcessOutput};
+    use crate::platform::process::{CommandRunner, MockCommandRunner, ProcessError, ProcessOutput};
     use crate::ports::extractor::{ExtractionRequest, ExtractorPort};
     use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
 
@@ -581,6 +621,58 @@ mod tests {
             _request: &ToolCacheRequest,
         ) -> Result<ResolvedToolBundle, Self::Error> {
             Ok(self.bundle.clone())
+        }
+    }
+
+    /// Command runner for concurrent tests that delays database creation so
+    /// competing extractions contend on the same lock path.
+    #[derive(Clone)]
+    struct SlowCreateCommandRunner {
+        invocation_count: Arc<AtomicUsize>,
+    }
+
+    impl SlowCreateCommandRunner {
+        fn new() -> Self {
+            Self {
+                invocation_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn invocation_count(&self) -> usize {
+            self.invocation_count.load(Ordering::Relaxed)
+        }
+    }
+
+    impl CommandRunner for SlowCreateCommandRunner {
+        fn run(
+            &self,
+            _program: &str,
+            args: &[&str],
+            _cwd: &Path,
+        ) -> Result<ProcessOutput, ProcessError> {
+            self.invocation_count.fetch_add(1, Ordering::Relaxed);
+
+            match args {
+                ["database", "create", ..] => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    Ok(ProcessOutput {
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                        exit_code: 0,
+                    })
+                }
+                ["query", "run", ..] => Ok(ProcessOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }),
+                ["bqrs", "decode", ..] => Ok(ProcessOutput {
+                    stdout: load_fixture("rust.json").into_bytes(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }),
+                other => panic!("unexpected command args: {other:?}"),
+            }
         }
     }
 
@@ -1186,6 +1278,71 @@ mod tests {
                 .unwrap()
                 .trim(),
             updated_fingerprint
+        );
+    }
+
+    #[test]
+    fn concurrent_extractions_serialize_database_creation() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = temp.path().to_path_buf();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::write(workspace_root.join("src/lib.rs"), "fn main() {}\n").unwrap();
+
+        let command_runner = SlowCreateCommandRunner::new();
+        let adapter = CodeQlAdapter::new(
+            RealFileSystem,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+        let barrier = Arc::new(Barrier::new(2));
+        let mut handles = Vec::new();
+
+        for _ in 0..2 {
+            let adapter = adapter.clone();
+            let barrier = barrier.clone();
+            let workspace_root = workspace_root.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                adapter
+                    .extract(&ExtractionRequest {
+                        workspace_root,
+                        analysis_targets: vec![FilePath::from(".")],
+                    })
+                    .unwrap()
+                    .source_files
+                    .len()
+            }));
+        }
+
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), 1);
+        }
+
+        assert_eq!(command_runner.invocation_count(), 3);
+
+        let source_files = single_source_file("src/lib.rs", Language::Rust);
+        let fingerprint = compute_source_fingerprint(
+            &RealFileSystem,
+            &workspace_root,
+            &source_files,
+            Language::Rust,
+            "2.0.0",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(workspace_root.join(".kalos/codeql/rust.cache_key"))
+                .unwrap()
+                .trim(),
+            fingerprint
+        );
+        assert!(
+            workspace_root
+                .join(".kalos/codeql/rust.decoded.json")
+                .exists()
         );
     }
 

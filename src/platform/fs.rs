@@ -12,6 +12,28 @@ pub trait FileSystem: Send + Sync {
     ) -> Result<Vec<PathBuf>, io::Error>;
     fn read_to_string(&self, path: &Path) -> Result<String, io::Error>;
     fn create_dir_all(&self, path: &Path) -> Result<(), io::Error>;
+    fn lock_exclusive(&self, path: &Path) -> Result<FileLockGuard, io::Error>;
+}
+
+/// Guard that holds a file lock. The lock is released when dropped.
+pub struct FileLockGuard(Option<std::fs::File>);
+
+impl FileLockGuard {
+    pub fn new(file: std::fs::File) -> Self {
+        Self(Some(file))
+    }
+
+    pub fn noop() -> Self {
+        Self(None)
+    }
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        if let Some(ref file) = self.0 {
+            let _ = file.unlock();
+        }
+    }
 }
 
 pub fn path_to_forward_slashes(path: &Path) -> String {
@@ -60,6 +82,16 @@ impl FileSystem for RealFileSystem {
 
     fn create_dir_all(&self, path: &Path) -> Result<(), io::Error> {
         fs::create_dir_all(path)
+    }
+
+    fn lock_exclusive(&self, path: &Path) -> Result<FileLockGuard, io::Error> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        file.lock()?;
+        Ok(FileLockGuard::new(file))
     }
 }
 
@@ -151,6 +183,10 @@ impl FileSystem for InMemoryFileSystem {
             .map_err(|_| io::Error::other("in-memory file system state should be available"))?;
         created_dirs.push(path.to_path_buf());
         Ok(())
+    }
+
+    fn lock_exclusive(&self, _path: &Path) -> Result<FileLockGuard, io::Error> {
+        Ok(FileLockGuard::noop())
     }
 }
 
