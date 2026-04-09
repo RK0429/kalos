@@ -82,6 +82,7 @@ pub struct ProjectedScores {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportMetricValue {
     pub metric_id: crate::domains::MetricId,
+    pub name: Option<String>,
     pub raw_value: f64,
     pub normalized_risk: f64,
     pub participation: MetricParticipation,
@@ -276,6 +277,9 @@ impl AnalysisReport {
         let _ = writeln!(output, "{}", self.human_score_line());
         for note in self.human_score_notes() {
             let _ = writeln!(output, "{note}");
+        }
+        if let Some(deduction_line) = self.human_project_deduction_line() {
+            let _ = writeln!(output, "{deduction_line}");
         }
         let _ = writeln!(
             output,
@@ -580,6 +584,41 @@ impl AnalysisReport {
             })
             .collect()
     }
+
+    fn human_project_deduction_line(&self) -> Option<String> {
+        let project_score = self.scores.project?;
+        if project_score >= 100 {
+            return None;
+        }
+
+        let project_scope = self
+            .metrics
+            .iter()
+            .find(|metrics| metrics.scope_id.level == AnalysisLevel::Project)?;
+        let factors = project_scope
+            .values
+            .iter()
+            .filter(|value| {
+                value.normalized_risk > 0.0
+                    && value.participation == MetricParticipation::ScoredAndDiagnosable
+            })
+            .map(|value| match &value.name {
+                Some(name) => format!(
+                    "{} ({}) = {:.3}",
+                    value.metric_id.as_str(),
+                    name,
+                    value.raw_value
+                ),
+                None => format!("{} = {:.3}", value.metric_id.as_str(), value.raw_value),
+            })
+            .collect::<Vec<_>>();
+
+        if factors.is_empty() {
+            return None;
+        }
+
+        Some(format!("  project: {}", factors.join(", ")))
+    }
 }
 
 pub fn project_metrics(
@@ -721,12 +760,13 @@ fn project_metric_value(
     value: &MetricValue,
     catalog: &BTreeMap<crate::domains::MetricId, MetricMetadata>,
 ) -> ReportMetricValue {
+    let metadata = catalog.get(&value.metric_id);
     ReportMetricValue {
         metric_id: value.metric_id.clone(),
+        name: metadata.and_then(|metadata| metadata.name.clone()),
         raw_value: value.raw_value,
         normalized_risk: value.normalized_risk,
-        participation: catalog
-            .get(&value.metric_id)
+        participation: metadata
             .map(|metadata| metadata.participation)
             .unwrap_or(MetricParticipation::ReportOnly),
     }
@@ -1549,6 +1589,40 @@ mod tests {
     }
 
     #[test]
+    fn human_output_shows_project_deduction_factors_when_score_below_100() {
+        let report = human_report(&fixture_metrics(), false, None);
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains("Score: 44/100  (function: 45, module: 20, project: 75)"));
+        assert!(rendered.contains("  project: M-P001 (Cyclic Coupling Risk) = 1.000"));
+        assert!(rendered.contains(
+            "  project: M-P001 (Cyclic Coupling Risk) = 1.000\n1 errors, 2 warnings, 1 info"
+        ));
+    }
+
+    #[test]
+    fn human_output_omits_project_deduction_when_score_is_100() {
+        let report = human_report(&fixture_metrics_without_module_score(), false, None);
+
+        let rendered = report.render_human(None, false);
+
+        assert!(!rendered.contains("  project: "));
+    }
+
+    #[test]
+    fn human_output_omits_project_deduction_when_no_project_score() {
+        let mut metrics = fixture_metrics();
+        metrics.overall_score.project_risk = None;
+        metrics.overall_score.project_score = None;
+
+        let report = human_report(&metrics, false, None);
+        let rendered = report.render_human(None, false);
+
+        assert!(!rendered.contains("  project: "));
+    }
+
+    #[test]
     fn human_output_omits_metrics_by_default() {
         let report = AnalysisReport::project(
             ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
@@ -1916,6 +1990,7 @@ mod tests {
         catalog.insert(
             plugin_metric_id,
             MetricMetadata {
+                name: None,
                 participation: MetricParticipation::ReportOnly,
                 rule_binding: None,
             },

@@ -3246,6 +3246,7 @@ mod tests {
         catalog.insert(
             plugin_metric_id,
             crate::domains::metrics::MetricMetadata {
+                name: None,
                 participation: MetricParticipation::ReportOnly,
                 rule_binding: None,
             },

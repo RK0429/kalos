@@ -184,6 +184,7 @@ pub struct MetricConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetricMetadata {
+    pub name: Option<String>,
     pub participation: MetricParticipation,
     pub rule_binding: Option<RuleId>,
 }
@@ -191,6 +192,7 @@ pub struct MetricMetadata {
 impl MetricMetadata {
     pub fn from_definition(definition: &dyn MetricDefinition) -> Self {
         Self {
+            name: Some(definition.name().to_owned()),
             participation: definition.participation(),
             rule_binding: definition.rule_binding().cloned(),
         }
@@ -363,6 +365,7 @@ mod tests {
             (
                 MetricId::from("M-F001"),
                 MetricMetadata {
+                    name: None,
                     participation: MetricParticipation::ScoredAndDiagnosable,
                     rule_binding: Some(RuleId::from("KAL-F001")),
                 },
@@ -370,6 +373,7 @@ mod tests {
             (
                 MetricId::from("M-F002"),
                 MetricMetadata {
+                    name: None,
                     participation: MetricParticipation::ScoredAndDiagnosable,
                     rule_binding: Some(RuleId::from("KAL-F002")),
                 },
@@ -377,6 +381,7 @@ mod tests {
             (
                 MetricId::from("M-M001"),
                 MetricMetadata {
+                    name: None,
                     participation: MetricParticipation::ScoredAndDiagnosable,
                     rule_binding: Some(RuleId::from("KAL-M001")),
                 },
@@ -481,6 +486,7 @@ mod tests {
         let metric_metadata = BTreeMap::from([(
             MetricId::from("M-P001"),
             MetricMetadata {
+                name: None,
                 participation: MetricParticipation::ScoredAndDiagnosable,
                 rule_binding: Some(RuleId::from("KAL-P001")),
             },
@@ -528,6 +534,7 @@ mod tests {
         let metric_metadata = BTreeMap::from([(
             MetricId::from("M-F002"),
             MetricMetadata {
+                name: None,
                 participation: MetricParticipation::ScoredAndDiagnosable,
                 rule_binding: Some(RuleId::from("KAL-F002")),
             },
