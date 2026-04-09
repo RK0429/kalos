@@ -2,10 +2,10 @@
   "modules": [
     {
       "id": "m1",
-      "name": "app",
+      "name": "src/app.py",
       "file": "src/app.py",
       "start_line": 1,
-      "end_line": 8,
+      "end_line": 1,
       "language": "python"
     }
   ],

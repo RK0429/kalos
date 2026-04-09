@@ -591,6 +591,59 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_python_module_nodes_with_file_path_names() {
+        let workspace_root = std::path::Path::new("/workspace");
+        let source_files = BTreeMap::from([(
+            FilePath::from("src/app.py"),
+            SourceFile {
+                path: FilePath::from("src/app.py"),
+                language: Language::Python,
+            },
+        )]);
+        let fixture = r#"{
+            "modules": [
+                {
+                    "id":"mod_src/app.py",
+                    "name":"src/app.py",
+                    "file":"src/app.py",
+                    "start_line":1,
+                    "end_line":1,
+                    "language":"python"
+                }
+            ],
+            "functions": [
+                {
+                    "id":"fn_src/app.py:6:greet",
+                    "name":"greet",
+                    "file":"src/app.py",
+                    "start_line":6,
+                    "end_line":8,
+                    "language":"python"
+                }
+            ],
+            "contains": [
+                {
+                    "source":"mod_src/app.py",
+                    "target":"fn_src/app.py:6:greet",
+                    "language":"python"
+                }
+            ]
+        }"#;
+
+        let analysis = CpgNormalizer
+            .normalize_fixture_bytes(workspace_root, source_files, fixture.as_bytes())
+            .unwrap();
+
+        assert!(analysis.cpg.nodes.iter().any(|node| {
+            node.kind == NodeKind::Module
+                && node.name == "src/app.py"
+                && node.location.file_path == FilePath::from("src/app.py")
+                && node.location.start_line == 1
+                && node.location.end_line == 1
+        }));
+    }
+
+    #[test]
     fn normalizes_workspace_relative_paths_from_absolute_fixture_paths() {
         let workspace_root = fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
         let fixture = format!(
@@ -719,7 +772,7 @@ mod tests {
                         {"name": "start_line", "kind": "Int"},
                         {"name": "end_line", "kind": "Int"}
                     ],
-                    "tuples": [["mod_src/app.py", "app", "src/app.py", 1, 10]]
+                    "tuples": [["mod_src/app.py", "src/app.py", "src/app.py", 1, 1]]
                 },
                 "contains": {
                     "columns": [
@@ -738,6 +791,7 @@ mod tests {
 
         assert_eq!(output.modules.len(), 1);
         assert_eq!(output.modules[0].id, "mod_src/app.py");
+        assert_eq!(output.modules[0].name, "src/app.py");
         assert_eq!(output.functions.len(), 1);
         assert_eq!(output.functions[0].name, "main");
         assert_eq!(output.contains.len(), 1);
