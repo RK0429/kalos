@@ -87,6 +87,12 @@ pub struct CheckCommand {
     pub verbose: bool,
     #[arg(
         long,
+        value_name = "threshold",
+        help = "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"
+    )]
+    pub min_risk: Option<f64>,
+    #[arg(
+        long,
         value_name = "ratio",
         help = "minimum file ratio (0.0-1.0) for a language to be analyzed (default: 0.05)"
     )]
@@ -233,6 +239,7 @@ impl CheckCommand {
             output_format: self.format.into(),
             strict: self.strict,
             minimum_severity: self.severity.map(Severity::from),
+            min_risk: self.min_risk,
             verbose: self.verbose,
         };
         debug!(

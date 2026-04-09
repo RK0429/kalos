@@ -54,12 +54,13 @@ pub enum RequestedLevel {
     All,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReportViewOptions {
     pub requested_level: RequestedLevel,
     pub output_format: OutputFormat,
     pub strict: bool,
     pub minimum_severity: Option<Severity>,
+    pub min_risk: Option<f64>,
     pub verbose: bool,
 }
 
@@ -279,13 +280,12 @@ impl AnalysisReport {
         let _ = writeln!(
             output,
             "{} errors, {} warnings, {} info",
-            summary.error_count,
-            summary.warning_count,
-            summary.info_count
+            summary.error_count, summary.warning_count, summary.info_count
         );
         if self.view.verbose && !self.metrics.is_empty() {
+            let (visible_metrics, hidden_scope_count) = self.visible_verbose_metrics();
             let _ = writeln!(output, "\n── Metrics ───────────────────────────");
-            for scope_metrics in &self.metrics {
+            for scope_metrics in visible_metrics {
                 let _ = writeln!(
                     output,
                     "{} [{}] risk={:.3}",
@@ -303,6 +303,12 @@ impl AnalysisReport {
                         participation_str(value.participation)
                     );
                 }
+            }
+            if hidden_scope_count > 0 {
+                let _ = writeln!(
+                    output,
+                    "({hidden_scope_count} scopes with risk below threshold hidden; use --min-risk 0 to show all)"
+                );
             }
         }
 
@@ -500,6 +506,23 @@ impl AnalysisReport {
         }
 
         summary
+    }
+
+    fn visible_verbose_metrics(&self) -> (Vec<&ReportScopeMetrics>, usize) {
+        let visible_metrics = self
+            .metrics
+            .iter()
+            .filter(|scope_metrics| {
+                self.view
+                    .min_risk
+                    .map_or(scope_metrics.scope_risk > 0.0, |threshold| {
+                        scope_metrics.scope_risk >= threshold
+                    })
+            })
+            .collect::<Vec<_>>();
+        let hidden_scope_count = self.metrics.len().saturating_sub(visible_metrics.len());
+
+        (visible_metrics, hidden_scope_count)
     }
 
     fn human_score_line(&self) -> String {
@@ -1146,7 +1169,11 @@ mod tests {
                 info_count: 0,
             }
         );
-        assert!(report.render_human(None, false).contains("0 errors, 0 warnings, 0 info"));
+        assert!(
+            report
+                .render_human(None, false)
+                .contains("0 errors, 0 warnings, 0 info")
+        );
     }
 
     #[test]
@@ -1212,6 +1239,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: true,
                 minimum_severity: Some(Severity::Error),
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1237,6 +1265,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             Some(crate::domains::diagnostics::DiagnosticSummary {
@@ -1405,6 +1434,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: true,
             },
             None,
@@ -1453,6 +1483,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1480,6 +1511,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1502,6 +1534,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1527,6 +1560,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1549,6 +1583,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: true,
             },
             None,
@@ -1557,6 +1592,66 @@ mod tests {
         let rendered = report.render_human(None, false);
 
         assert!(rendered.contains("── Metrics ──"));
+    }
+
+    #[test]
+    fn verbose_default_filters_zero_risk_scopes() {
+        let report = human_report(&fixture_metrics_with_mixed_risk(), true, None);
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains("crate::half [function] risk=0.500"));
+        assert!(rendered.contains("crate [module] risk=0.800"));
+        assert!(!rendered.contains("crate::zero [function] risk=0.000"));
+        assert!(!rendered.contains("<project> [project] risk=0.000"));
+    }
+
+    #[test]
+    fn verbose_min_risk_zero_shows_all_scopes() {
+        let report = human_report(&fixture_metrics_with_mixed_risk(), true, Some(0.0));
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains("crate::zero [function] risk=0.000"));
+        assert!(rendered.contains("crate::half [function] risk=0.500"));
+        assert!(rendered.contains("crate [module] risk=0.800"));
+        assert!(rendered.contains("<project> [project] risk=0.000"));
+    }
+
+    #[test]
+    fn verbose_min_risk_threshold_filters_scopes_below_threshold() {
+        let report = human_report(&fixture_metrics_with_mixed_risk(), true, Some(0.5));
+
+        let rendered = report.render_human(None, false);
+
+        assert!(!rendered.contains("crate::zero [function] risk=0.000"));
+        assert!(rendered.contains("crate::half [function] risk=0.500"));
+        assert!(rendered.contains("crate [module] risk=0.800"));
+        assert!(!rendered.contains("<project> [project] risk=0.000"));
+    }
+
+    #[test]
+    fn verbose_filtered_scope_note_shows_hidden_count() {
+        let report = human_report(&fixture_metrics_with_mixed_risk(), true, None);
+
+        let rendered = report.render_human(None, false);
+
+        assert!(
+            rendered.contains(
+                "(2 scopes with risk below threshold hidden; use --min-risk 0 to show all)"
+            )
+        );
+    }
+
+    #[test]
+    fn non_verbose_output_is_unaffected_by_min_risk() {
+        let baseline = human_report(&fixture_metrics_with_mixed_risk(), false, None);
+        let with_threshold = human_report(&fixture_metrics_with_mixed_risk(), false, Some(0.5));
+
+        assert_eq!(
+            baseline.render_human(None, false),
+            with_threshold.render_human(None, false)
+        );
     }
 
     #[test]
@@ -1571,6 +1666,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1599,6 +1695,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1639,6 +1736,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1719,6 +1817,81 @@ mod tests {
                 project_score: Some(100),
             },
         }
+    }
+
+    fn fixture_metrics_with_mixed_risk() -> AnalysisMetrics {
+        AnalysisMetrics {
+            function_metrics: vec![
+                ScopeMetrics {
+                    scope_id: ScopeId::new(AnalysisLevel::Function, "crate::zero", "src/lib.rs"),
+                    scope_risk: 0.0,
+                    values: vec![MetricValue {
+                        metric_id: MetricId::from("M-F001"),
+                        raw_value: 0.0,
+                        normalized_risk: 0.0,
+                    }],
+                },
+                ScopeMetrics {
+                    scope_id: ScopeId::new(AnalysisLevel::Function, "crate::half", "src/lib.rs"),
+                    scope_risk: 0.5,
+                    values: vec![MetricValue {
+                        metric_id: MetricId::from("M-F002"),
+                        raw_value: 2.0,
+                        normalized_risk: 0.5,
+                    }],
+                },
+            ],
+            module_metrics: vec![ScopeMetrics {
+                scope_id: ScopeId::new(AnalysisLevel::Module, "crate", "src/lib.rs"),
+                scope_risk: 0.8,
+                values: vec![MetricValue {
+                    metric_id: MetricId::from("M-M001"),
+                    raw_value: 4.0,
+                    normalized_risk: 0.8,
+                }],
+            }],
+            project_metrics: Some(ScopeMetrics {
+                scope_id: ScopeId::new(AnalysisLevel::Project, "<project>", "."),
+                scope_risk: 0.0,
+                values: vec![MetricValue {
+                    metric_id: MetricId::from("M-P001"),
+                    raw_value: 1.0,
+                    normalized_risk: 0.0,
+                }],
+            }),
+            overall_score: OverallScore {
+                function_risk: Some(0.5),
+                module_risk: Some(0.8),
+                project_risk: Some(0.0),
+                overall_risk: 0.43,
+                overall_score: 57,
+                function_score: Some(50),
+                module_score: Some(20),
+                project_score: Some(100),
+            },
+        }
+    }
+
+    fn human_report(
+        metrics: &AnalysisMetrics,
+        verbose: bool,
+        min_risk: Option<f64>,
+    ) -> AnalysisReport {
+        AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            metrics,
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                min_risk,
+                verbose,
+            },
+            None,
+        )
     }
 
     fn fixture_metrics_with_plugin(plugin_metric_id: MetricId) -> AnalysisMetrics {
@@ -1888,6 +2061,7 @@ mod tests {
                 output_format: OutputFormat::Human,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,
@@ -1912,6 +2086,7 @@ mod tests {
                 output_format: OutputFormat::Json,
                 strict: false,
                 minimum_severity: None,
+                min_risk: None,
                 verbose: false,
             },
             None,

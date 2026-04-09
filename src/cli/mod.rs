@@ -56,6 +56,7 @@ mod tests {
         assert_eq!(command.format, OutputFormat::Human);
         assert_eq!(command.level, RequestedLevel::All);
         assert_eq!(command.output, None);
+        assert_eq!(command.min_risk, None);
         assert!(!command.verbose);
     }
 
@@ -100,6 +101,8 @@ mod tests {
             "origin/main",
             "--llm",
             "--strict",
+            "--min-risk",
+            "0.5",
         ])
         .unwrap();
 
@@ -123,6 +126,7 @@ mod tests {
         );
         assert_eq!(command.severity, Some(MinimumSeverity::Warning));
         assert_eq!(command.diff.as_deref(), Some("origin/main"));
+        assert_eq!(command.min_risk, Some(0.5));
         assert!(command.llm);
         assert!(command.strict);
     }
@@ -182,6 +186,9 @@ mod tests {
         assert!(help.contains("enable llm-assisted analysis"));
         assert!(help.contains("treat warnings as errors"));
         assert!(help.contains("show per-scope metrics in human output"));
+        assert!(help.contains(
+            "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"
+        ));
         assert!(help.contains("write output to a file instead of stdout"));
     }
 
