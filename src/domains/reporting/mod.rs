@@ -372,6 +372,7 @@ impl AnalysisReport {
         &self,
         llm_suggestions: Option<&LlmSuggestionBundle>,
     ) -> Result<String, RenderError> {
+        let visible_summary = self.visible_summary();
         let diagnostics = self.visible_diagnostics();
         let rule_catalog = sarif_rule_catalog();
         let rule_ids = diagnostics
@@ -466,11 +467,28 @@ impl AnalysisReport {
                 },
                 "properties": {
                     "kalos": {
+                        "scores": {
+                            "overall": self.scores.overall,
+                            "function": self.scores.function,
+                            "module": self.scores.module,
+                            "project": self.scores.project,
+                            "score_notes": self
+                                .scores
+                                .score_notes
+                                .iter()
+                                .map(score_note_json)
+                                .collect::<Vec<_>>(),
+                        },
                         "metrics": self
                             .metrics
                             .iter()
                             .map(report_scope_metrics_json)
                             .collect::<Vec<_>>(),
+                        "summary": {
+                            "error_count": visible_summary.error_count,
+                            "warning_count": visible_summary.warning_count,
+                            "info_count": visible_summary.info_count,
+                        },
                     },
                 },
                 "results": results,
@@ -1453,6 +1471,17 @@ mod tests {
                 .is_null()
         );
         assert!(cross_scope_result["properties"]["kalos"]["template_suggestion"].is_object());
+
+        let kalos_props = &run["properties"]["kalos"];
+        assert!(kalos_props["scores"].is_object(), "scores should be present in SARIF properties");
+        assert_eq!(kalos_props["scores"]["overall"], 44);
+        assert!(kalos_props["scores"]["function"].is_number());
+        assert!(kalos_props["scores"]["score_notes"].is_array());
+
+        assert!(kalos_props["summary"].is_object(), "summary should be present in SARIF properties");
+        assert!(kalos_props["summary"]["error_count"].is_number());
+        assert!(kalos_props["summary"]["warning_count"].is_number());
+        assert!(kalos_props["summary"]["info_count"].is_number());
     }
 
     #[test]
@@ -2172,5 +2201,31 @@ mod tests {
         assert!(json["scores"]["function"].is_null());
         assert!(json["scores"]["module"].is_null());
         assert!(json["scores"]["project"].is_null());
+    }
+
+    #[test]
+    fn sarif_scores_and_summary_match_json_output() {
+        let report = project_report(
+            RequestedLevel::All,
+            None,
+            &fixture_metrics(),
+            fixture_diagnostics(),
+        );
+        let json_rendered = report.render_json(None).expect("json should render");
+        let json: Value = serde_json::from_str(&json_rendered).expect("json should parse");
+
+        let sarif_rendered = report.render_sarif(None).expect("sarif should render");
+        let sarif: Value = serde_json::from_str(&sarif_rendered).expect("sarif should parse");
+        let kalos = &sarif["runs"][0]["properties"]["kalos"];
+
+        assert_eq!(kalos["scores"]["overall"], json["scores"]["overall"]);
+        assert_eq!(kalos["scores"]["function"], json["scores"]["function"]);
+        assert_eq!(kalos["scores"]["module"], json["scores"]["module"]);
+        assert_eq!(kalos["scores"]["project"], json["scores"]["project"]);
+        assert_eq!(kalos["scores"]["score_notes"], json["scores"]["score_notes"]);
+
+        assert_eq!(kalos["summary"]["error_count"], json["summary"]["error_count"]);
+        assert_eq!(kalos["summary"]["warning_count"], json["summary"]["warning_count"]);
+        assert_eq!(kalos["summary"]["info_count"], json["summary"]["info_count"]);
     }
 }
