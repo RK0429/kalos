@@ -6,7 +6,7 @@ use petgraph::graph::DiGraph;
 use crate::domains::cpg::{CpgNode, CpgSubgraph, EdgeKind, NodeId, NodeKind};
 use crate::domains::{AnalysisLevel, MetricId, RuleId, ScopeId};
 
-use super::{
+use super::types::{
     MetricConfig, MetricDefinition, MetricOrigin, MetricParticipation, MetricValue, round_half_up,
 };
 

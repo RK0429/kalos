@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
 
-use crate::domains::cpg::CpgSubgraph;
 use crate::domains::diagnostics::RuleConfig;
 
-use super::{AnalysisLevel, MetricId, RuleId, ScopeId};
+use super::{MetricId, RuleId, ScopeId};
 
 pub mod builtin;
+pub mod types;
 pub use builtin::{
     CfgBranchEntropyRisk, CircularDependencyParticipationRisk, CyclicCouplingRisk,
     CyclomaticComplexityRisk, DataFlowDensityRisk, HubDependencyConcentrationRisk,
     IdentifierRepetitionRisk, InstabilityRisk, ModuleFanOutRisk, ModuleSizeEntropyImbalanceRisk,
     builtin_metric_definitions,
+};
+pub use types::{
+    MetricConfig, MetricDefinition, MetricOrigin, MetricParticipation, MetricValue, round_half_up,
 };
 
 #[cfg(test)]
@@ -140,13 +143,6 @@ impl ScopeMetrics {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct MetricValue {
-    pub metric_id: MetricId,
-    pub raw_value: f64,
-    pub normalized_risk: f64,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OverallScore {
     pub function_risk: Option<f64>,
     pub module_risk: Option<f64>,
@@ -163,23 +159,6 @@ pub struct ScoreWeights {
     pub function: f64,
     pub module: f64,
     pub project: f64,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MetricOrigin {
-    BuiltIn,
-    Plugin,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MetricParticipation {
-    ScoredAndDiagnosable,
-    ReportOnly,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MetricConfig {
-    pub entries: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,24 +202,6 @@ pub fn metric_catalog_from_definitions<'a>(
             )
         })
         .collect()
-}
-
-pub fn round_half_up(value: f64, decimal_places: u32) -> f64 {
-    let factor = 10_f64.powi(decimal_places as i32);
-    let scaled = value * factor;
-    let epsilon = f64::EPSILON * (scaled.abs() + 1.0) * 4.0;
-    normalize_zero((scaled + 0.5 + epsilon).floor() / factor)
-}
-
-pub trait MetricDefinition: Send + Sync {
-    fn id(&self) -> &MetricId;
-    fn name(&self) -> &str;
-    fn level(&self) -> AnalysisLevel;
-    fn origin(&self) -> MetricOrigin;
-    fn participation(&self) -> MetricParticipation;
-    fn rule_binding(&self) -> Option<&RuleId>;
-    fn description(&self) -> &str;
-    fn compute(&self, subgraph: &CpgSubgraph, config: &MetricConfig) -> Option<MetricValue>;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -314,17 +275,14 @@ fn risk_to_score(risk: f64) -> u8 {
     round_half_up(100.0 * (1.0 - risk), 0).clamp(0.0, 100.0) as u8
 }
 
-fn normalize_zero(value: f64) -> f64 {
-    if value == 0.0 { 0.0 } else { value }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        AnalysisMetrics, MetricMetadata, MetricParticipation, MetricValue, ScopeMetrics,
-        ScoreWeights, builtin_metric_definitions, metric_catalog_from_definitions, round_half_up,
+        AnalysisMetrics, MetricConfig, MetricMetadata, MetricOrigin, MetricParticipation,
+        MetricValue, ScopeMetrics, ScoreWeights, builtin_metric_definitions,
+        metric_catalog_from_definitions, round_half_up,
     };
     use crate::domains::diagnostics::RuleConfig;
     use crate::domains::{AnalysisLevel, MetricId, RuleId, ScopeId};
@@ -342,6 +300,26 @@ mod tests {
         assert_eq!(round_half_up(-1.2345676, 6), -1.234568);
         assert_eq!(round_half_up(-0.0000004, 6), 0.0);
         assert_eq!(round_half_up(-0.0000005, 6), 0.0);
+    }
+
+    #[test]
+    fn metrics_module_re_exports_shared_types() {
+        let config = MetricConfig {
+            entries: BTreeMap::new(),
+        };
+        let value = MetricValue {
+            metric_id: MetricId::from("M-T001"),
+            raw_value: 1.0,
+            normalized_risk: round_half_up(0.125, 6),
+        };
+
+        assert!(config.entries.is_empty());
+        assert_eq!(MetricOrigin::BuiltIn, MetricOrigin::BuiltIn);
+        assert_eq!(
+            MetricParticipation::ReportOnly,
+            MetricParticipation::ReportOnly
+        );
+        assert_eq!(value.normalized_risk, 0.125);
     }
 
     #[test]
