@@ -1,0 +1,55 @@
+{
+  "modules": [
+    {
+      "id": "m1",
+      "name": "cmd/app",
+      "file": "cmd/app/main.go",
+      "start_line": 1,
+      "end_line": 6,
+      "language": "go"
+    }
+  ],
+  "functions": [
+    {
+      "id": "f1",
+      "name": "main",
+      "file": "cmd/app/main.go",
+      "start_line": 1,
+      "end_line": 3,
+      "language": "go"
+    },
+    {
+      "id": "f2",
+      "name": "run",
+      "file": "cmd/app/main.go",
+      "start_line": 5,
+      "end_line": 6,
+      "language": "go"
+    }
+  ],
+  "calls": [
+    {
+      "source": "f1",
+      "target": "f2",
+      "language": "go"
+    }
+  ],
+  "contains": [
+    {
+      "source": "m1",
+      "target": "f1",
+      "language": "go"
+    },
+    {
+      "source": "m1",
+      "target": "f2",
+      "language": "go"
+    }
+  ],
+  "warnings": [
+    {
+      "file": "cmd/app/main.go",
+      "message": "stub warning for fixture coverage"
+    }
+  ]
+}

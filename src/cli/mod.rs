@@ -1,0 +1,227 @@
+pub mod check;
+pub mod init;
+
+use clap::{Parser, Subcommand};
+
+use self::check::CheckCommand;
+use self::init::InitCommand;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "kalos",
+    version,
+    about = "CPG-based code quality analysis tool",
+    long_about = None,
+    subcommand_required = true,
+    arg_required_else_help = true
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    Check(CheckCommand),
+    Init(InitCommand),
+}
+
+pub fn run() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Check(command) => command.execute(),
+        Command::Init(command) => command.execute(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{Parser, error::ErrorKind};
+
+    use super::check::{MinimumSeverity, OutputFormat, RequestedLevel};
+    use super::{Cli, Command};
+
+    #[test]
+    fn check_without_paths_defaults_to_workspace_root() {
+        let cli = Cli::try_parse_from(["kalos", "check"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert_eq!(
+            command.requested_paths(),
+            vec![std::path::PathBuf::from(".")]
+        );
+        assert!(!command.targets_explicitly_specified());
+        assert_eq!(command.format, OutputFormat::Human);
+        assert_eq!(command.level, RequestedLevel::All);
+        assert_eq!(command.output, None);
+        assert_eq!(command.min_risk, None);
+        assert!(!command.verbose);
+    }
+
+    #[test]
+    fn check_with_explicit_paths_marks_targets_as_explicit() {
+        let cli = Cli::try_parse_from(["kalos", "check", "src/", "tests/"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert_eq!(
+            command.requested_paths(),
+            vec![
+                std::path::PathBuf::from("src/"),
+                std::path::PathBuf::from("tests/")
+            ]
+        );
+        assert!(command.targets_explicitly_specified());
+    }
+
+    #[test]
+    fn check_parses_all_supported_flags() {
+        let cli = Cli::try_parse_from([
+            "kalos",
+            "check",
+            "src",
+            "--format",
+            "json",
+            "--output",
+            "result.json",
+            "--level",
+            "module",
+            "--config",
+            "config/.kalos.toml",
+            "--exclude",
+            "vendor/**",
+            "--exclude",
+            "generated/**",
+            "--severity",
+            "warning",
+            "--diff",
+            "origin/main",
+            "--llm",
+            "--strict",
+            "--min-risk",
+            "0.5",
+        ])
+        .unwrap();
+
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert_eq!(command.format, OutputFormat::Json);
+        assert_eq!(
+            command.output,
+            Some(std::path::PathBuf::from("result.json"))
+        );
+        assert_eq!(command.level, RequestedLevel::Module);
+        assert_eq!(
+            command.config,
+            Some(std::path::PathBuf::from("config/.kalos.toml"))
+        );
+        assert_eq!(
+            command.exclude,
+            vec!["vendor/**".to_owned(), "generated/**".to_owned()]
+        );
+        assert_eq!(command.severity, Some(MinimumSeverity::Warning));
+        assert_eq!(command.diff.as_deref(), Some("origin/main"));
+        assert_eq!(command.min_risk, Some(0.5));
+        assert!(command.llm);
+        assert!(command.strict);
+    }
+
+    #[test]
+    fn check_parses_output_short_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "-o", "report.sarif"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert_eq!(
+            command.output,
+            Some(std::path::PathBuf::from("report.sarif"))
+        );
+    }
+
+    #[test]
+    fn check_parses_verbose_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "--verbose"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.verbose);
+    }
+
+    #[test]
+    fn check_update_gitignore_defaults_to_false() {
+        let cli = Cli::try_parse_from(["kalos", "check"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(!command.update_gitignore);
+    }
+
+    #[test]
+    fn check_parses_update_gitignore_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "--update-gitignore"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.update_gitignore);
+    }
+
+    #[test]
+    fn init_parses() {
+        let cli = Cli::try_parse_from(["kalos", "init"]).unwrap();
+        assert!(matches!(cli.command, Command::Init(_)));
+    }
+
+    #[test]
+    fn root_help_shows_tool_about_text() {
+        let help = render_help(["kalos", "--help"]);
+
+        assert!(help.contains("CPG-based code quality analysis tool"));
+    }
+
+    #[test]
+    fn check_help_shows_about_and_argument_help_text() {
+        let help = render_help(["kalos", "check", "--help"]);
+
+        assert!(help.contains("run code quality analysis"));
+        assert!(
+            help.contains("target files or directories to analyze (defaults to workspace root)")
+        );
+        assert!(help.contains("output format"));
+        assert!(help.contains("[default: human]"));
+        assert!(help.contains("analysis granularity level"));
+        assert!(help.contains("[default: all]"));
+        assert!(help.contains("path to configuration file (.kalos.toml)"));
+        assert!(help.contains("glob patterns to exclude from analysis (repeatable)"));
+        assert!(help.contains("minimum severity threshold for diagnostics (omit to show all)"));
+        assert!(help.contains("git base ref for differential analysis"));
+        assert!(help.contains("enable llm-assisted analysis"));
+        assert!(help.contains("treat warnings as errors"));
+        assert!(help.contains("show per-scope metrics in human output"));
+        assert!(help.contains(
+            "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"
+        ));
+        assert!(help.contains("write output to a file instead of stdout"));
+    }
+
+    #[test]
+    fn init_help_shows_about_text() {
+        let help = render_help(["kalos", "init", "--help"]);
+
+        assert!(help.contains("create a default configuration file"));
+    }
+
+    fn render_help<const N: usize>(args: [&str; N]) -> String {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        error.to_string()
+    }
+}

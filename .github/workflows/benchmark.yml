@@ -1,0 +1,38 @@
+# Nightly pipeline-level regression benchmark using mock CodeQL adapters.
+# This workflow detects regressions in kalos' own computation path only.
+# It does not validate the real CodeQL REQ-NF-001/REQ-NF-002 limits
+# (60s full / 10s diff), which require the bench-linux-x64 profile.
+
+name: Benchmark
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: benchmark-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      BENCH_FULL_THRESHOLD_SECS: "0.005"
+      BENCH_DIFF_THRESHOLD_SECS: "0.002"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Cache Cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: bench-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            bench-${{ runner.os }}-cargo-
+      - name: cargo test benchmark
+        run: cargo test --test benchmark --release -- --ignored --nocapture

@@ -1,0 +1,35 @@
+# Wave 9-1 quality gates and determinism check only.
+# Wave 9-4 performance benchmark now runs from `.github/workflows/benchmark.yml`
+# so CI remains focused on fast push/pull_request quality gates.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo check
+        run: cargo check --all-features
+      - name: cargo test
+        run: cargo test
+      - name: cargo clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+  determinism:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: cargo test determinism
+        run: cargo test --test determinism -- --nocapture

@@ -1,0 +1,56 @@
+{
+  "modules": [
+    {
+      "id": "m1",
+      "name": "crate",
+      "file": "src/lib.rs",
+      "start_line": 1,
+      "end_line": 8,
+      "language": "rust"
+    }
+  ],
+  "functions": [
+    {
+      "id": "f1",
+      "name": "entry",
+      "file": "src/lib.rs",
+      "start_line": 1,
+      "end_line": 3,
+      "language": "rust"
+    },
+    {
+      "id": "f2",
+      "name": "helper",
+      "file": "src/lib.rs",
+      "start_line": 5,
+      "end_line": 8,
+      "language": "rust"
+    }
+  ],
+  "calls": [
+    {
+      "source": "f1",
+      "target": "f2",
+      "language": "rust"
+    }
+  ],
+  "data_flows": [
+    {
+      "source": "f2",
+      "target": "f1",
+      "language": "rust"
+    }
+  ],
+  "contains": [
+    {
+      "source": "m1",
+      "target": "f1",
+      "language": "rust"
+    },
+    {
+      "source": "m1",
+      "target": "f2",
+      "language": "rust"
+    }
+  ]
+}
