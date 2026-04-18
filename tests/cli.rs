@@ -773,7 +773,7 @@ fn kalos_check_missing_config_human_error_output_remains_plain_text() {
 fn kalos_check_llm_missing_api_key_fails_preflight() {
     let temp = seeded_workspace();
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .env_remove("KALOS_LLM_API_KEY")
@@ -781,15 +781,19 @@ fn kalos_check_llm_missing_api_key_fails_preflight() {
         .env_remove("KALOS_LLM_ENDPOINT_URL")
         .args(["check", "--llm"])
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains("KALOS_LLM_API_KEY"));
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("KALOS_LLM_API_KEY"));
+    assert!(!stderr.contains("notice: created .gitignore"));
+    assert!(!temp.path().join(".gitignore").exists());
 }
 
 #[test]
 fn kalos_check_llm_unsupported_provider_fails_preflight() {
     let temp = seeded_workspace();
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_LLM_API_KEY", "secret")
@@ -797,17 +801,19 @@ fn kalos_check_llm_unsupported_provider_fails_preflight() {
         .env_remove("KALOS_LLM_ENDPOINT_URL")
         .args(["check", "--llm"])
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains(
-            "unsupported KALOS_LLM_PROVIDER `anthropic`",
-        ));
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("unsupported KALOS_LLM_PROVIDER `anthropic`"));
+    assert!(!stderr.contains("notice: created .gitignore"));
+    assert!(!temp.path().join(".gitignore").exists());
 }
 
 #[test]
 fn kalos_check_llm_invalid_endpoint_fails_preflight() {
     let temp = seeded_workspace();
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_LLM_API_KEY", "secret")
@@ -815,10 +821,12 @@ fn kalos_check_llm_invalid_endpoint_fails_preflight() {
         .env("KALOS_LLM_ENDPOINT_URL", "not a url")
         .args(["check", "--llm"])
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains(
-            "KALOS_LLM_ENDPOINT_URL is not a valid URL",
-        ));
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("KALOS_LLM_ENDPOINT_URL is not a valid URL"));
+    assert!(!stderr.contains("notice: created .gitignore"));
+    assert!(!temp.path().join(".gitignore").exists());
 }
 
 #[test]
