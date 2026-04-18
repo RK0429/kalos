@@ -7,14 +7,20 @@ use crate::domains::cpg::{Language, SourceFile};
 use crate::platform::fs::{FileSystem, path_to_forward_slashes};
 
 /// Well-known build and artifact directories excluded by default.
+/// Patterns use a leading `**/` so they match at any depth, not only the workspace root
+/// (e.g., nested `packages/a/dist/bundle.ts` or `vendor/.agents/skills/helper.py`).
 /// These are always excluded regardless of `.gitignore` or `--exclude` settings.
 const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
-    "target/**",
-    "node_modules/**",
-    "__pycache__/**",
-    ".venv/**",
-    ".git/**",
-    ".kalos/**",
+    "**/target/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/.venv/**",
+    "**/.git/**",
+    "**/.kalos/**",
+    "**/.agents/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/tmp/**",
 ];
 
 #[derive(Debug)]
@@ -429,6 +435,109 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         assert!(files.contains_key(&FilePath::from("src/main.rs")));
+    }
+
+    #[test]
+    fn excludes_additional_default_directories_from_issue_51() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = fs::canonicalize(temp.path()).unwrap();
+        fs::create_dir_all(workspace_root.join("src")).unwrap();
+        fs::create_dir_all(workspace_root.join(".agents/skills")).unwrap();
+        fs::create_dir_all(workspace_root.join("dist/assets")).unwrap();
+        fs::create_dir_all(workspace_root.join("build/output")).unwrap();
+        fs::create_dir_all(workspace_root.join("tmp/scratch")).unwrap();
+        fs::write(workspace_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            workspace_root.join(".agents/skills/helper.py"),
+            "print('skip')\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join("dist/assets/bundle.ts"),
+            "export const bundle = 1;\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join("build/output/generated.py"),
+            "print('skip')\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_root.join("tmp/scratch/work.rs"),
+            "fn scratch() {}\n",
+        )
+        .unwrap();
+
+        let collector = FileCollector::new(
+            &RealFileSystem,
+            &workspace_root,
+            &[".py", ".ts", ".rs"],
+            &[],
+        );
+
+        let files = collector.collect(&[FilePath::from(".")]).unwrap();
+
+        assert_eq!(
+            files.keys().cloned().collect::<Vec<_>>(),
+            vec![FilePath::from("src/main.rs")],
+            "only src/main.rs should remain, got: {files:?}"
+        );
+    }
+
+    #[test]
+    fn excludes_nested_default_directories() {
+        let temp = TempDir::new().unwrap();
+        let workspace_root = fs::canonicalize(temp.path()).unwrap();
+
+        let nested_source_dir = workspace_root.join("packages/a/src");
+        fs::create_dir_all(&nested_source_dir).unwrap();
+        fs::write(nested_source_dir.join("lib.ts"), "export const lib = 1;\n").unwrap();
+
+        let nested_excludes: &[(&str, &str, &str)] = &[
+            ("packages/a/target/debug", "gen.rs", "fn gen() {}\n"),
+            (
+                "packages/a/node_modules/pkg",
+                "index.ts",
+                "export const x = 1;\n",
+            ),
+            ("crates/foo/__pycache__", "mod.py", "print('skip')\n"),
+            ("services/api/.venv/bin", "activate.py", "print('skip')\n"),
+            ("vendor/lib/.git/hooks", "pre.py", "print('skip')\n"),
+            (
+                "packages/a/.kalos/cache",
+                "cache.ts",
+                "export const c = 1;\n",
+            ),
+            ("vendor/.agents/skills", "helper.py", "print('skip')\n"),
+            (
+                "packages/a/dist/assets",
+                "bundle.ts",
+                "export const b = 1;\n",
+            ),
+            ("services/api/build/output", "out.py", "print('skip')\n"),
+            ("crates/foo/tmp/scratch", "work.rs", "fn work() {}\n"),
+        ];
+
+        for (dir, file_name, contents) in nested_excludes {
+            let dir_path = workspace_root.join(dir);
+            fs::create_dir_all(&dir_path).unwrap();
+            fs::write(dir_path.join(file_name), contents).unwrap();
+        }
+
+        let collector = FileCollector::new(
+            &RealFileSystem,
+            &workspace_root,
+            &[".py", ".ts", ".rs"],
+            &[],
+        );
+
+        let files = collector.collect(&[FilePath::from(".")]).unwrap();
+
+        assert_eq!(
+            files.keys().cloned().collect::<Vec<_>>(),
+            vec![FilePath::from("packages/a/src/lib.ts")],
+            "only packages/a/src/lib.ts should remain, got: {files:?}"
+        );
     }
 
     #[test]
