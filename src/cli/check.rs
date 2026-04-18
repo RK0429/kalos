@@ -29,6 +29,7 @@ use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
 use crate::domains::metrics::builtin_metric_definitions;
 use crate::domains::reporting::{
     OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
+    render_sarif_error_document,
 };
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
@@ -178,7 +179,7 @@ impl CheckCommand {
             Ok(cwd) => cwd,
             Err(error) => {
                 let message = format!("failed to determine current directory: {error}");
-                emit_error(self.format, &message, Some(&error));
+                emit_error(self.format, self.output.as_deref(), &message, Some(&error));
                 return ExitCode::from(2);
             }
         };
@@ -187,7 +188,12 @@ impl CheckCommand {
             Ok(config) => config,
             Err(error) => {
                 let message = error.to_string();
-                emit_error(self.format, &message, error.source());
+                emit_error(
+                    self.format,
+                    self.output.as_deref(),
+                    &message,
+                    error.source(),
+                );
                 return ExitCode::from(2);
             }
         };
@@ -203,7 +209,12 @@ impl CheckCommand {
                 Ok(config) => Some(HttpLlmAdapter::new(config)),
                 Err(error) => {
                     let message = error.to_string();
-                    emit_error(self.format, &message, error.source());
+                    emit_error(
+                        self.format,
+                        self.output.as_deref(),
+                        &message,
+                        error.source(),
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -227,7 +238,12 @@ impl CheckCommand {
             Ok(manifest) => manifest,
             Err(error) => {
                 let message = error.to_string();
-                emit_error(self.format, &message, error.source());
+                emit_error(
+                    self.format,
+                    self.output.as_deref(),
+                    &message,
+                    error.source(),
+                );
                 return ExitCode::from(2);
             }
         };
@@ -293,7 +309,12 @@ impl CheckCommand {
                 Ok(cache) => cache,
                 Err(error) => {
                     let message = error.to_string();
-                    emit_error(self.format, &message, error.source());
+                    emit_error(
+                        self.format,
+                        self.output.as_deref(),
+                        &message,
+                        error.source(),
+                    );
                     return ExitCode::from(2);
                 }
             };
@@ -316,7 +337,12 @@ impl CheckCommand {
                         emit_evaluation_warnings(plugin_host.evaluation_warnings());
                     }
                     let message = error.to_string();
-                    emit_error(self.format, &message, error.source());
+                    emit_error(
+                        self.format,
+                        self.output.as_deref(),
+                        &message,
+                        error.source(),
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -355,7 +381,12 @@ impl CheckCommand {
                         emit_evaluation_warnings(plugin_host.evaluation_warnings());
                     }
                     let message = error.to_string();
-                    emit_error(self.format, &message, error.source());
+                    emit_error(
+                        self.format,
+                        self.output.as_deref(),
+                        &message,
+                        error.source(),
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -376,7 +407,12 @@ impl CheckCommand {
             Ok(rendered) => rendered,
             Err(error) => {
                 let message = error.to_string();
-                emit_error(self.format, &message, error.source());
+                emit_error(
+                    self.format,
+                    self.output.as_deref(),
+                    &message,
+                    error.source(),
+                );
                 return ExitCode::from(2);
             }
         };
@@ -390,14 +426,14 @@ impl CheckCommand {
                         "failed to create output directory `{}`: {error}",
                         parent.display()
                     );
-                    emit_error(self.format, &message, Some(&error));
+                    emit_error(self.format, self.output.as_deref(), &message, Some(&error));
                     return ExitCode::from(2);
                 }
             }
 
             if let Err(error) = fs::write(path, format!("{rendered}\n")) {
                 let message = format!("failed to write output file `{}`: {error}", path.display());
-                emit_error(self.format, &message, Some(&error));
+                emit_error(self.format, self.output.as_deref(), &message, Some(&error));
                 return ExitCode::from(2);
             }
 
@@ -448,14 +484,17 @@ fn builtin_metric_ids() -> BTreeSet<MetricId> {
         .collect()
 }
 
+const SARIF_TOOL_ERROR_EXIT_CODE: i64 = 2;
+
 fn emit_error(
     format: OutputFormat,
+    output: Option<&std::path::Path>,
     message: &str,
     source: Option<&(dyn std::error::Error + 'static)>,
 ) {
     match format {
         OutputFormat::Human => eprintln!("{message}"),
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let mut payload = json!({
                 "error": true,
                 "message": message,
@@ -464,6 +503,32 @@ fn emit_error(
                 payload["cause"] = json!(source.to_string());
             }
             eprintln!("{payload}");
+        }
+        OutputFormat::Sarif => {
+            let cause = source.map(|source| source.to_string());
+            let document = render_sarif_error_document(
+                message,
+                cause.as_deref(),
+                env!("CARGO_PKG_VERSION"),
+                SARIF_TOOL_ERROR_EXIT_CODE,
+            );
+            if let Some(path) = output {
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    if fs::create_dir_all(parent).is_err() {
+                        println!("{document}");
+                        return;
+                    }
+                }
+
+                if fs::write(path, format!("{document}\n")).is_ok() {
+                    return;
+                }
+            }
+
+            println!("{document}");
         }
     }
 }
