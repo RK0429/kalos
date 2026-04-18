@@ -874,14 +874,27 @@ fn kalos_check_diff_falls_back_to_full_analysis_when_baseline_is_missing() {
     let temp = seeded_git_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_CACHE_DIR", &cache_dir)
         .args(["check", "--diff", "HEAD~1"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("falling back to full analysis"));
+        .stderr(predicate::str::contains(
+            "compatible diff baseline was not found; falling back to full analysis",
+        ));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let note_position = stdout
+        .find("note: compatible diff baseline was not found; falling back to full analysis")
+        .expect("human output should surface the fallback notice");
+    let summary_position = stdout
+        .find("── Summary ")
+        .expect("human output should include Summary header");
+    assert!(
+        note_position < summary_position,
+        "fallback notice should appear before Summary, got:\n{stdout}"
+    );
 
     let baselines_dir = cache_dir.join("baselines");
     assert!(baselines_dir.is_dir());
@@ -889,6 +902,68 @@ fn kalos_check_diff_falls_back_to_full_analysis_when_baseline_is_missing() {
         fs::read_dir(&baselines_dir).unwrap().count(),
         1,
         "baseline cache should contain exactly one entry after fallback",
+    );
+}
+
+#[test]
+fn kalos_check_diff_json_surfaces_fallback_reason_in_analysis_warnings() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1", "--format", "json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "compatible diff baseline was not found; falling back to full analysis",
+        ));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let warnings = parsed["analysis_warnings"]
+        .as_array()
+        .expect("analysis_warnings should be an array");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .is_some_and(|text| text
+                == "compatible diff baseline was not found; falling back to full analysis")),
+        "JSON analysis_warnings should include the fallback reason, got {warnings:?}",
+    );
+}
+
+#[test]
+fn kalos_check_diff_cached_run_json_does_not_report_fallback_warning() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1"])
+        .assert()
+        .success();
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1", "--format", "json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let warnings = parsed["analysis_warnings"]
+        .as_array()
+        .expect("analysis_warnings should be an array");
+    assert!(
+        !warnings.iter().any(|warning| warning
+            .as_str()
+            .is_some_and(|text| text.contains("falling back to full analysis"))),
+        "cached diff run should not surface fallback warnings, got {warnings:?}",
     );
 }
 
