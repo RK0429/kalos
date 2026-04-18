@@ -109,6 +109,12 @@ pub struct CheckCommand {
         help = "write output to a file instead of stdout"
     )]
     pub output: Option<PathBuf>,
+    #[arg(
+        long,
+        short = 'q',
+        help = "suppress the stderr acknowledgment printed on --output success"
+    )]
+    pub quiet: bool,
 }
 
 impl CheckCommand {
@@ -360,6 +366,23 @@ impl CheckCommand {
                 let message = format!("failed to write output file `{}`: {error}", path.display());
                 emit_error(self.format, &message, Some(&error));
                 return ExitCode::from(2);
+            }
+
+            if !self.quiet {
+                let file_count = result.report.metadata.file_count;
+                let diagnostic_count = result.report.diagnostics.diagnostics.len();
+                eprintln!(
+                    "wrote {} ({} {} analyzed, {} {})",
+                    path.display(),
+                    file_count,
+                    if file_count == 1 { "file" } else { "files" },
+                    diagnostic_count,
+                    if diagnostic_count == 1 {
+                        "diagnostic"
+                    } else {
+                        "diagnostics"
+                    }
+                );
             }
         } else {
             println!("{rendered}");

@@ -58,6 +58,7 @@ mod tests {
         assert_eq!(command.output, None);
         assert_eq!(command.min_risk, None);
         assert!(!command.verbose);
+        assert!(!command.quiet);
     }
 
     #[test]
@@ -155,6 +156,26 @@ mod tests {
     }
 
     #[test]
+    fn check_parses_quiet_flag_long() {
+        let cli = Cli::try_parse_from(["kalos", "check", "--quiet"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.quiet);
+    }
+
+    #[test]
+    fn check_parses_quiet_flag_short() {
+        let cli = Cli::try_parse_from(["kalos", "check", "-q"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.quiet);
+    }
+
+    #[test]
     fn init_parses() {
         let cli = Cli::try_parse_from(["kalos", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Init(_)));
@@ -190,6 +211,9 @@ mod tests {
             "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"
         ));
         assert!(help.contains("write output to a file instead of stdout"));
+        assert!(help.contains(
+            "suppress the stderr acknowledgment printed on --output success"
+        ));
     }
 
     #[test]
