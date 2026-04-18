@@ -68,7 +68,7 @@ pub struct UnifiedCpg {
 
 impl UnifiedCpg {
     pub fn subgraph(&self, scope_id: &ScopeId) -> CpgSubgraph {
-        if scope_id.level == AnalysisLevel::Project {
+        if scope_id.level != AnalysisLevel::Function {
             return CpgSubgraph {
                 scope_id: scope_id.clone(),
                 nodes: self.nodes.clone(),
@@ -76,16 +76,11 @@ impl UnifiedCpg {
             };
         }
 
-        let root_kind = match scope_id.level {
-            AnalysisLevel::Function => NodeKind::Function,
-            AnalysisLevel::Module => NodeKind::Module,
-            AnalysisLevel::Project => unreachable!("project scopes are handled above"),
-        };
         let Some(root_id) = self
             .nodes
             .iter()
             .find(|node| {
-                node.kind == root_kind
+                node.kind == NodeKind::Function
                     && node.name == scope_id.qualified_name
                     && node.location.file_path == scope_id.file_path
             })
@@ -367,5 +362,90 @@ mod tests {
         assert_eq!(subgraph.scope_id, scope);
         assert_eq!(subgraph.nodes, graph.nodes);
         assert_eq!(subgraph.edges, graph.edges);
+    }
+
+    #[test]
+    fn subgraph_returns_full_graph_for_module_scope() {
+        let graph = UnifiedCpg {
+            id: CpgId::from("graph"),
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Module,
+                    name: "crate::A".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Module,
+                    name: "crate::B".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/b.rs"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(3),
+                    kind: NodeKind::Function,
+                    name: "crate::A::a_fn".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 2,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(4),
+                    kind: NodeKind::Function,
+                    name: "crate::B::b_fn".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/b.rs"),
+                        start_line: 2,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+            ],
+            edges: vec![
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(3),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(3),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::Call,
+                    extension: None,
+                },
+            ],
+        };
+        let scope = ScopeId::new(AnalysisLevel::Module, "crate::A", "src/a.rs");
+        let subgraph = graph.subgraph(&scope);
+
+        assert_eq!(subgraph.scope_id, scope);
+        assert_eq!(subgraph.nodes, graph.nodes);
+        assert_eq!(subgraph.edges, graph.edges);
+        assert!(subgraph.nodes.iter().any(|node| node.name == "crate::B"));
+        assert!(subgraph.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Call
+                && edge.source == NodeId::from(3)
+                && edge.target == NodeId::from(4)
+        }));
     }
 }

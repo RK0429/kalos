@@ -237,6 +237,14 @@ fn compute_cfg_branch_entropy_risk(
     subgraph: &CpgSubgraph,
     metric_id: &MetricId,
 ) -> Option<MetricValue> {
+    if !subgraph
+        .edges
+        .iter()
+        .any(|edge| edge.kind == EdgeKind::ControlFlow)
+    {
+        return None;
+    }
+
     let control_flow_edges = subgraph
         .edges
         .iter()
@@ -299,6 +307,10 @@ fn compute_data_flow_density_risk(
         .map(|node| node.id)
         .collect::<BTreeSet<_>>();
 
+    if variable_nodes.is_empty() {
+        return None;
+    }
+
     let raw_value = if variable_nodes.len() < 2 {
         0.0
     } else {
@@ -324,10 +336,17 @@ fn compute_identifier_repetition_risk(
     subgraph: &CpgSubgraph,
     metric_id: &MetricId,
 ) -> Option<MetricValue> {
-    let tokens = subgraph
+    let identifiers = subgraph
         .nodes
         .iter()
         .filter(|node| matches!(node.kind, NodeKind::Variable | NodeKind::Parameter))
+        .collect::<Vec<_>>();
+    if identifiers.is_empty() {
+        return None;
+    }
+
+    let tokens = identifiers
+        .into_iter()
         .flat_map(|node| split_identifier_tokens(&node.name))
         .collect::<Vec<_>>();
 
@@ -1052,6 +1071,203 @@ mod tests {
     }
 
     #[test]
+    fn function_metrics_return_none_when_subgraph_lacks_supporting_data() {
+        let cfg_entropy = CfgBranchEntropyRisk::new();
+        let complexity = CyclomaticComplexityRisk::new();
+        let data_flow_density = DataFlowDensityRisk::new();
+        let identifier_repetition = IdentifierRepetitionRisk::new();
+        let scope = ScopeId::new(AnalysisLevel::Function, "crate::f", "src/lib.rs");
+        let graph = UnifiedCpg {
+            id: CpgId::from("graph"),
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Module,
+                    name: "crate".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Function,
+                    name: "crate::f".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 2,
+                        end_line: 6,
+                    },
+                    extension: None,
+                },
+            ],
+            edges: vec![CpgEdge {
+                source: NodeId::from(1),
+                target: NodeId::from(2),
+                kind: EdgeKind::Contains,
+                extension: None,
+            }],
+        };
+
+        let subgraph = graph.subgraph(&scope);
+
+        assert_eq!(subgraph.nodes.len(), 1);
+        assert_eq!(subgraph.edges.len(), 0);
+        assert!(cfg_entropy.compute(&subgraph, &config()).is_none());
+        assert_eq!(
+            complexity.compute(&subgraph, &config()).unwrap().raw_value,
+            1.0
+        );
+        assert!(data_flow_density.compute(&subgraph, &config()).is_none());
+        assert!(
+            identifier_repetition
+                .compute(&subgraph, &config())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn function_metrics_return_some_when_subgraph_has_supporting_data() {
+        let cfg_entropy = CfgBranchEntropyRisk::new();
+        let complexity = CyclomaticComplexityRisk::new();
+        let data_flow_density = DataFlowDensityRisk::new();
+        let identifier_repetition = IdentifierRepetitionRisk::new();
+        let scope = ScopeId::new(AnalysisLevel::Function, "crate::f", "src/lib.rs");
+        let graph = UnifiedCpg {
+            id: CpgId::from("graph"),
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Function,
+                    name: "crate::f".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 1,
+                        end_line: 8,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Parameter,
+                    name: "foo_count".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 2,
+                        end_line: 2,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(3),
+                    kind: NodeKind::Variable,
+                    name: "fooTotal".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 3,
+                        end_line: 3,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(4),
+                    kind: NodeKind::Variable,
+                    name: "exit".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/lib.rs"),
+                        start_line: 4,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+            ],
+            edges: vec![
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(2),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(3),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(2),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(3),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(3),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::ControlFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(3),
+                    kind: EdgeKind::DataFlow,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(3),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::DataFlow,
+                    extension: None,
+                },
+            ],
+        };
+
+        let subgraph = graph.subgraph(&scope);
+        let cfg_entropy_value = cfg_entropy.compute(&subgraph, &config());
+        let complexity_value = complexity.compute(&subgraph, &config());
+        let data_flow_density_value = data_flow_density.compute(&subgraph, &config());
+        let identifier_repetition_value = identifier_repetition.compute(&subgraph, &config());
+
+        assert_eq!(subgraph.nodes.len(), 4);
+        assert_eq!(subgraph.edges.len(), 9);
+        assert!(matches!(
+            cfg_entropy_value.as_ref().map(|value| value.raw_value),
+            Some(raw_value) if raw_value > 0.0
+        ));
+        assert!(matches!(
+            complexity_value.as_ref().map(|value| value.raw_value),
+            Some(raw_value) if raw_value > 1.0
+        ));
+        assert!(matches!(
+            data_flow_density_value.as_ref().map(|value| value.raw_value),
+            Some(raw_value) if raw_value > 0.0
+        ));
+        assert!(matches!(
+            identifier_repetition_value.as_ref().map(|value| value.raw_value),
+            Some(raw_value) if raw_value > 0.0
+        ));
+    }
+
+    #[test]
     fn module_metrics_compute_fan_out_cycle_participation_and_instability() {
         let fan_out_metric = ModuleFanOutRisk::new();
         let cycle_metric = CircularDependencyParticipationRisk::new();
@@ -1090,6 +1306,135 @@ mod tests {
         assert_eq!(instability.normalized_risk, 0.666667);
         assert_eq!(isolated_cycle.raw_value, 0.0);
         assert_eq!(isolated_instability.raw_value, 0.0);
+    }
+
+    #[test]
+    fn module_metrics_use_full_graph_for_module_scope_subgraphs() {
+        let fan_out_metric = ModuleFanOutRisk::new();
+        let cycle_metric = CircularDependencyParticipationRisk::new();
+        let instability_metric = InstabilityRisk::new();
+        let graph = UnifiedCpg {
+            id: CpgId::from("graph"),
+            nodes: vec![
+                CpgNode {
+                    id: NodeId::from(1),
+                    kind: NodeKind::Module,
+                    name: "crate::A".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(2),
+                    kind: NodeKind::Module,
+                    name: "crate::B".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/b.rs"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(3),
+                    kind: NodeKind::Module,
+                    name: "crate::C".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/c.rs"),
+                        start_line: 1,
+                        end_line: 20,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(4),
+                    kind: NodeKind::Function,
+                    name: "crate::A::a_fn".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/a.rs"),
+                        start_line: 2,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(5),
+                    kind: NodeKind::Function,
+                    name: "crate::B::b_fn".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/b.rs"),
+                        start_line: 2,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+                CpgNode {
+                    id: NodeId::from(6),
+                    kind: NodeKind::Function,
+                    name: "crate::C::c_fn".to_owned(),
+                    location: SourceLocation {
+                        file_path: FilePath::from("src/c.rs"),
+                        start_line: 2,
+                        end_line: 4,
+                    },
+                    extension: None,
+                },
+            ],
+            edges: vec![
+                CpgEdge {
+                    source: NodeId::from(1),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(2),
+                    target: NodeId::from(5),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(3),
+                    target: NodeId::from(6),
+                    kind: EdgeKind::Contains,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(4),
+                    target: NodeId::from(5),
+                    kind: EdgeKind::Call,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(4),
+                    target: NodeId::from(6),
+                    kind: EdgeKind::Call,
+                    extension: None,
+                },
+                CpgEdge {
+                    source: NodeId::from(5),
+                    target: NodeId::from(4),
+                    kind: EdgeKind::Call,
+                    extension: None,
+                },
+            ],
+        };
+        let scope = ScopeId::new(AnalysisLevel::Module, "crate::A", "src/a.rs");
+        let subgraph = graph.subgraph(&scope);
+
+        let fan_out = fan_out_metric.compute(&subgraph, &config()).unwrap();
+        let cycle = cycle_metric.compute(&subgraph, &config()).unwrap();
+        let instability = instability_metric.compute(&subgraph, &config()).unwrap();
+
+        assert_eq!(fan_out.raw_value, 2.0);
+        assert_eq!(fan_out.normalized_risk, 0.166667);
+        assert_eq!(cycle.raw_value, 0.2);
+        assert_eq!(cycle.normalized_risk, 0.2);
+        assert_eq!(instability.raw_value, 0.666667);
+        assert_eq!(instability.normalized_risk, 0.666667);
     }
 
     // Regression for kalos #48
