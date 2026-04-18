@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::DiGraph;
@@ -749,6 +749,14 @@ impl<'a> PatternModuleGraph<'a> {
                 acc.entry(edge.source).or_default().push(edge.target);
                 acc
             });
+        let contains_parents = cpg
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Contains)
+            .fold(BTreeMap::<NodeId, Vec<NodeId>>::new(), |mut acc, edge| {
+                acc.entry(edge.target).or_default().push(edge.source);
+                acc
+            });
         let ownership = build_module_ownership(&modules, &contains_graph);
         let mut outgoing = BTreeMap::<NodeId, BTreeSet<NodeId>>::new();
         for module in &modules {
@@ -756,27 +764,24 @@ impl<'a> PatternModuleGraph<'a> {
         }
 
         for edge in cpg.edges.iter().filter(|edge| {
-            matches!(
-                edge.kind,
-                EdgeKind::Call | EdgeKind::Contains | EdgeKind::TypeReference
-            )
+            matches!(edge.kind, EdgeKind::Call | EdgeKind::TypeReference)
         }) {
-            let Some(source_modules) = ownership.get(&edge.source) else {
+            let Some(source_module) =
+                innermost_enclosing_module(edge.source, &node_by_id, &contains_parents)
+            else {
                 continue;
             };
-            let Some(target_modules) = ownership.get(&edge.target) else {
+            let Some(target_module) =
+                innermost_enclosing_module(edge.target, &node_by_id, &contains_parents)
+            else {
                 continue;
             };
 
-            for source_module in source_modules {
-                for target_module in target_modules {
-                    if source_module != target_module {
-                        outgoing
-                            .entry(*source_module)
-                            .or_default()
-                            .insert(*target_module);
-                    }
-                }
+            if source_module != target_module {
+                outgoing
+                    .entry(source_module)
+                    .or_default()
+                    .insert(target_module);
             }
         }
 
@@ -851,6 +856,32 @@ fn match_node_for_scope<'a>(nodes: &[&'a CpgNode], scope_id: &ScopeId) -> Option
                 .copied()
                 .find(|node| node.location.file_path == scope_id.file_path)
         })
+}
+
+fn innermost_enclosing_module(
+    node_id: NodeId,
+    node_by_id: &BTreeMap<NodeId, &CpgNode>,
+    contains_parents: &BTreeMap<NodeId, Vec<NodeId>>,
+) -> Option<NodeId> {
+    let mut queue = VecDeque::from([node_id]);
+    let mut visited = BTreeSet::new();
+
+    while let Some(current_id) = queue.pop_front() {
+        if !visited.insert(current_id) {
+            continue;
+        }
+
+        let node = node_by_id.get(&current_id).copied()?;
+        if node.kind == NodeKind::Module {
+            return Some(current_id);
+        }
+
+        if let Some(parents) = contains_parents.get(&current_id) {
+            queue.extend(parents.iter().copied());
+        }
+    }
+
+    None
 }
 
 fn build_module_ownership(
@@ -1322,6 +1353,82 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn circular_dependency_detection_ignores_flat_linear_chain() {
+        let cpg = CpgBuilder::new()
+            .module_at("a", "crate::a", "src/a.rs", 1, 20)
+            .module_at("b", "crate::b", "src/b.rs", 1, 20)
+            .module_at("c", "crate::c", "src/c.rs", 1, 20)
+            .function_at("a_fn", "crate::a::f", "src/a.rs", 2, 2)
+            .function_at("b_fn", "crate::b::f", "src/b.rs", 2, 2)
+            .function_at("c_fn", "crate::c::f", "src/c.rs", 2, 2)
+            .edge("a", "a_fn", EdgeKind::Contains)
+            .edge("b", "b_fn", EdgeKind::Contains)
+            .edge("c", "c_fn", EdgeKind::Contains)
+            .edge("a_fn", "b_fn", EdgeKind::Call)
+            .edge("b_fn", "c_fn", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+        let diagnostics = builtin_pattern_rules()
+            .into_iter()
+            .find(|rule| rule.id == RuleId::from("KAL-PAT003"))
+            .unwrap()
+            .detect(
+                &project_subgraph(&UnifiedCpg {
+                    id: CpgId::from("flat-linear-cycle-regression"),
+                    nodes: cpg.nodes,
+                    edges: cpg.edges,
+                }),
+                &empty_metrics(),
+                &RuleConfig {
+                    enabled: Some(true),
+                    threshold: None,
+                    severity: None,
+                },
+            );
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn circular_dependency_detection_ignores_nested_linear_chain() {
+        let cpg = CpgBuilder::new()
+            .module_at("pkg", "crate::pkg", "src/pkg.rs", 1, 80)
+            .module_at("pkg_a", "crate::pkg::a", "src/pkg/a.rs", 1, 20)
+            .module_at("pkg_b", "crate::pkg::b", "src/pkg/b.rs", 1, 20)
+            .module_at("pkg_c", "crate::pkg::c", "src/pkg/c.rs", 1, 20)
+            .function_at("a_fn", "crate::pkg::a::f", "src/pkg/a.rs", 2, 2)
+            .function_at("b_fn", "crate::pkg::b::f", "src/pkg/b.rs", 2, 2)
+            .function_at("c_fn", "crate::pkg::c::f", "src/pkg/c.rs", 2, 2)
+            .edge("pkg", "pkg_a", EdgeKind::Contains)
+            .edge("pkg", "pkg_b", EdgeKind::Contains)
+            .edge("pkg", "pkg_c", EdgeKind::Contains)
+            .edge("pkg_a", "a_fn", EdgeKind::Contains)
+            .edge("pkg_b", "b_fn", EdgeKind::Contains)
+            .edge("pkg_c", "c_fn", EdgeKind::Contains)
+            .edge("a_fn", "b_fn", EdgeKind::Call)
+            .edge("b_fn", "c_fn", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+        let diagnostics = builtin_pattern_rules()
+            .into_iter()
+            .find(|rule| rule.id == RuleId::from("KAL-PAT003"))
+            .unwrap()
+            .detect(
+                &project_subgraph(&UnifiedCpg {
+                    id: CpgId::from("nested-linear-cycle-regression"),
+                    nodes: cpg.nodes,
+                    edges: cpg.edges,
+                }),
+                &empty_metrics(),
+                &RuleConfig {
+                    enabled: Some(true),
+                    threshold: None,
+                    severity: None,
+                },
+            );
+
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
