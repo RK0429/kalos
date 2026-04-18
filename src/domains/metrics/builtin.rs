@@ -3,12 +3,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::DiGraph;
 
-use crate::domains::cpg::{CpgNode, CpgSubgraph, EdgeKind, NodeId, NodeKind};
-use crate::domains::{AnalysisLevel, MetricId, RuleId, ScopeId};
+use crate::domains::cpg::{CpgNode, CpgSubgraph, EdgeKind, NodeId, NodeKind, UnifiedCpg};
+use crate::domains::{AnalysisLevel, FilePath, MetricId, RuleId, ScopeId};
 
 use super::types::{
     MetricConfig, MetricDefinition, MetricOrigin, MetricParticipation, MetricValue, round_half_up,
 };
+
+/// Minimum number of module-level dependency edges required for M-P003
+/// (hub dependency concentration) to produce a meaningful normalized risk.
+///
+/// Below this support level `max_in_degree / total_in_degree` is dominated by
+/// structural inevitability (e.g. a single test → source edge yields 1.0) and
+/// cannot be distinguished from a genuinely concentrated hub, so the
+/// normalized risk is clamped to 0 to avoid spurious KAL-P003 diagnostics on
+/// freshly scaffolded projects. See GitHub issue #59.
+pub const MIN_HUB_CONCENTRATION_IN_DEGREE: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CfgBranchEntropyRisk {
@@ -475,9 +485,9 @@ fn compute_hub_dependency_concentration_risk(
     metric_id: &MetricId,
 ) -> Option<MetricValue> {
     let module_graph = ModuleDependencyGraph::build(subgraph);
-    let total_in_degree = module_graph.total_dependency_edges() as f64;
-    let raw_value = if total_in_degree == 0.0 {
-        0.0
+    let total_in_degree = module_graph.total_dependency_edges() as u32;
+    let (raw_value, normalized_risk) = if total_in_degree == 0 {
+        (0.0, 0.0)
     } else {
         let max_in_degree = module_graph
             .modules
@@ -485,10 +495,28 @@ fn compute_hub_dependency_concentration_risk(
             .map(|module| module_graph.fan_in(module.id))
             .max()
             .unwrap_or(0) as f64;
-        max_in_degree / total_in_degree
+        let raw_ratio = max_in_degree / f64::from(total_in_degree);
+        let normalized = if total_in_degree < MIN_HUB_CONCENTRATION_IN_DEGREE {
+            0.0
+        } else {
+            raw_ratio
+        };
+        (raw_ratio, normalized)
     };
 
-    finalize_metric_value(metric_id, raw_value, raw_value)
+    finalize_metric_value(metric_id, raw_value, normalized_risk)
+}
+
+/// Count the module-to-module dependency edges the M-P003 rule sees for the
+/// given project-level CPG. Exposed so the analysis pipeline can surface a
+/// user-visible warning when the signal is suppressed on very small projects.
+pub fn project_hub_concentration_support(cpg: &UnifiedCpg) -> u32 {
+    let project_subgraph = cpg.subgraph(&ScopeId::new(
+        AnalysisLevel::Project,
+        "<project>",
+        FilePath::from("."),
+    ));
+    ModuleDependencyGraph::build(&project_subgraph).total_dependency_edges() as u32
 }
 
 fn finalize_metric_value(
@@ -765,6 +793,7 @@ mod tests {
         CyclomaticComplexityRisk, DataFlowDensityRisk, HubDependencyConcentrationRisk,
         IdentifierRepetitionRisk, InstabilityRisk, MetricConfig, MetricDefinition,
         ModuleFanOutRisk, ModuleSizeEntropyImbalanceRisk, builtin_metric_definitions,
+        project_hub_concentration_support,
     };
     use crate::domains::cpg::{
         CpgEdge, CpgId, CpgNode, EdgeKind, NodeId, NodeKind, SourceLocation, UnifiedCpg,
@@ -1483,5 +1512,126 @@ mod tests {
         assert_eq!(empty_entropy.raw_value, 0.0);
         assert_eq!(empty_hub.raw_value, 0.0);
         assert_eq!(hub, repeat);
+    }
+
+    // Regression for kalos #59: on tiny projects the M-P003 ratio is forced
+    // toward 1.0 by structural necessity (a single dependency edge yields
+    // max/total = 1/1). The compute function must report the raw ratio for
+    // transparency while clamping normalized_risk to 0 so KAL-P003 does not
+    // fire on freshly scaffolded two-module repositories.
+    #[test]
+    fn hub_dependency_concentration_suppresses_normalized_risk_on_tiny_projects() {
+        let hub_metric = HubDependencyConcentrationRisk::new();
+        let tiny_graph = CpgBuilder::new()
+            .module_at("module_app", "src/app.py", "src/app.py", 1, 2)
+            .module_at(
+                "module_test",
+                "tests/test_app.py",
+                "tests/test_app.py",
+                1,
+                4,
+            )
+            .function_at("greet", "app.greet", "src/app.py", 1, 2)
+            .function_at(
+                "test_greet",
+                "tests.test_app.test_greet",
+                "tests/test_app.py",
+                3,
+                4,
+            )
+            .edge("module_app", "greet", EdgeKind::Contains)
+            .edge("module_test", "test_greet", EdgeKind::Contains)
+            .edge("test_greet", "greet", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        let value = hub_metric.compute(&tiny_graph, &config()).unwrap();
+
+        assert_eq!(value.raw_value, 1.0);
+        assert_eq!(value.normalized_risk, 0.0);
+    }
+
+    #[test]
+    fn hub_dependency_concentration_suppresses_normalized_risk_with_two_edges() {
+        let hub_metric = HubDependencyConcentrationRisk::new();
+        let graph = CpgBuilder::new()
+            .module_at("module_a", "crate::A", "src/a.rs", 1, 10)
+            .module_at("module_b", "crate::B", "src/b.rs", 1, 10)
+            .module_at("module_c", "crate::C", "src/c.rs", 1, 10)
+            .function_at("a_fn", "a_fn", "src/a.rs", 2, 4)
+            .function_at("b_fn", "b_fn", "src/b.rs", 2, 4)
+            .function_at("c_fn", "c_fn", "src/c.rs", 2, 4)
+            .edge("module_a", "a_fn", EdgeKind::Contains)
+            .edge("module_b", "b_fn", EdgeKind::Contains)
+            .edge("module_c", "c_fn", EdgeKind::Contains)
+            .edge("a_fn", "b_fn", EdgeKind::Call)
+            .edge("c_fn", "b_fn", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+        let cpg = UnifiedCpg {
+            id: CpgId::from("two-edge-boundary"),
+            nodes: graph.nodes.clone(),
+            edges: graph.edges.clone(),
+        };
+
+        let value = hub_metric.compute(&graph, &config()).unwrap();
+
+        assert_eq!(project_hub_concentration_support(&cpg), 2);
+        assert_eq!(value.raw_value, 1.0);
+        assert_eq!(value.normalized_risk, 0.0);
+    }
+
+    #[test]
+    fn hub_dependency_concentration_retains_normalized_risk_at_minimum_sample() {
+        let hub_metric = HubDependencyConcentrationRisk::new();
+        let graph = CpgBuilder::new()
+            .module_at("module_a", "crate::A", "src/a.rs", 1, 10)
+            .module_at("module_b", "crate::B", "src/b.rs", 1, 10)
+            .module_at("module_c", "crate::C", "src/c.rs", 1, 10)
+            .function_at("a_fn", "a_fn", "src/a.rs", 2, 4)
+            .function_at("b_fn", "b_fn", "src/b.rs", 2, 4)
+            .function_at("c_fn", "c_fn", "src/c.rs", 2, 4)
+            .edge("module_a", "a_fn", EdgeKind::Contains)
+            .edge("module_b", "b_fn", EdgeKind::Contains)
+            .edge("module_c", "c_fn", EdgeKind::Contains)
+            .edge("a_fn", "b_fn", EdgeKind::Call)
+            .edge("c_fn", "b_fn", EdgeKind::Call)
+            .edge("b_fn", "a_fn", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        let value = hub_metric.compute(&graph, &config()).unwrap();
+
+        assert_eq!(value.raw_value, value.normalized_risk);
+        assert!(value.normalized_risk > 0.0);
+    }
+
+    #[test]
+    fn project_hub_concentration_support_counts_module_dependency_edges() {
+        let tiny_subgraph = CpgBuilder::new()
+            .module_at("module_app", "src/app.py", "src/app.py", 1, 2)
+            .module_at(
+                "module_test",
+                "tests/test_app.py",
+                "tests/test_app.py",
+                1,
+                4,
+            )
+            .function_at("greet", "app.greet", "src/app.py", 1, 2)
+            .function_at(
+                "test_greet",
+                "tests.test_app.test_greet",
+                "tests/test_app.py",
+                3,
+                4,
+            )
+            .edge("module_app", "greet", EdgeKind::Contains)
+            .edge("module_test", "test_greet", EdgeKind::Contains)
+            .edge("test_greet", "greet", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+        let tiny_cpg = UnifiedCpg {
+            id: CpgId::from("tiny"),
+            nodes: tiny_subgraph.nodes,
+            edges: tiny_subgraph.edges,
+        };
+
+        assert_eq!(project_hub_concentration_support(&tiny_cpg), 1);
     }
 }
