@@ -23,6 +23,7 @@ const BUNDLED_QUERIES: &[(&str, &str)] = &[
     (
         "extract-python.ql",
         r#"import python
+import semmle.python.objects.ObjectAPI
 
 private string moduleId(Module m) { result = "mod_" + m.getFile().getRelativePath() }
 
@@ -85,9 +86,10 @@ query predicate contains(string source, string target) {
 }
 
 query predicate calls(string source, string target) {
-  exists(Call call, Function caller, Function callee |
+  exists(Call call, Function caller, FunctionValue calleeValue, Function callee |
     call.getScope() = caller and
-    call.getFunc().(Name).getId() = callee.getName() and
+    calleeValue.getACall().getNode() = call and
+    calleeValue.getScope() = callee and
     source = functionId(caller) and
     target = functionId(callee)
   )
@@ -1457,6 +1459,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bundled_python_query_uses_semantic_call_resolution() {
+        let (_, query) = BUNDLED_QUERIES
+            .iter()
+            .find(|(filename, _)| *filename == "extract-python.ql")
+            .expect("extract-python.ql should be bundled");
+
+        assert!(
+            !query.contains("call.getFunc().(Name).getId() = callee.getName()"),
+            "Python bundled query should not resolve calls by name alone"
+        );
+        assert!(
+            query.contains("FunctionValue"),
+            "Python bundled query should use FunctionValue for call resolution"
+        );
+        assert!(
+            query.contains("import semmle.python.objects.ObjectAPI"),
+            "Python bundled query should import ObjectAPI to access FunctionValue"
+        );
     }
 
     #[test]
