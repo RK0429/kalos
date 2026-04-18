@@ -205,6 +205,33 @@ fn kalos_check_does_not_modify_gitignore_by_default() {
     assert!(!temp.path().join(".gitignore").exists());
 }
 
+// Regression test for Issue #53: upward `.git` lookup resolves workspace_root to the
+// parent repo, so running from a nested subdir must not mutate the parent's .gitignore.
+#[test]
+fn kalos_check_does_not_modify_parent_gitignore_when_run_from_nested_subdirectory() {
+    let parent_workspace = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(parent_workspace.path());
+    let parent_gitignore = parent_workspace.path().join(".gitignore");
+    fs::write(&parent_gitignore, "target/\n").unwrap();
+    let nested_dir = parent_workspace.path().join("tmp").join("sandbox");
+    fs::create_dir_all(&nested_dir).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(&nested_dir)
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("--update-gitignore"))
+        .stderr(predicate::str::contains("notice: added .kalos/ to .gitignore").not())
+        .stderr(predicate::str::contains("notice: created .gitignore").not());
+
+    assert_eq!(fs::read_to_string(&parent_gitignore).unwrap(), "target/\n");
+    assert!(!nested_dir.join(".gitignore").exists());
+}
+
 #[test]
 fn kalos_check_does_not_warn_when_gitignore_already_contains_kalos_entry() {
     let temp = seeded_workspace();
