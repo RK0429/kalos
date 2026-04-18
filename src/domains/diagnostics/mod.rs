@@ -755,12 +755,11 @@ impl<'a> PatternModuleGraph<'a> {
             outgoing.entry(module.id).or_default();
         }
 
-        for edge in cpg.edges.iter().filter(|edge| {
-            matches!(
-                edge.kind,
-                EdgeKind::Call | EdgeKind::Contains | EdgeKind::TypeReference
-            )
-        }) {
+        for edge in cpg
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Call | EdgeKind::TypeReference))
+        {
             let Some(source_modules) = ownership.get(&edge.source) else {
                 continue;
             };
@@ -1322,6 +1321,50 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    // Regression for kalos #48
+    fn circular_dependency_pattern_ignores_facade_contains_edges() {
+        let subgraph = CpgBuilder::new()
+            .module_at("parent", "crate::parent", "src/parent.rs", 1, 10)
+            .module_at(
+                "child",
+                "crate::parent::child",
+                "src/parent/child.rs",
+                1,
+                10,
+            )
+            .function_at(
+                "child_fn",
+                "crate::parent::child::f",
+                "src/parent/child.rs",
+                2,
+                2,
+            )
+            .edge("parent", "child", EdgeKind::Contains)
+            .edge("child", "child_fn", EdgeKind::Contains)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+        let cpg = UnifiedCpg {
+            id: CpgId::from("facade-contains-only"),
+            nodes: subgraph.nodes,
+            edges: subgraph.edges,
+        };
+        let diagnostics = builtin_pattern_rules()
+            .into_iter()
+            .find(|rule| rule.id == RuleId::from("KAL-PAT003"))
+            .unwrap()
+            .detect(
+                &project_subgraph(&cpg),
+                &empty_metrics(),
+                &RuleConfig {
+                    enabled: Some(true),
+                    threshold: None,
+                    severity: None,
+                },
+            );
+
+        assert!(diagnostics.is_empty());
     }
 
     #[test]

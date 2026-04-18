@@ -23,6 +23,7 @@ const BUNDLED_QUERIES: &[(&str, &str)] = &[
     (
         "extract-python.ql",
         r#"import python
+import semmle.python.objects.ObjectAPI
 
 private string moduleId(Module m) { result = "mod_" + m.getFile().getRelativePath() }
 
@@ -85,9 +86,10 @@ query predicate contains(string source, string target) {
 }
 
 query predicate calls(string source, string target) {
-  exists(Call call, Function caller, Function callee |
+  exists(Call call, Function caller, FunctionValue callee_value, Function callee |
     call.getScope() = caller and
-    call.getFunc().(Name).getId() = callee.getName() and
+    call.getFunc().pointsTo(callee_value) and
+    callee_value.getScope() = callee and
     source = functionId(caller) and
     target = functionId(callee)
   )
