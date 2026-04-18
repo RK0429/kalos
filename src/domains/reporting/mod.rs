@@ -3,6 +3,9 @@ use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
+pub const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
+pub const SARIF_VERSION: &str = "2.1.0";
+
 use crate::domains::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope,
     LlmSuggestionBundle, PatternType, SummaryScope, builtin_metric_rules, builtin_pattern_rules,
@@ -465,8 +468,8 @@ impl AnalysisReport {
             .collect::<Vec<_>>();
 
         Ok(serde_json::to_string_pretty(&json!({
-            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-            "version": "2.1.0",
+            "$schema": SARIF_SCHEMA_URL,
+            "version": SARIF_VERSION,
             "runs": [{
                 "tool": {
                     "driver": {
@@ -648,6 +651,55 @@ impl AnalysisReport {
 
         Some(format!("  project: {}", factors.join(", ")))
     }
+}
+
+pub fn render_sarif_error_document(
+    message: &str,
+    cause: Option<&str>,
+    tool_version: &str,
+    exit_code: i64,
+) -> String {
+    let mut notification = json!({
+        "level": "error",
+        "message": { "text": message },
+    });
+    if let Some(cause) = cause {
+        notification["properties"] = json!({ "cause": cause });
+    }
+
+    let mut kalos_properties = json!({
+        "error": true,
+        "message": message,
+    });
+    if let Some(cause) = cause {
+        kalos_properties["cause"] = json!(cause);
+    }
+
+    let document = json!({
+        "$schema": SARIF_SCHEMA_URL,
+        "version": SARIF_VERSION,
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "kalos",
+                    "version": tool_version,
+                    "rules": [],
+                }
+            },
+            "invocations": [{
+                "executionSuccessful": false,
+                "exitCode": exit_code,
+                "exitCodeDescription": "tool error",
+                "toolExecutionNotifications": [notification],
+            }],
+            "results": [],
+            "properties": {
+                "kalos": kalos_properties,
+            },
+        }],
+    });
+
+    serde_json::to_string_pretty(&document).expect("SARIF error document should serialize")
 }
 
 pub fn project_metrics(
@@ -1087,8 +1139,8 @@ mod tests {
 
     use super::{
         AnalysisReport, OutputFormat, ProjectedScores, ReportMetadata, ReportViewOptions,
-        RequestedLevel, materialize_summary, project_diagnostics, project_scores,
-        summary_scope_for,
+        RequestedLevel, SARIF_SCHEMA_URL, materialize_summary, project_diagnostics, project_scores,
+        render_sarif_error_document, summary_scope_for,
     };
     use crate::domains::diagnostics::{
         Diagnostic, DiagnosticKind, DiagnosticsScope, FileLocation, MetricObservation,
@@ -1476,6 +1528,70 @@ mod tests {
         let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
 
         assert_eq!(parsed["files_analyzed"], expected_file_count);
+    }
+
+    #[test]
+    fn sarif_error_document_reports_tool_failure_with_invocation() {
+        let rendered = render_sarif_error_document(
+            "failed to load config file",
+            Some("No such file or directory (os error 2)"),
+            "9.9.9",
+            2,
+        );
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
+
+        assert_eq!(parsed["version"], "2.1.0");
+        assert_eq!(parsed["$schema"], SARIF_SCHEMA_URL);
+
+        let run = &parsed["runs"][0];
+        assert_eq!(run["tool"]["driver"]["name"], "kalos");
+        assert_eq!(run["tool"]["driver"]["version"], "9.9.9");
+        assert_eq!(
+            run["results"].as_array().expect("results array").len(),
+            0,
+            "error document must not fabricate diagnostics"
+        );
+
+        let invocation = &run["invocations"][0];
+        assert_eq!(invocation["executionSuccessful"], Value::Bool(false));
+        assert_eq!(invocation["exitCode"], Value::Number(2.into()));
+        assert_eq!(invocation["exitCodeDescription"], "tool error");
+
+        let notifications = invocation["toolExecutionNotifications"]
+            .as_array()
+            .expect("notifications array");
+        assert_eq!(notifications.len(), 1);
+        let notification = &notifications[0];
+        assert_eq!(notification["level"], "error");
+        assert_eq!(
+            notification["message"]["text"],
+            "failed to load config file"
+        );
+        assert_eq!(
+            notification["properties"]["cause"],
+            "No such file or directory (os error 2)"
+        );
+
+        let kalos_props = &run["properties"]["kalos"];
+        assert_eq!(kalos_props["error"], Value::Bool(true));
+        assert_eq!(kalos_props["message"], "failed to load config file");
+        assert_eq!(
+            kalos_props["cause"],
+            "No such file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn sarif_error_document_omits_cause_when_source_missing() {
+        let rendered = render_sarif_error_document("boom", None, "9.9.9", 2);
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
+
+        let notification = &parsed["runs"][0]["invocations"][0]["toolExecutionNotifications"][0];
+        assert!(
+            notification["properties"].is_null() || notification["properties"]["cause"].is_null()
+        );
+        let kalos_props = &parsed["runs"][0]["properties"]["kalos"];
+        assert!(kalos_props.get("cause").is_none() || kalos_props["cause"].is_null());
     }
 
     #[test]

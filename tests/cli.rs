@@ -864,7 +864,7 @@ fn kalos_check_missing_config_json_error_output_is_structured() {
 }
 
 #[test]
-fn kalos_check_missing_config_sarif_error_output_is_structured() {
+fn kalos_check_missing_config_sarif_error_output_is_sarif_document() {
     let temp = TempDir::new().unwrap();
 
     let assert = Command::cargo_bin("kalos")
@@ -880,17 +880,109 @@ fn kalos_check_missing_config_sarif_error_output_is_structured() {
         .assert()
         .code(2);
 
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    let parsed: Value = serde_json::from_str(&stderr).unwrap();
-    assert_eq!(parsed["error"], Value::Bool(true));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("SARIF failure output on stdout should parse as JSON");
+
+    assert_eq!(parsed["version"], Value::String("2.1.0".to_owned()));
+    assert_eq!(
+        parsed["$schema"],
+        Value::String("https://json.schemastore.org/sarif-2.1.0.json".to_owned())
+    );
+
+    let run = &parsed["runs"][0];
+    assert_eq!(
+        run["tool"]["driver"]["name"],
+        Value::String("kalos".to_owned())
+    );
+    assert_eq!(run["results"].as_array().expect("results array").len(), 0);
+
+    let invocation = &run["invocations"][0];
+    assert_eq!(invocation["executionSuccessful"], Value::Bool(false));
+    assert_eq!(invocation["exitCode"], Value::Number(2.into()));
+
+    let notification = &invocation["toolExecutionNotifications"][0];
+    assert_eq!(notification["level"], Value::String("error".to_owned()));
     assert!(
-        parsed["message"]
+        notification["message"]["text"]
             .as_str()
             .unwrap()
             .contains("failed to load config file")
     );
     assert!(
-        parsed["cause"]
+        notification["properties"]["cause"]
+            .as_str()
+            .unwrap()
+            .contains("No such file or directory")
+    );
+
+    let kalos_props = &run["properties"]["kalos"];
+    assert_eq!(kalos_props["error"], Value::Bool(true));
+    assert!(
+        kalos_props["message"]
+            .as_str()
+            .unwrap()
+            .contains("failed to load config file")
+    );
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        serde_json::from_str::<Value>(&stderr).is_err(),
+        "stderr should not carry a JSON error object when SARIF is requested: {stderr}"
+    );
+}
+
+#[test]
+fn kalos_check_missing_config_sarif_with_output_writes_sarif_error_document_to_file() {
+    let temp = TempDir::new().unwrap();
+    let output_path = temp.path().join("outputs").join("out.sarif");
+
+    assert!(!output_path.parent().unwrap().exists());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--format",
+            "sarif",
+            "--config",
+            "/nonexistent/path",
+            "--output",
+        ])
+        .arg(&output_path)
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&rendered).expect("SARIF failure output file should parse as JSON");
+
+    assert_eq!(parsed["version"], Value::String("2.1.0".to_owned()));
+    assert_eq!(
+        parsed["$schema"],
+        Value::String("https://json.schemastore.org/sarif-2.1.0.json".to_owned())
+    );
+
+    let run = &parsed["runs"][0];
+    assert_eq!(run["results"], Value::Array(vec![]));
+
+    let invocation = &run["invocations"][0];
+    assert_eq!(invocation["executionSuccessful"], Value::Bool(false));
+    assert_eq!(invocation["exitCode"], Value::Number(2.into()));
+
+    let notification = &invocation["toolExecutionNotifications"][0];
+    assert_eq!(notification["level"], Value::String("error".to_owned()));
+    assert!(
+        notification["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("failed to load config file")
+    );
+    assert!(
+        notification["properties"]["cause"]
             .as_str()
             .unwrap()
             .contains("No such file or directory")
