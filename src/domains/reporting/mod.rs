@@ -478,6 +478,11 @@ impl AnalysisReport {
                 "properties": {
                     "analysis_warnings": self.analysis_warnings,
                     "kalos": {
+                        "schema_version": self.metadata.schema_version,
+                        "tool_version": self.metadata.tool_version,
+                        "files_analyzed": self.metadata.file_count,
+                        "diagnostics_scope": diagnostics_scope_str(self.diagnostics.diagnostics_scope),
+                        "summary_scope": summary_scope_str(self.diagnostics.summary_scope),
                         "scores": {
                             "overall": self.scores.overall,
                             "function": self.scores.function,
@@ -2320,5 +2325,18 @@ mod tests {
             sarif["runs"][0]["properties"]["analysis_warnings"],
             json["analysis_warnings"]
         );
+
+        for field in [
+            "files_analyzed",
+            "diagnostics_scope",
+            "summary_scope",
+            "schema_version",
+            "tool_version",
+        ] {
+            assert_eq!(
+                kalos[field], json[field],
+                "SARIF properties.kalos[{field}] should match JSON"
+            );
+        }
     }
 }
