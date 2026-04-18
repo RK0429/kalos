@@ -155,6 +155,26 @@ mod tests {
     }
 
     #[test]
+    fn check_update_gitignore_defaults_to_false() {
+        let cli = Cli::try_parse_from(["kalos", "check"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(!command.update_gitignore);
+    }
+
+    #[test]
+    fn check_parses_update_gitignore_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "--update-gitignore"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.update_gitignore);
+    }
+
+    #[test]
     fn init_parses() {
         let cli = Cli::try_parse_from(["kalos", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Init(_)));

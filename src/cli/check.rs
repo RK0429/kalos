@@ -10,7 +10,10 @@ use clap::{Args, ValueEnum};
 use serde_json::json;
 use tracing::debug;
 
-use super::init::{GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry};
+use super::init::{
+    GitignoreStatus, GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry,
+    gitignore_entry_status,
+};
 
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
@@ -109,6 +112,11 @@ pub struct CheckCommand {
         help = "write output to a file instead of stdout"
     )]
     pub output: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "add .kalos/ to .gitignore when missing (default: warn only, do not modify .gitignore)"
+    )]
+    pub update_gitignore: bool,
 }
 
 impl CheckCommand {
@@ -159,16 +167,32 @@ impl CheckCommand {
             rule_count = config.rules.len(),
             "check config loaded"
         );
-        match ensure_gitignore_entry(&config.workspace_root.abs_path) {
-            Ok(GitignoreUpdate::Created) => {
-                eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+        if self.update_gitignore {
+            match ensure_gitignore_entry(&config.workspace_root.abs_path) {
+                Ok(GitignoreUpdate::Created) => {
+                    eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+                }
+                Ok(GitignoreUpdate::Added) => {
+                    eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
+                }
+                Ok(GitignoreUpdate::Unchanged) => {}
+                Err(error) => {
+                    eprintln!("warning: failed to update .gitignore: {error}");
+                }
             }
-            Ok(GitignoreUpdate::Added) => {
-                eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
-            }
-            Ok(GitignoreUpdate::Unchanged) => {}
-            Err(error) => {
-                eprintln!("warning: failed to update .gitignore: {error}");
+        } else {
+            match gitignore_entry_status(&config.workspace_root.abs_path) {
+                Ok(GitignoreStatus::EntryPresent) => {}
+                Ok(GitignoreStatus::Missing | GitignoreStatus::EntryAbsent) => {
+                    eprintln!(
+                        "warning: {KALOS_DIR_ENTRY} is not in .gitignore. \
+                         Run with --update-gitignore to add it, \
+                         or add it manually to avoid committing analysis cache."
+                    );
+                }
+                Err(error) => {
+                    eprintln!("warning: failed to inspect .gitignore: {error}");
+                }
             }
         }
         let llm_adapter = if self.llm {

@@ -16,6 +16,13 @@ pub(super) enum GitignoreUpdate {
     Unchanged,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GitignoreStatus {
+    Missing,
+    EntryPresent,
+    EntryAbsent,
+}
+
 #[derive(Debug, Clone, Default, Args)]
 #[command(about = "create a default configuration file")]
 pub struct InitCommand {}
@@ -77,12 +84,7 @@ pub(super) fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<Gitign
 
     if gitignore_path.exists() {
         let contents = fs::read_to_string(&gitignore_path)?;
-        let has_kalos_entry = contents.lines().any(|line| {
-            let trimmed = line.trim();
-            !trimmed.starts_with('#') && trimmed == KALOS_DIR_ENTRY
-        });
-
-        if has_kalos_entry {
+        if contains_kalos_entry(&contents) {
             return Ok(GitignoreUpdate::Unchanged);
         }
 
@@ -96,6 +98,28 @@ pub(super) fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<Gitign
 
     fs::write(&gitignore_path, format!("{KALOS_DIR_ENTRY}\n"))?;
     Ok(GitignoreUpdate::Created)
+}
+
+pub(super) fn gitignore_entry_status(cwd: &std::path::Path) -> io::Result<GitignoreStatus> {
+    let gitignore_path = cwd.join(".gitignore");
+
+    if !gitignore_path.exists() {
+        return Ok(GitignoreStatus::Missing);
+    }
+
+    let contents = fs::read_to_string(&gitignore_path)?;
+    if contains_kalos_entry(&contents) {
+        Ok(GitignoreStatus::EntryPresent)
+    } else {
+        Ok(GitignoreStatus::EntryAbsent)
+    }
+}
+
+fn contains_kalos_entry(contents: &str) -> bool {
+    contents.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.starts_with('#') && trimmed == KALOS_DIR_ENTRY
+    })
 }
 
 #[cfg(test)]

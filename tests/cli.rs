@@ -186,6 +186,124 @@ fn kalos_init_skips_gitignore_when_kalos_entry_exists() {
 }
 
 #[test]
+fn kalos_check_does_not_modify_gitignore_by_default() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("--update-gitignore"))
+        .stderr(predicate::str::contains("notice: created .gitignore").not())
+        .stderr(predicate::str::contains("notice: added .kalos/ to .gitignore").not());
+
+    assert!(!temp.path().join(".gitignore").exists());
+}
+
+#[test]
+fn kalos_check_does_not_warn_when_gitignore_already_contains_kalos_entry() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n.kalos/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore").not());
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        "target/\n.kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_check_warns_when_gitignore_exists_without_kalos_entry() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("--update-gitignore"));
+
+    assert_eq!(fs::read_to_string(gitignore_path).unwrap(), "target/\n");
+}
+
+#[test]
+fn kalos_check_creates_gitignore_when_update_gitignore_flag_set() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "notice: created .gitignore with .kalos/ entry",
+        ))
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore").not());
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_check_appends_to_existing_gitignore_when_update_gitignore_flag_set() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("notice: added .kalos/ to .gitignore"));
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        "target/\n\n.kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_check_help_describes_update_gitignore_flag() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--update-gitignore"))
+        .stdout(predicate::str::contains("default: warn only"));
+}
+
+#[test]
 fn kalos_init_preserves_existing_config_on_empty_input() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");
