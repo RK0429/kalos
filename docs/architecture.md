@@ -275,7 +275,7 @@ CPG Extraction
 - `Diagnostics` は canonical `primary_scope_id` を持つ `Diagnostic` の一覧だけを返し、diff 表示判定や `ScopeDiagnosticSnapshot` の所有単位はその `primary_scope_id` を基準にする。metric 診断では評価対象 `ScopeId`、pattern 診断では主対象 scope、単一の主対象を持たない cross-scope 診断では辞書順最小 `ScopeId` を使う
 - `LLM Adapter` は allowlist 済み `LlmEnrichmentRequest` を sequential に（v1: max in-flight = 1）処理し、`DiagnosticId` 単位の `LlmSuggestionBundle` だけを返す。429 応答時は `Retry-After` を尊重して 1 回リトライし（aggregate budget 残量が許す場合のみ）、5xx はスキップする（ADR-0005 参照）。プロバイダ選択は環境変数 `KALOS_LLM_PROVIDER` で行い（v1 の許容値: `openai`、デフォルト: `openai`）、選択されたプロバイダがリクエスト形式とデフォルトエンドポイント URL を決定する。`KALOS_LLM_PROVIDER` が v1 の許容値以外の場合は設定エラー（exit code 2）とする（`REQ-NF-009`, ADR-0005 参照）。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で上書き可能であり、未設定時はプロバイダ固有のデフォルト URL を使用する（例: `openai` → `https://api.openai.com/v1`）
 - `Application Pipeline` が `Diagnostic` と `SourceAnalysis` から `LlmEnrichmentRequest` を組み立てる。`rule_id`, `severity`, `workspace_relative_path` は `Diagnostic` から、`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` の代表ファイルメタデータから取得する。`SourceAnalysis.source_files` は workspace-relative path 一意かつ path 昇順の決定論的対応表である。`source_excerpt` または `cpg_excerpt` は代表ファイルへ還元できる対象スコープの CPG・ソースから取得し、request を生成する場合は相互排他的に一方のみを設定する。`metric` または `pattern` は `Diagnostic.kind` に応じて排他的に設定する。multi-file / multi-language 診断で必須根拠を代表ファイル断片へ還元できない場合は LLM sidecar を起動しない
-- `Application Pipeline` は `List<Diagnostic>` と `summary_scope` から `DiagnosticReport` を assemble する。`summary_scope = listed_diagnostics` では現在の診断一覧から、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から summary を materialize する
+- `Application Pipeline` は `List<Diagnostic>` と `summary_scope` から `DiagnosticReport` を assemble する。non-diff モードの `summary_scope = listed_diagnostics` では現在の診断一覧から、non-diff モードの `summary_scope = whole_project` では解決済み `analysis_targets` 全体から summary を materialize する。diff mode では `summary_scope = listed_diagnostics` を強制し、現在の affected diagnostics 一覧から summary を materialize する
 - `ReportViewOptions.minimum_severity` は診断一覧の表示/出力対象だけを絞り込み、`DiagnosticReport.summary` と exit code の計算母集団は変えない
 - `Application Pipeline` は `--strict` を `DiagnosticReport.determine_exit_code(strict)` へ渡すだけで、`Diagnostic.severity` や `DiagnosticReport.summary` を変更しない
 - SARIF writer は `Diagnostic.rule_id` を `run.tool.driver.rules[]` と `result.ruleId` / `result.ruleIndex` へ写像し、`Diagnostic.severity` を `result.level`（`error` → `error`, `warning` → `warning`, `info` → `note`）へ写像する
@@ -401,7 +401,7 @@ sequenceDiagram
         LLM-->>APP: LlmSuggestionBundle?
         APP->>R: DiagnosticReport / AnalysisMetrics / ReportMetadata / ReportViewOptions / LlmSuggestionBundle? を含めて出力変換
         APP->>Cache: ベースライン保存（全ワークスペース解析時）
-        R-->>U: 差分対象診断 + diagnostics_scope=affected_only + summary（--level all: summary_scope=whole_project / --level 限定: summary_scope=listed_diagnostics）
+        R-->>U: 差分対象診断 + diagnostics_scope=affected_only + summary_scope=listed_diagnostics
     end
 ```
 
@@ -411,7 +411,7 @@ sequenceDiagram
 - `--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。ベースラインキャッシュの保存不変条件（§5.3、ADR-0003）として全階層の結果が必要なためである。`--level` で選択されなかった階層のメトリクス・診断・スコアは報告に含めない（must exclude）。この射影は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する。ただし、プラグインメトリクスの再利用は当該プラグインが現在の実行で正常にロード・評価された場合に限り、失敗またはスキップされたプラグインの cache 済み `MetricValue` は除外する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
-- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。`--level all`（デフォルト）では `whole_project`（解決済み `analysis_targets` 内の全階層を母集団とする）、`--level` で階層を限定した場合は `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode かつ `summary_scope = whole_project` では merged post-change `ScopeDiagnosticSnapshot` から再構成する
+- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。non-diff モードの `--level all`（デフォルト）では `whole_project`（解決済み `analysis_targets` 内の全階層を母集団とする）、`--level` で階層を限定した場合と diff mode では `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode では常に affected diagnostics 一覧から再構成する
 - non-diff モードの `diagnostics_scope = whole_project` は「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する

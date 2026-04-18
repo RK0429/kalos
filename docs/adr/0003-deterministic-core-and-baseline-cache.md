@@ -60,7 +60,7 @@ kalos は同時に以下を満たす必要がある。
 ## 根拠
 
 - `REQ-FUNC-024/034` を両立するには、非変更部分のベースライン再利用が最も自然
-- `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。`--level all`（デフォルト）では `SummaryScope.WholeProject`（JSON wire value: `"whole_project"`）、`--level function|module|project` では `SummaryScope.ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでもこの契約は変えない
+- `scores.overall` は常にメトリクス集約結果を表し、`SummaryScope` 列挙型の variant（`WholeProject` / `ListedDiagnostics`）は summary と exit code の母集団だけを規定する。non-diff モードの `--level all`（デフォルト）では `SummaryScope.WholeProject`（JSON wire value: `"whole_project"`）を使い、`--level function|module|project` と diff mode では `SummaryScope.ListedDiagnostics`（JSON wire value: `"listed_diagnostics"`）を使う。差分モードでは summary / exit code だけを affected diagnostics に揃え、`scores.overall` は引き続き post-change メトリクス集約結果をそのまま反映する
 - **決定論性契約の適用範囲**: `REQ-NF-003` のビット単位一致は、コア評価パイプライン（CPG 抽出 → メトリクス算出 → 診断生成 → レポート組立）の出力に適用する。具体的には `ScopeMetrics`、`Diagnostic`（重大度を含む）、`List<Diagnostic>` の emission order（後述）、`OverallScore`、`DiagnosticReport`、Exit code、および評価順序が対象である。`--llm` 指定時に後段で付加される `llm_suggestion`（`LlmSuggestionBundle`）は決定論性契約の適用範囲外とする（ADR-0005 参照）。LLM 応答は本質的に非決定的であり、wall-clock budget やネットワーク状態にも依存するため、同一入力でも `llm_suggestion` の有無・内容は再現性を保証しない
 - ただし決定論性を崩さないため、ベースライン識別子（`BaselineFingerprint`）は以下の 7 要素で決定する
   - `workspace_root_hash`: Configuration が `--config <path>` 指定時はその `.kalos.toml` の親を、未指定時は `nearest .kalos.toml parent -> nearest .git parent -> current working directory` の順で解決した `WorkspaceRoot` の正規化絶対パスの SHA-256。同一リポジトリでもクローン場所が異なるとキャッシュを分離する。**正規化規則**: 以下の手順を順に適用した結果の UTF-8 バイト列を SHA-256 でハッシュする

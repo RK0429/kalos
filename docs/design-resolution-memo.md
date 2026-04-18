@@ -251,8 +251,8 @@ subset `analysis_targets` の場合は **要求された `analysis_targets` の�
 
 | enum | 内部表現（PascalCase） | JSON 値（snake_case） | 意味 |
 |---|---|---|---|
-| `SummaryScope` | `WholeProject` | `"whole_project"` | summary の母集団が解決済み `analysis_targets` 内の全階層の診断（`--level all` 時、または diff mode の merged post-change） |
-| `SummaryScope` | `ListedDiagnostics` | `"listed_diagnostics"` | summary の母集団が `diagnostics` リストに含まれる指定階層の診断のみ（`--level` で階層限定時） |
+| `SummaryScope` | `WholeProject` | `"whole_project"` | summary の母集団が解決済み `analysis_targets` 内の全階層の診断（non-diff モードの `--level all` 時） |
+| `SummaryScope` | `ListedDiagnostics` | `"listed_diagnostics"` | summary の母集団が `diagnostics` リストに含まれる診断のみ（diff mode を含む）。`--level` で階層限定した場合もこの値を使う |
 | `DiagnosticsScope` | `WholeProject` | `"whole_project"` | `diagnostics` 一覧が選択された `--level` に関して完全（non-diff モード） |
 | `DiagnosticsScope` | `AffectedOnly` | `"affected_only"` | `diagnostics` 一覧が影響範囲のみ（diff mode） |
 

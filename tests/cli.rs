@@ -686,7 +686,13 @@ fn kalos_check_non_diff_then_diff_reuses_baseline() {
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
 
     assert_eq!(parsed["diagnostics_scope"], "affected_only");
-    assert_eq!(parsed["summary_scope"], "whole_project");
+    assert_eq!(parsed["summary_scope"], "listed_diagnostics");
+    assert_eq!(
+        parsed["summary"]["error_count"].as_u64().unwrap()
+            + parsed["summary"]["warning_count"].as_u64().unwrap()
+            + parsed["summary"]["info_count"].as_u64().unwrap(),
+        parsed["diagnostics"].as_array().unwrap().len() as u64
+    );
     assert_eq!(baseline_entry_count(&cache_dir), 1);
 }
 
@@ -860,7 +866,13 @@ fn kalos_check_diff_first_run_json_reports_affected_only_scope() {
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
 
     assert_eq!(parsed["diagnostics_scope"], "affected_only");
-    assert_eq!(parsed["summary_scope"], "whole_project");
+    assert_eq!(parsed["summary_scope"], "listed_diagnostics");
+    assert_eq!(
+        parsed["summary"]["error_count"].as_u64().unwrap()
+            + parsed["summary"]["warning_count"].as_u64().unwrap()
+            + parsed["summary"]["info_count"].as_u64().unwrap(),
+        parsed["diagnostics"].as_array().unwrap().len() as u64
+    );
     assert_eq!(baseline_entry_count(&cache_dir), 1);
 }
 
@@ -889,7 +901,49 @@ fn kalos_check_diff_uses_cached_baseline_on_subsequent_run() {
     let parsed: Value = serde_json::from_str(&stdout).unwrap();
 
     assert_eq!(parsed["diagnostics_scope"], "affected_only");
-    assert_eq!(parsed["summary_scope"], "whole_project");
+    assert_eq!(parsed["summary_scope"], "listed_diagnostics");
+    assert_eq!(
+        parsed["summary"]["error_count"].as_u64().unwrap()
+            + parsed["summary"]["warning_count"].as_u64().unwrap()
+            + parsed["summary"]["info_count"].as_u64().unwrap(),
+        parsed["diagnostics"].as_array().unwrap().len() as u64
+    );
+}
+
+#[test]
+fn kalos_check_diff_keeps_summary_consistent_with_affected_diagnostics_issue_56() {
+    let temp = seeded_issue_56_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD^", "--format", "json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("falling back to full analysis"));
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD^", "--format", "json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("falling back to full analysis").not());
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let diagnostics = parsed["diagnostics"].as_array().unwrap();
+    let summary_total = parsed["summary"]["error_count"].as_u64().unwrap()
+        + parsed["summary"]["warning_count"].as_u64().unwrap()
+        + parsed["summary"]["info_count"].as_u64().unwrap();
+
+    assert_eq!(parsed["diagnostics_scope"], "affected_only");
+    assert_eq!(parsed["summary_scope"], "listed_diagnostics");
+    assert_eq!(summary_total, diagnostics.len() as u64);
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -974,6 +1028,34 @@ fn seeded_git_workspace() -> TempDir {
     .unwrap();
     run_git(temp.path(), &["add", "src/lib.rs"]);
     run_git(temp.path(), &["commit", "-m", "change"]);
+
+    temp
+}
+
+fn seeded_issue_56_workspace() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "pub fn entry() -> i32 {\n    helper()\n}\n\npub fn helper() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    fs::write(temp.path().join("README.md"), "before\n").unwrap();
+    fs::write(
+        temp.path().join(".kalos.toml"),
+        "[rules.KAL-F001]\nthreshold = 0.0\nseverity = \"error\"\n",
+    )
+    .unwrap();
+
+    run_git(temp.path(), &["init"]);
+    run_git(temp.path(), &["config", "user.email", "kalos@example.com"]);
+    run_git(temp.path(), &["config", "user.name", "Kalos"]);
+    run_git(temp.path(), &["add", "."]);
+    run_git(temp.path(), &["commit", "-m", "initial"]);
+
+    fs::write(temp.path().join("README.md"), "after\n").unwrap();
+    run_git(temp.path(), &["add", "README.md"]);
+    run_git(temp.path(), &["commit", "-m", "docs"]);
 
     temp
 }
