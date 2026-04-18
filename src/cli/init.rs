@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
 use clap::Args;
@@ -18,7 +18,16 @@ pub(super) enum GitignoreUpdate {
 
 #[derive(Debug, Clone, Default, Args)]
 #[command(about = "create a default configuration file")]
-pub struct InitCommand {}
+pub struct InitCommand {
+    #[arg(
+        long,
+        short = 'f',
+        visible_alias = "yes",
+        visible_short_alias = 'y',
+        help = "overwrite existing configuration without prompting"
+    )]
+    pub force: bool,
+}
 
 impl InitCommand {
     pub fn execute(&self) -> ExitCode {
@@ -32,21 +41,30 @@ impl InitCommand {
 
         let config_path = cwd.join(CONFIG_FILE_NAME);
         if config_path.exists() {
-            print!("{CONFIG_FILE_NAME} already exists. Overwrite? [y/N] ");
-            if let Err(error) = io::stdout().flush() {
-                eprintln!("failed to flush stdout: {error}");
+            if self.force {
+                // Skip prompting and continue to overwrite below.
+            } else if !io::stdin().is_terminal() {
+                eprintln!(
+                    "{CONFIG_FILE_NAME} already exists; pass --force to overwrite (refusing to prompt on non-interactive stdin)"
+                );
                 return ExitCode::from(2);
-            }
+            } else {
+                let stdin = io::stdin();
+                let mut stdin = stdin.lock();
+                let stdout = io::stdout();
+                let mut stdout = stdout.lock();
+                let confirmed = match confirm_overwrite(&mut stdin, &mut stdout, CONFIG_FILE_NAME) {
+                    Ok(confirmed) => confirmed,
+                    Err(error) => {
+                        eprintln!("failed to confirm overwrite: {error}");
+                        return ExitCode::from(2);
+                    }
+                };
 
-            let mut input = String::new();
-            if let Err(error) = io::stdin().read_line(&mut input) {
-                eprintln!("failed to read overwrite confirmation: {error}");
-                return ExitCode::from(2);
-            }
-
-            if !matches!(input.trim(), "y" | "Y") {
-                println!("aborted");
-                return ExitCode::SUCCESS;
+                if !confirmed {
+                    println!("aborted");
+                    return ExitCode::SUCCESS;
+                }
             }
         }
 
@@ -70,6 +88,19 @@ impl InitCommand {
         }
         ExitCode::SUCCESS
     }
+}
+
+fn confirm_overwrite<R: BufRead, W: Write>(
+    stdin: &mut R,
+    stdout: &mut W,
+    prompt_name: &str,
+) -> io::Result<bool> {
+    write!(stdout, "{prompt_name} already exists. Overwrite? [y/N] ")?;
+    stdout.flush()?;
+
+    let mut input = String::new();
+    stdin.read_line(&mut input)?;
+    Ok(matches!(input.trim(), "y" | "Y"))
 }
 
 pub(super) fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<GitignoreUpdate> {
@@ -101,10 +132,11 @@ pub(super) fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<Gitign
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Cursor;
 
     use tempfile::TempDir;
 
-    use super::{GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry};
+    use super::{GitignoreUpdate, KALOS_DIR_ENTRY, confirm_overwrite, ensure_gitignore_entry};
 
     #[test]
     fn adds_kalos_entry_to_existing_gitignore() {
@@ -172,6 +204,57 @@ mod tests {
         assert_eq!(first, GitignoreUpdate::Added);
         assert_eq!(second, GitignoreUpdate::Unchanged);
         assert_eq!(kalos_entry_count(&contents), 1);
+    }
+
+    #[test]
+    fn confirm_overwrite_accepts_lowercase_y() {
+        let mut stdin = Cursor::new(b"y\n");
+        let mut stdout = Vec::new();
+
+        let confirmed = confirm_overwrite(&mut stdin, &mut stdout, ".kalos.toml").unwrap();
+
+        assert!(confirmed);
+    }
+
+    #[test]
+    fn confirm_overwrite_accepts_uppercase_y() {
+        let mut stdin = Cursor::new(b"Y\n");
+        let mut stdout = Vec::new();
+
+        let confirmed = confirm_overwrite(&mut stdin, &mut stdout, ".kalos.toml").unwrap();
+
+        assert!(confirmed);
+    }
+
+    #[test]
+    fn confirm_overwrite_rejects_n() {
+        let mut stdin = Cursor::new(b"n\n");
+        let mut stdout = Vec::new();
+
+        let confirmed = confirm_overwrite(&mut stdin, &mut stdout, ".kalos.toml").unwrap();
+
+        assert!(!confirmed);
+    }
+
+    #[test]
+    fn confirm_overwrite_rejects_empty_input() {
+        let mut stdin = Cursor::new(b"\n");
+        let mut stdout = Vec::new();
+
+        let confirmed = confirm_overwrite(&mut stdin, &mut stdout, ".kalos.toml").unwrap();
+
+        assert!(!confirmed);
+    }
+
+    #[test]
+    fn confirm_overwrite_writes_prompt_text() {
+        let mut stdin = Cursor::new(b"y\n");
+        let mut stdout = Vec::new();
+
+        confirm_overwrite(&mut stdin, &mut stdout, ".kalos.toml").unwrap();
+
+        let prompt = String::from_utf8(stdout).unwrap();
+        assert!(prompt.contains("already exists. Overwrite? [y/N]"));
     }
 
     fn kalos_entry_count(contents: &str) -> usize {

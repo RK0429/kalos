@@ -197,6 +197,11 @@ mod tests {
         let help = render_help(["kalos", "init", "--help"]);
 
         assert!(help.contains("create a default configuration file"));
+        assert!(help.contains("--force"));
+        assert!(help.contains("-f"));
+        assert!(help.contains("--yes"));
+        assert!(help.contains("-y"));
+        assert!(help.contains("overwrite existing configuration without prompting"));
     }
 
     fn render_help<const N: usize>(args: [&str; N]) -> String {
