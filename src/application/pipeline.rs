@@ -305,15 +305,18 @@ where
         C: CachePort,
     {
         if config.targets_explicitly_specified {
-            eprintln!(
+            let fallback_reason =
                 "diff mode is not available for explicitly specified targets; falling back to full analysis"
-            );
+                    .to_owned();
+            eprintln!("{fallback_reason}");
             if let Some(host) = plugin_host.as_mut() {
                 host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
             }
-            return self
+            let mut result = self
                 .run(config, view_options, plugin_host, llm)
-                .map_err(DiffPipelineError::Pipeline);
+                .map_err(DiffPipelineError::Pipeline)?;
+            prepend_analysis_warning(&mut result, fallback_reason);
+            return Ok(result);
         }
 
         let plugin_metrics = load_plugin_metrics_context(plugin_host.as_deref())
@@ -383,7 +386,9 @@ where
         });
 
         if baseline.is_none() {
-            eprintln!("compatible diff baseline was not found; falling back to full analysis");
+            let fallback_reason =
+                "compatible diff baseline was not found; falling back to full analysis".to_owned();
+            eprintln!("{fallback_reason}");
             if let Some(host) = plugin_host.as_mut() {
                 host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
             }
@@ -399,13 +404,15 @@ where
                 )
                 .map_err(DiffPipelineError::from_pipeline_or_cache)?;
             narrow_to_diff_scope(&mut result, &snapshot.changed_files);
+            prepend_analysis_warning(&mut result, fallback_reason);
             return Ok(result);
         }
 
         if impact.invalidation_plan.fallback_to_full {
-            eprintln!(
+            let fallback_reason =
                 "diff optimization could not determine affected scopes; falling back to full analysis"
-            );
+                    .to_owned();
+            eprintln!("{fallback_reason}");
             if let Some(host) = plugin_host.as_mut() {
                 host.reset_aggregate_fuel_budget(FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET);
             }
@@ -421,6 +428,7 @@ where
                 )
                 .map_err(DiffPipelineError::from_pipeline_or_cache)?;
             narrow_to_diff_scope(&mut result, &snapshot.changed_files);
+            prepend_analysis_warning(&mut result, fallback_reason);
             return Ok(result);
         }
 
@@ -955,6 +963,11 @@ fn align_diff_report_to_listed_diagnostics(report: &mut AnalysisReport) {
     report.diagnostics.diagnostics_scope = DiagnosticsScope::AffectedOnly;
     report.diagnostics.summary_scope = SummaryScope::ListedDiagnostics;
     report.diagnostics.summary = materialize_summary(&report.diagnostics.diagnostics);
+}
+
+fn prepend_analysis_warning(result: &mut PipelineResult, warning: String) {
+    result.report.analysis_warnings.insert(0, warning.clone());
+    result.analysis_warnings.insert(0, warning);
 }
 
 fn narrow_to_diff_scope(result: &mut PipelineResult, changed_files: &BTreeSet<FilePath>) {
@@ -2555,6 +2568,14 @@ mod tests {
             plugin_port.reset_calls,
             vec![FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET]
         );
+        let expected_warning =
+            "diff mode is not available for explicitly specified targets; falling back to full analysis"
+                .to_owned();
+        assert_eq!(
+            result.report.analysis_warnings.first(),
+            Some(&expected_warning)
+        );
+        assert_eq!(result.analysis_warnings.first(), Some(&expected_warning));
     }
 
     #[test]
@@ -2624,6 +2645,13 @@ mod tests {
             plugin_port.reset_calls,
             vec![FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET]
         );
+        let expected_warning =
+            "compatible diff baseline was not found; falling back to full analysis".to_owned();
+        assert_eq!(
+            result.report.analysis_warnings.first(),
+            Some(&expected_warning)
+        );
+        assert_eq!(result.analysis_warnings.first(), Some(&expected_warning));
     }
 
     #[test]

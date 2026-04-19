@@ -273,6 +273,9 @@ impl AnalysisReport {
             output.push('\n');
         }
 
+        for warning in &self.analysis_warnings {
+            let _ = writeln!(output, "note: {warning}");
+        }
         let _ = writeln!(output, "── Summary ──────────────────────────");
         let _ = writeln!(output, "{}", self.human_score_line());
         for note in self.human_score_notes() {
@@ -280,9 +283,6 @@ impl AnalysisReport {
         }
         if let Some(deduction_line) = self.human_project_deduction_line() {
             let _ = writeln!(output, "{deduction_line}");
-        }
-        for warning in &self.analysis_warnings {
-            let _ = writeln!(output, "note: {warning}");
         }
         let _ = writeln!(
             output,
