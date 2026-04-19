@@ -614,7 +614,9 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **説明**: `kalos init` コマンドで、すべてのルールとデフォルト閾値を含む `.kalos.toml` を生成する
 - **受け入れ基準**:
   - Given プロジェクトディレクトリ, When `kalos init` を実行, Then すべてのルールとデフォルト閾値・設定を含む `.kalos.toml` が生成される
-  - Given `.kalos.toml` が既に存在, When `kalos init` を実行, Then 上書き確認のプロンプトを表示する
+  - Given `.kalos.toml` が既に存在 AND TTY stdin, When `kalos init` を実行, Then 上書き確認のプロンプトを表示する
+  - Given `.kalos.toml` が既に存在 AND `--force` または `--yes`, When `kalos init` を実行, Then プロンプトを出さず上書きする
+  - Given `.kalos.toml` が既に存在 AND 非TTY stdin AND `--force` 未指定, When `kalos init` を実行, Then プロンプトを出さず exit=2 で中断する
 - **優先度**: Should
 - **出典**: ユーザー確認済み
 

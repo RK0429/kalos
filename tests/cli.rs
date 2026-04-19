@@ -65,7 +65,7 @@ fn kalos_init_config_excludes_internal_milestone_terms() {
 }
 
 #[test]
-fn kalos_init_preserves_existing_config_when_declined() {
+fn kalos_init_refuses_overwrite_on_non_tty_stdin_without_force() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");
     fs::write(&config_path, "existing = true\n").unwrap();
@@ -76,8 +76,11 @@ fn kalos_init_preserves_existing_config_when_declined() {
         .write_stdin(b"n\n")
         .arg("init")
         .assert()
-        .success()
-        .stdout(predicate::str::contains("already exists"));
+        .code(2)
+        .stdout(predicate::str::contains("Overwrite?").not())
+        .stderr(predicate::str::contains(
+            ".kalos.toml already exists; pass --force to overwrite (refusing to prompt on non-interactive stdin)",
+        ));
 
     assert_eq!(
         fs::read_to_string(config_path).unwrap(),
@@ -86,7 +89,7 @@ fn kalos_init_preserves_existing_config_when_declined() {
 }
 
 #[test]
-fn kalos_init_overwrites_existing_config_when_confirmed() {
+fn kalos_init_overwrites_existing_config_when_force_flag_is_set() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");
     fs::write(&config_path, "existing = true\n").unwrap();
@@ -94,8 +97,7 @@ fn kalos_init_overwrites_existing_config_when_confirmed() {
     Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
-        .write_stdin(b"y\n")
-        .arg("init")
+        .args(["init", "-f"])
         .assert()
         .success()
         .stdout(predicate::str::contains("created"));
@@ -106,7 +108,7 @@ fn kalos_init_overwrites_existing_config_when_confirmed() {
 }
 
 #[test]
-fn kalos_init_overwrites_existing_config_when_confirmed_with_uppercase_y() {
+fn kalos_init_overwrites_existing_config_when_yes_alias_is_used() {
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join(".kalos.toml");
     fs::write(&config_path, "existing = true\n").unwrap();
@@ -114,8 +116,7 @@ fn kalos_init_overwrites_existing_config_when_confirmed_with_uppercase_y() {
     Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
-        .write_stdin(b"Y\n")
-        .arg("init")
+        .args(["init", "--yes"])
         .assert()
         .success()
         .stdout(predicate::str::contains("created"));
@@ -183,27 +184,6 @@ fn kalos_init_skips_gitignore_when_kalos_entry_exists() {
     let gitignore = fs::read_to_string(gitignore_path).unwrap();
     assert_eq!(gitignore, "target/\n.kalos/\n");
     assert_eq!(gitignore.matches(".kalos/").count(), 1);
-}
-
-#[test]
-fn kalos_init_preserves_existing_config_on_empty_input() {
-    let temp = TempDir::new().unwrap();
-    let config_path = temp.path().join(".kalos.toml");
-    fs::write(&config_path, "existing = true\n").unwrap();
-
-    Command::cargo_bin("kalos")
-        .unwrap()
-        .current_dir(temp.path())
-        .write_stdin(b"\n")
-        .arg("init")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("aborted"));
-
-    assert_eq!(
-        fs::read_to_string(config_path).unwrap(),
-        "existing = true\n"
-    );
 }
 
 #[test]
