@@ -10,7 +10,7 @@ use tracing::debug;
 use crate::adapters::plugin::PluginHostError;
 use crate::adapters::plugin::wasm::FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET;
 use crate::domains::config::ProjectConfig;
-use crate::domains::cpg::{SourceAnalysis, SourceLocation, UnifiedCpg};
+use crate::domains::cpg::{AnalysisWarning, SourceAnalysis, SourceLocation, UnifiedCpg};
 use crate::domains::diagnostics::{
     CpgSubgraphExcerpt, Diagnostic, DiagnosticSummary, DiagnosticsScope, ExitCode, FileLocation,
     InlineSuppression, LlmSuggestionBundle, MetricRule, RuleConfig, SummaryScope,
@@ -95,6 +95,9 @@ enum FullRunWithCacheError<E, D, C> {
 
 type DiffRunResult<E, D, DS, C> = Result<PipelineResult, DiffPipelineError<E, D, DS, C>>;
 type FullRunWithCacheResult<E, D, C> = Result<PipelineResult, FullRunWithCacheError<E, D, C>>;
+
+const FUNCTION_LEVEL_METRICS_WARNING_MESSAGE: &str = "Function-level metrics M-F001 (CFG Branch Entropy), M-F002 (Cyclomatic Complexity), M-F003 (Data Flow Density), and M-F004 (Identifier Repetition) require Variable/Parameter and ControlFlow/DataFlow extraction that the bundled CodeQL queries do not yet emit. These metrics are reported as unsupported for this analysis.";
+const FUNCTION_LEVEL_UNSUPPORTED_METRIC_IDS: [&str; 4] = ["M-F001", "M-F002", "M-F003", "M-F004"];
 
 impl<E: fmt::Display, D: fmt::Display> fmt::Display for PipelineError<E, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -195,7 +198,8 @@ where
         .map_err(PipelineError::Plugin)?;
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &artifacts.diagnostics, &artifacts.source_analysis);
-        let analysis_warnings = analysis_warning_messages(&artifacts.source_analysis);
+        let analysis_warnings =
+            analysis_warning_messages(&artifacts.source_analysis, &artifacts.metrics);
         let file_count = artifacts.source_analysis.source_files.len();
         Ok(finalize_result(
             assemble_report(
@@ -253,7 +257,8 @@ where
         let scope_metrics = scope_metrics_map(&artifacts.metrics);
         let diagnostic_snapshots = diagnostic_snapshots_from_diagnostics(&artifacts.diagnostics);
         let overall_score = artifacts.metrics.overall_score.clone();
-        let analysis_warnings = analysis_warning_messages(&artifacts.source_analysis);
+        let analysis_warnings =
+            analysis_warning_messages(&artifacts.source_analysis, &artifacts.metrics);
         let file_count = artifacts.source_analysis.source_files.len();
         let report = assemble_report(
             config,
@@ -478,7 +483,7 @@ where
         let overall_score = merged_metrics.overall_score.clone();
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &affected_diagnostics, &diff_source_analysis);
-        let analysis_warnings = analysis_warning_messages(&diff_source_analysis);
+        let analysis_warnings = analysis_warning_messages(&diff_source_analysis, &merged_metrics);
         let file_count = diff_source_analysis.source_files.len();
         let report = assemble_report(
             config,
@@ -572,7 +577,8 @@ where
         cache
             .store(&baseline)
             .map_err(FullRunWithCacheError::Cache)?;
-        let analysis_warnings = analysis_warning_messages(&artifacts.source_analysis);
+        let analysis_warnings =
+            analysis_warning_messages(&artifacts.source_analysis, &artifacts.metrics);
         let file_count = artifacts.source_analysis.source_files.len();
 
         Ok(finalize_result(
@@ -757,13 +763,51 @@ fn assemble_report(
     )
 }
 
-fn analysis_warning_messages(source_analysis: &SourceAnalysis) -> Vec<String> {
-    source_analysis
-        .warnings
-        .iter()
+fn analysis_warning_messages(
+    source_analysis: &SourceAnalysis,
+    metrics: &AnalysisMetrics,
+) -> Vec<String> {
+    analysis_warnings(source_analysis, metrics)
+        .into_iter()
         .filter(|warning| warning.user_facing)
-        .map(|warning| warning.message.clone())
+        .map(|warning| warning.message)
         .collect()
+}
+
+fn analysis_warnings(
+    source_analysis: &SourceAnalysis,
+    metrics: &AnalysisMetrics,
+) -> Vec<AnalysisWarning> {
+    let mut warnings = source_analysis.warnings.clone();
+    if let Some(function_metric_warning) = function_level_metric_support_warning(metrics) {
+        let duplicate = warnings.iter().any(|warning| {
+            warning.file_path == function_metric_warning.file_path
+                && warning.message == function_metric_warning.message
+        });
+        if !duplicate {
+            warnings.push(function_metric_warning);
+        }
+    }
+    warnings
+}
+
+fn function_level_metric_support_warning(metrics: &AnalysisMetrics) -> Option<AnalysisWarning> {
+    let missing_support = metrics.function_metrics.iter().any(|scope_metrics| {
+        FUNCTION_LEVEL_UNSUPPORTED_METRIC_IDS
+            .iter()
+            .any(|metric_id| {
+                !scope_metrics
+                    .values
+                    .iter()
+                    .any(|value| value.metric_id.as_str() == *metric_id)
+            })
+    });
+
+    missing_support.then(|| AnalysisWarning {
+        file_path: FilePath::from("."),
+        message: FUNCTION_LEVEL_METRICS_WARNING_MESSAGE.to_owned(),
+        user_facing: true,
+    })
 }
 
 fn compute_metrics_with_plugins(
@@ -2384,6 +2428,61 @@ mod tests {
                         message: warning.to_owned(),
                         user_facing: true,
                     }],
+                },
+            },
+            NullDependencyResolver,
+        );
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Human,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        assert_eq!(result.report.analysis_warnings, vec![warning.to_owned()]);
+        assert_eq!(result.analysis_warnings, vec![warning.to_owned()]);
+    }
+
+    #[test]
+    fn pipeline_emits_user_facing_warning_when_function_metrics_have_no_data() {
+        let warning = "Function-level metrics M-F001 (CFG Branch Entropy), M-F002 (Cyclomatic Complexity), M-F003 (Data Flow Density), and M-F004 (Identifier Repetition) require Variable/Parameter and ControlFlow/DataFlow extraction that the bundled CodeQL queries do not yet emit. These metrics are reported as unsupported for this analysis.";
+        let pipeline = AnalysisPipeline::new(
+            MockExtractor {
+                source_analysis: SourceAnalysis {
+                    cpg: UnifiedCpg {
+                        id: CpgId::from("function-only"),
+                        nodes: vec![CpgNode {
+                            id: NodeId::from(1),
+                            kind: NodeKind::Function,
+                            name: "crate::f".to_owned(),
+                            location: SourceLocation {
+                                file_path: FilePath::from("src/lib.rs"),
+                                start_line: 1,
+                                end_line: 3,
+                            },
+                            extension: None,
+                        }],
+                        edges: Vec::new(),
+                    },
+                    source_files: BTreeMap::from([(
+                        FilePath::from("src/lib.rs"),
+                        SourceFile {
+                            path: FilePath::from("src/lib.rs"),
+                            language: Language::Rust,
+                        },
+                    )]),
+                    suppressions: Vec::new(),
+                    warnings: Vec::new(),
                 },
             },
             NullDependencyResolver,
