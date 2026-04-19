@@ -473,6 +473,7 @@ fn kalos_check_output_flag_writes_json_to_file() {
     let cache_dir = seed_fake_codeql_bundle(temp.path());
     let output_path = temp.path().join("reports").join("result.json");
 
+    let output_display = output_path.display().to_string();
     Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
@@ -481,7 +482,12 @@ fn kalos_check_output_flag_writes_json_to_file() {
         .arg(&output_path)
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::is_empty())
+        .stderr(
+            predicate::str::contains(format!("wrote {output_display}"))
+                .and(predicate::str::contains("analyzed"))
+                .and(predicate::str::contains("diagnostic")),
+        );
 
     let rendered = fs::read_to_string(&output_path).unwrap();
     assert!(rendered.ends_with('\n'), "expected trailing newline");
@@ -495,6 +501,7 @@ fn kalos_check_output_flag_writes_sarif_to_file() {
     let cache_dir = seed_fake_codeql_bundle(temp.path());
     let output_path = temp.path().join("reports").join("result.sarif");
 
+    let output_display = output_path.display().to_string();
     Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
@@ -503,7 +510,8 @@ fn kalos_check_output_flag_writes_sarif_to_file() {
         .arg(&output_path)
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(format!("wrote {output_display}")));
 
     let rendered = fs::read_to_string(&output_path).unwrap();
     assert!(rendered.ends_with('\n'), "expected trailing newline");
@@ -524,6 +532,7 @@ fn kalos_check_output_flag_creates_parent_directories() {
 
     assert!(!output_path.parent().unwrap().exists());
 
+    let output_display = output_path.display().to_string();
     Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
@@ -532,11 +541,56 @@ fn kalos_check_output_flag_creates_parent_directories() {
         .arg(&output_path)
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(format!("wrote {output_display}")));
 
     assert!(output_path.parent().unwrap().is_dir());
     let rendered = fs::read_to_string(&output_path).unwrap();
     assert!(rendered.ends_with('\n'), "expected trailing newline");
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert!(parsed.is_object(), "expected JSON object output");
+}
+
+#[test]
+fn kalos_check_output_flag_quiet_suppresses_acknowledgment() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("result.json");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json", "--quiet", "--output"])
+        .arg(&output_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("wrote ").not());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert!(parsed.is_object(), "expected JSON object output");
+}
+
+#[test]
+fn kalos_check_output_flag_quiet_short_flag_suppresses_acknowledgment() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("result.json");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json", "-q", "--output"])
+        .arg(&output_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("wrote ").not());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
     let parsed: Value = serde_json::from_str(&rendered).unwrap();
     assert!(parsed.is_object(), "expected JSON object output");
 }
