@@ -17,7 +17,17 @@ pub(super) enum GitignoreUpdate {
 }
 
 #[derive(Debug, Clone, Default, Args)]
-#[command(about = "create a default configuration file")]
+#[command(
+    about = "create a default configuration file",
+    long_about = "create a default configuration file.\n\
+                  \n\
+                  writes a default .kalos.toml to the current directory and ensures \
+                  .gitignore contains a .kalos/ entry, creating .gitignore if absent. \
+                  if .kalos.toml already exists, prompts for confirmation before overwriting \
+                  on interactive stdin; any response other than `y` or `Y` preserves the \
+                  existing file. pass --force (aliases -f, --yes, -y) to overwrite without \
+                  prompting, which is also required on non-interactive stdin."
+)]
 pub struct InitCommand {
     #[arg(
         long,

@@ -227,6 +227,10 @@ mod tests {
         assert!(help.contains("--yes"));
         assert!(help.contains("-y"));
         assert!(help.contains("overwrite existing configuration without prompting"));
+        assert!(help.contains(".kalos.toml"));
+        assert!(help.contains(".gitignore"));
+        assert!(help.contains(".kalos/"));
+        assert!(help.to_lowercase().contains("overwrit"));
     }
 
     #[test]
