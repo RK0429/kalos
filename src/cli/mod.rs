@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn check_help_shows_about_and_argument_help_text() {
-        let help = render_help(["kalos", "check", "--help"]);
+        let help = render_help(["kalos", "check", "-h"]);
 
         assert!(help.contains("run code quality analysis"));
         assert!(
@@ -186,9 +186,7 @@ mod tests {
         assert!(help.contains("enable llm-assisted analysis"));
         assert!(help.contains("treat warnings as errors"));
         assert!(help.contains("show per-scope metrics in human output"));
-        assert!(help.contains(
-            "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"
-        ));
+        assert!(help.contains("filter verbose metrics list by scope risk"));
         assert!(help.contains("write output to a file instead of stdout"));
     }
 
@@ -197,6 +195,14 @@ mod tests {
         let help = render_help(["kalos", "init", "--help"]);
 
         assert!(help.contains("create a default configuration file"));
+    }
+
+    #[test]
+    fn check_long_help_describes_min_risk_default() {
+        let help = render_help(["kalos", "check", "--help"]);
+
+        assert!(help.contains("Default: hide scopes with risk=0."));
+        assert!(help.contains("Pass --min-risk 0 to include all scopes."));
     }
 
     fn render_help<const N: usize>(args: [&str; N]) -> String {
