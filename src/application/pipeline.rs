@@ -21,8 +21,9 @@ use crate::domains::impact::{
     analyze_impact, build_dependency_index_from_cpg,
 };
 use crate::domains::metrics::{
-    AnalysisMetrics, MetricConfig, MetricDefinition, MetricMetadata, ScopeMetrics,
-    builtin_metric_definitions, metric_catalog_from_definitions,
+    AnalysisMetrics, MIN_HUB_CONCENTRATION_IN_DEGREE, MetricConfig, MetricDefinition,
+    MetricMetadata, ScopeMetrics, builtin_metric_definitions, metric_catalog_from_definitions,
+    project_hub_concentration_support,
 };
 use crate::domains::reporting::{
     AnalysisReport, ReportMetadata, ReportViewOptions, materialize_summary,
@@ -98,6 +99,7 @@ type FullRunWithCacheResult<E, D, C> = Result<PipelineResult, FullRunWithCacheEr
 
 const FUNCTION_LEVEL_METRICS_WARNING_MESSAGE: &str = "Function-level metrics M-F001 (CFG Branch Entropy), M-F002 (Cyclomatic Complexity), M-F003 (Data Flow Density), and M-F004 (Identifier Repetition) require Variable/Parameter and ControlFlow/DataFlow extraction that the bundled CodeQL queries do not yet emit. These metrics are reported as unsupported for this analysis.";
 const FUNCTION_LEVEL_UNSUPPORTED_METRIC_IDS: [&str; 4] = ["M-F001", "M-F002", "M-F003", "M-F004"];
+const HUB_CONCENTRATION_SMALL_SAMPLE_WARNING_TEMPLATE: &str = "M-P003 (Hub Dependency Concentration) is reported with normalized_risk=0 because only {edges} module-level dependency edge(s) were detected, below the {min}-edge minimum sample required for a stable hub-concentration signal. On small-scale projects this metric is not meaningful, so KAL-P003 is suppressed.";
 
 impl<E: fmt::Display, D: fmt::Display> fmt::Display for PipelineError<E, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -781,6 +783,15 @@ fn analysis_warnings(
             warnings.push(function_metric_warning);
         }
     }
+    if let Some(hub_warning) = hub_concentration_small_sample_warning(&source_analysis.cpg, metrics)
+    {
+        let duplicate = warnings.iter().any(|warning| {
+            warning.file_path == hub_warning.file_path && warning.message == hub_warning.message
+        });
+        if !duplicate {
+            warnings.push(hub_warning);
+        }
+    }
     warnings
 }
 
@@ -799,6 +810,38 @@ fn function_level_metric_support_warning(metrics: &AnalysisMetrics) -> Option<An
     missing_support.then(|| AnalysisWarning {
         file_path: FilePath::from("."),
         message: FUNCTION_LEVEL_METRICS_WARNING_MESSAGE.to_owned(),
+        user_facing: true,
+    })
+}
+
+fn hub_concentration_small_sample_warning(
+    cpg: &UnifiedCpg,
+    metrics: &AnalysisMetrics,
+) -> Option<AnalysisWarning> {
+    let has_hub_metric = metrics
+        .project_metrics
+        .as_ref()
+        .is_some_and(|project_metrics| {
+            project_metrics
+                .values
+                .iter()
+                .any(|value| value.metric_id.as_str() == "M-P003")
+        });
+    if !has_hub_metric {
+        return None;
+    }
+
+    let edges = project_hub_concentration_support(cpg);
+    if edges == 0 || edges >= MIN_HUB_CONCENTRATION_IN_DEGREE {
+        return None;
+    }
+
+    let message = HUB_CONCENTRATION_SMALL_SAMPLE_WARNING_TEMPLATE
+        .replace("{edges}", &edges.to_string())
+        .replace("{min}", &MIN_HUB_CONCENTRATION_IN_DEGREE.to_string());
+    Some(AnalysisWarning {
+        file_path: FilePath::from("."),
+        message,
         user_facing: true,
     })
 }
@@ -1610,6 +1653,7 @@ mod tests {
     use crate::domains::impact::{
         BaselineFingerprint, DependencyIndexManifest, DiffBaseline, ScopeDiagnosticSnapshot,
     };
+    use crate::domains::metrics::test_fixtures::CpgBuilder;
     use crate::domains::metrics::{
         AnalysisMetrics, MetricConfig, MetricDefinition, MetricOrigin, MetricParticipation,
         MetricValue, OverallScore, builtin_metric_definitions, metric_catalog_from_definitions,
@@ -2481,6 +2525,237 @@ mod tests {
 
         assert_eq!(result.report.analysis_warnings, vec![warning.to_owned()]);
         assert_eq!(result.analysis_warnings, vec![warning.to_owned()]);
+    }
+
+    // Regression for kalos #59: a freshly scaffolded two-module Python
+    // project (src/app.py + tests/test_app.py with a single test→source call)
+    // used to trigger KAL-P003 with severity=error because M-P003 was forced
+    // to normalized_risk=1.0. The pipeline must instead suppress the rule and
+    // surface a user-visible analysis warning explaining the small-sample
+    // caveat.
+    #[test]
+    fn pipeline_suppresses_kal_p003_and_emits_small_sample_warning_for_tiny_python_project() {
+        let source_analysis = tiny_python_project_source_analysis();
+        let pipeline =
+            AnalysisPipeline::new(MockExtractor { source_analysis }, NullDependencyResolver);
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Json,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        let hub_diagnostics: Vec<_> = result
+            .report
+            .diagnostics
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == RuleId::from("KAL-P003"))
+            .collect();
+        assert!(
+            hub_diagnostics.is_empty(),
+            "KAL-P003 should be suppressed on tiny projects, got {hub_diagnostics:?}"
+        );
+        assert_eq!(result.report.diagnostics.summary.error_count, 0);
+
+        let hub_metric = result
+            .report
+            .metrics
+            .iter()
+            .find(|scope| scope.scope_id.level == AnalysisLevel::Project)
+            .and_then(|project| {
+                project
+                    .values
+                    .iter()
+                    .find(|value| value.metric_id.as_str() == "M-P003")
+            })
+            .expect("M-P003 should be present in report");
+        assert_eq!(hub_metric.raw_value, 1.0);
+        assert_eq!(hub_metric.normalized_risk, 0.0);
+
+        assert!(
+            contains_hub_small_sample_warning(&result.report.analysis_warnings),
+            "expected small-sample warning, got {:?}",
+            result.report.analysis_warnings,
+        );
+    }
+
+    #[test]
+    fn pipeline_does_not_emit_small_sample_warning_when_hub_support_meets_minimum() {
+        let source_analysis = supported_python_project_source_analysis();
+        let pipeline =
+            AnalysisPipeline::new(MockExtractor { source_analysis }, NullDependencyResolver);
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Json,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        let hub_metric = result
+            .report
+            .metrics
+            .iter()
+            .find(|scope| scope.scope_id.level == AnalysisLevel::Project)
+            .and_then(|project| {
+                project
+                    .values
+                    .iter()
+                    .find(|value| value.metric_id.as_str() == "M-P003")
+            })
+            .expect("M-P003 should be present in report");
+        assert_eq!(hub_metric.raw_value, 0.666667);
+        assert_eq!(hub_metric.normalized_risk, 0.666667);
+        assert!(
+            !contains_hub_small_sample_warning(&result.report.analysis_warnings),
+            "did not expect small-sample warning, got {:?}",
+            result.report.analysis_warnings,
+        );
+        assert!(
+            !contains_hub_small_sample_warning(&result.analysis_warnings),
+            "did not expect pipeline warning copy, got {:?}",
+            result.analysis_warnings,
+        );
+    }
+
+    fn contains_hub_small_sample_warning(warnings: &[String]) -> bool {
+        warnings.iter().any(|warning| {
+            warning.contains(
+                "M-P003 (Hub Dependency Concentration) is reported with normalized_risk=0",
+            ) && warning.contains("module-level dependency edge")
+        })
+    }
+
+    fn tiny_python_project_source_analysis() -> SourceAnalysis {
+        let cpg = CpgBuilder::new()
+            .module_at("module_app", "src/app.py", "src/app.py", 1, 2)
+            .module_at(
+                "module_test",
+                "tests/test_app.py",
+                "tests/test_app.py",
+                1,
+                4,
+            )
+            .function_at("greet", "app.greet", "src/app.py", 1, 2)
+            .function_at(
+                "test_greet",
+                "tests.test_app.test_greet",
+                "tests/test_app.py",
+                3,
+                4,
+            )
+            .edge("module_app", "greet", EdgeKind::Contains)
+            .edge("module_test", "test_greet", EdgeKind::Contains)
+            .edge("test_greet", "greet", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("issue-59-tiny"),
+                nodes: cpg.nodes,
+                edges: cpg.edges,
+            },
+            source_files: BTreeMap::from([
+                (
+                    FilePath::from("src/app.py"),
+                    SourceFile {
+                        path: FilePath::from("src/app.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("tests/test_app.py"),
+                    SourceFile {
+                        path: FilePath::from("tests/test_app.py"),
+                        language: Language::Python,
+                    },
+                ),
+            ]),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn supported_python_project_source_analysis() -> SourceAnalysis {
+        let cpg = CpgBuilder::new()
+            .module_at("module_app", "src/app.py", "src/app.py", 1, 4)
+            .module_at("module_utils", "src/utils.py", "src/utils.py", 1, 2)
+            .module_at(
+                "module_test",
+                "tests/test_app.py",
+                "tests/test_app.py",
+                1,
+                5,
+            )
+            .function_at("greet", "app.greet", "src/app.py", 1, 4)
+            .function_at("format_name", "utils.format_name", "src/utils.py", 1, 2)
+            .function_at(
+                "test_greet",
+                "tests.test_app.test_greet",
+                "tests/test_app.py",
+                3,
+                5,
+            )
+            .edge("module_app", "greet", EdgeKind::Contains)
+            .edge("module_utils", "format_name", EdgeKind::Contains)
+            .edge("module_test", "test_greet", EdgeKind::Contains)
+            .edge("test_greet", "greet", EdgeKind::Call)
+            .edge("test_greet", "format_name", EdgeKind::Call)
+            .edge("greet", "format_name", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("issue-59-supported"),
+                nodes: cpg.nodes,
+                edges: cpg.edges,
+            },
+            source_files: BTreeMap::from([
+                (
+                    FilePath::from("src/app.py"),
+                    SourceFile {
+                        path: FilePath::from("src/app.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("src/utils.py"),
+                    SourceFile {
+                        path: FilePath::from("src/utils.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("tests/test_app.py"),
+                    SourceFile {
+                        path: FilePath::from("tests/test_app.py"),
+                        language: Language::Python,
+                    },
+                ),
+            ]),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
     }
 
     #[test]
