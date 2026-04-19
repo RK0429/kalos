@@ -86,10 +86,10 @@ query predicate contains(string source, string target) {
 }
 
 query predicate calls(string source, string target) {
-  exists(Call call, Function caller, FunctionValue calleeValue, Function callee |
+  exists(Call call, Function caller, FunctionValue callee_value, Function callee |
     call.getScope() = caller and
-    calleeValue.getACall().getNode() = call and
-    calleeValue.getScope() = callee and
+    callee_value.getACall() = call.getAFlowNode() and
+    callee_value.getScope() = callee and
     source = functionId(caller) and
     target = functionId(callee)
   )
@@ -1496,6 +1496,38 @@ mod tests {
         assert!(
             query.contains("FuncDecl"),
             "Go bundled query should use FuncDecl for file and location access"
+        );
+    }
+
+    #[test]
+    fn bundled_python_calls_predicate_uses_compilable_semantic_resolution() {
+        let (_, query) = BUNDLED_QUERIES
+            .iter()
+            .find(|(filename, _)| *filename == "extract-python.ql")
+            .expect("extract-python.ql should be bundled");
+
+        assert!(
+            query.contains("import semmle.python.objects.ObjectAPI"),
+            "Python bundled query should import ObjectAPI for FunctionValue"
+        );
+        assert!(
+            query.contains("FunctionValue"),
+            "Python bundled query should resolve callees through FunctionValue"
+        );
+        assert!(
+            !query.contains(".pointsTo(callee_value)"),
+            "Python bundled query must not use Expr.pointsTo(FunctionValue) which fails \
+             to compile under CodeQL 2.25.1 (RK0429/kalos#68)"
+        );
+        assert!(
+            query.contains("callee_value.getACall() = call.getAFlowNode()"),
+            "Python bundled query should resolve calls via \
+             FunctionValue.getACall() = Call.getAFlowNode()"
+        );
+        assert!(
+            !query.contains("call.getFunc().(Name).getId() = callee.getName()"),
+            "Python bundled query must not regress to name-based call matching \
+             (RK0429/kalos#48 false positives)"
         );
     }
 }
