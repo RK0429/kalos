@@ -825,7 +825,7 @@ fn kalos_check_llm_missing_api_key_fails_preflight() {
 
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("KALOS_LLM_API_KEY"));
-    assert!(!stderr.contains("notice: created .gitignore"));
+    assert_no_gitignore_chatter(&stderr);
     assert!(!temp.path().join(".gitignore").exists());
 }
 
@@ -845,7 +845,7 @@ fn kalos_check_llm_unsupported_provider_fails_preflight() {
 
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("unsupported KALOS_LLM_PROVIDER `anthropic`"));
-    assert!(!stderr.contains("notice: created .gitignore"));
+    assert_no_gitignore_chatter(&stderr);
     assert!(!temp.path().join(".gitignore").exists());
 }
 
@@ -865,8 +865,48 @@ fn kalos_check_llm_invalid_endpoint_fails_preflight() {
 
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("KALOS_LLM_ENDPOINT_URL is not a valid URL"));
-    assert!(!stderr.contains("notice: created .gitignore"));
+    assert_no_gitignore_chatter(&stderr);
     assert!(!temp.path().join(".gitignore").exists());
+}
+
+// Issue #69 regression: when a user already has a `.gitignore` without the
+// `.kalos/` entry, the `--llm` preflight failure must not surface any
+// gitignore-related notice/warning (which would obscure the real cause) and
+// must leave the existing file untouched.
+#[test]
+fn kalos_check_llm_preflight_failure_preserves_existing_gitignore() {
+    let temp = seeded_workspace();
+    let gitignore_path = temp.path().join(".gitignore");
+    let original_contents = "target/\n";
+    fs::write(&gitignore_path, original_contents).unwrap();
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("KALOS_LLM_API_KEY")
+        .env_remove("KALOS_LLM_PROVIDER")
+        .env_remove("KALOS_LLM_ENDPOINT_URL")
+        .args(["check", "--llm"])
+        .assert()
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("KALOS_LLM_API_KEY"));
+    assert_no_gitignore_chatter(&stderr);
+
+    let contents = fs::read_to_string(&gitignore_path).unwrap();
+    assert_eq!(contents, original_contents);
+}
+
+// Catches issue #69 regressions: a `.gitignore`-related notice/warning must
+// never accompany a `--llm` preflight failure because it precedes the root
+// cause and misleads the user. The preflight errors themselves do not mention
+// `.gitignore`, so this substring check is safe.
+fn assert_no_gitignore_chatter(stderr: &str) {
+    assert!(
+        !stderr.contains(".gitignore"),
+        "stderr on --llm preflight failure must not mention .gitignore; got:\n{stderr}"
+    );
 }
 
 #[test]
