@@ -109,7 +109,26 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     pub min_language_ratio: Option<f64>,
     #[arg(
         long,
-        help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)"
+        help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)",
+        long_help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)
+
+By default, KAL-M001 (module fan-out) and KAL-M003 (instability) diagnostics \
+are suppressed for test files because tests inherently import many modules and \
+score as highly unstable. Test files are NOT excluded from analysis: their \
+metrics are computed, they count toward files_analyzed, and every other rule \
+(for example KAL-PAT003) still applies to them.
+
+Pass --include-tests to re-enable KAL-M001 and KAL-M003 diagnostics on test files. \
+The flag has no observable effect on JSON output when no test module crosses the \
+KAL-M001 or KAL-M003 threshold configured in .kalos.toml.
+
+Test files are detected by path:
+  - tests/** (at project root or any ancestor directory)
+  - __tests__/** (at project root or any ancestor directory)
+  - *_test.* (file name)
+  - *.test.* (file name)
+  - *.spec.* (file name)
+  - test_*.py (Python test modules)"
     )]
     pub include_tests: bool,
     #[arg(

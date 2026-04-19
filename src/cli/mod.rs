@@ -215,6 +215,26 @@ mod tests {
         assert!(help.contains(
             "suppress the stderr acknowledgment printed on --output success"
         ));
+        assert!(help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)"));
+    }
+
+    #[test]
+    fn check_help_explains_default_suppression_for_include_tests() {
+        let help = render_help(["kalos", "check", "--help"]);
+
+        assert!(help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)"));
+        assert!(help.contains("KAL-M001 (module fan-out)"));
+        assert!(help.contains("KAL-M003 (instability)"));
+        assert!(help.contains("Test files are NOT excluded from analysis"));
+        assert!(help.contains("Pass --include-tests to re-enable"));
+        assert!(help.contains("no observable effect"));
+        assert!(help.contains("Test files are detected by path"));
+        assert!(help.contains("tests/**"));
+        assert!(help.contains("__tests__/**"));
+        assert!(help.contains("*_test.*"));
+        assert!(help.contains("*.test.*"));
+        assert!(help.contains("*.spec.*"));
+        assert!(help.contains("test_*.py"));
     }
 
     #[test]
