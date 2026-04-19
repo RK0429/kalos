@@ -25,7 +25,7 @@ use crate::domains::metrics::{
     builtin_metric_definitions, metric_catalog_from_definitions,
 };
 use crate::domains::reporting::{
-    AnalysisReport, ReportMetadata, ReportViewOptions, materialize_summary, summary_scope_for,
+    AnalysisReport, ReportMetadata, ReportViewOptions, materialize_summary,
 };
 use crate::domains::{AnalysisLevel, FilePath, MetricId, ScopeId, Severity};
 use crate::ports::cache::CachePort;
@@ -211,7 +211,6 @@ where
                 view_options,
                 file_count,
                 analysis_warnings,
-                None,
             ),
             llm_suggestions,
         ))
@@ -269,7 +268,6 @@ where
             view_options,
             file_count,
             analysis_warnings,
-            None,
         );
         let exit_code = report.diagnostics.determine_exit_code(report.view.strict);
 
@@ -354,24 +352,18 @@ where
                 .map_err(PipelineError::Plugin)
                 .map_err(DiffPipelineError::Pipeline)?
             };
-            let summary_override = baseline.as_ref().and_then(|baseline| {
-                (summary_scope_for(view_options.requested_level) == SummaryScope::WholeProject)
-                    .then(|| summary_from_snapshots(&baseline.diagnostic_snapshots))
-            });
-            return Ok(finalize_result(
-                assemble_report(
-                    config,
-                    metrics,
-                    &plugin_metrics.metric_catalog,
-                    Vec::new(),
-                    DiagnosticsScope::AffectedOnly,
-                    view_options,
-                    snapshot.changed_files.len(),
-                    Vec::new(),
-                    summary_override,
-                ),
-                None,
-            ));
+            let mut report = assemble_report(
+                config,
+                metrics,
+                &plugin_metrics.metric_catalog,
+                Vec::new(),
+                DiagnosticsScope::AffectedOnly,
+                view_options,
+                snapshot.changed_files.len(),
+                Vec::new(),
+            );
+            align_diff_report_to_listed_diagnostics(&mut report);
+            return Ok(finalize_result(report, None));
         }
 
         let diff_source_analysis = self
@@ -406,7 +398,7 @@ where
                     llm,
                 )
                 .map_err(DiffPipelineError::from_pipeline_or_cache)?;
-            narrow_to_diff_scope(&mut result, &snapshot.changed_files, &view_options);
+            narrow_to_diff_scope(&mut result, &snapshot.changed_files);
             return Ok(result);
         }
 
@@ -428,7 +420,7 @@ where
                     llm,
                 )
                 .map_err(DiffPipelineError::from_pipeline_or_cache)?;
-            narrow_to_diff_scope(&mut result, &snapshot.changed_files, &view_options);
+            narrow_to_diff_scope(&mut result, &snapshot.changed_files);
             return Ok(result);
         }
 
@@ -475,17 +467,13 @@ where
             .collect::<Vec<_>>();
         let merged_snapshots =
             merge_diagnostic_snapshots(&baseline, &actual_recomputed_scopes, &merged_diagnostics);
-        let summary_override = match summary_scope_for(view_options.requested_level) {
-            SummaryScope::WholeProject => Some(summary_from_snapshots(&merged_snapshots)),
-            SummaryScope::ListedDiagnostics => None,
-        };
         let merged_scope_metrics = scope_metrics_map(&merged_metrics);
         let overall_score = merged_metrics.overall_score.clone();
         let llm_suggestions =
             maybe_enrich_with_llm(llm, &affected_diagnostics, &diff_source_analysis);
         let analysis_warnings = analysis_warning_messages(&diff_source_analysis, &merged_metrics);
         let file_count = diff_source_analysis.source_files.len();
-        let report = assemble_report(
+        let mut report = assemble_report(
             config,
             merged_metrics,
             &plugin_metrics.metric_catalog,
@@ -494,8 +482,8 @@ where
             view_options,
             file_count,
             analysis_warnings,
-            summary_override,
         );
+        align_diff_report_to_listed_diagnostics(&mut report);
         cache
             .store(&DiffBaseline {
                 fingerprint,
@@ -591,7 +579,6 @@ where
                 view_options,
                 file_count,
                 analysis_warnings,
-                None,
             ),
             llm_suggestions,
         ))
@@ -744,7 +731,6 @@ fn assemble_report(
     view_options: ReportViewOptions,
     file_count: usize,
     analysis_warnings: Vec<String>,
-    summary_override: Option<DiagnosticSummary>,
 ) -> AnalysisReport {
     AnalysisReport::project_with_metric_catalog(
         ReportMetadata::new(
@@ -759,7 +745,6 @@ fn assemble_report(
         diagnostics_scope,
         view_options,
         analysis_warnings,
-        summary_override,
     )
 }
 
@@ -966,21 +951,19 @@ fn finalize_result(
     }
 }
 
-fn narrow_to_diff_scope(
-    result: &mut PipelineResult,
-    changed_files: &BTreeSet<FilePath>,
-    view_options: &ReportViewOptions,
-) {
+fn align_diff_report_to_listed_diagnostics(report: &mut AnalysisReport) {
+    report.diagnostics.diagnostics_scope = DiagnosticsScope::AffectedOnly;
+    report.diagnostics.summary_scope = SummaryScope::ListedDiagnostics;
+    report.diagnostics.summary = materialize_summary(&report.diagnostics.diagnostics);
+}
+
+fn narrow_to_diff_scope(result: &mut PipelineResult, changed_files: &BTreeSet<FilePath>) {
     result
         .report
         .diagnostics
         .diagnostics
         .retain(|diagnostic| changed_files.contains(&diagnostic.location.file_path));
-    result.report.diagnostics.diagnostics_scope = DiagnosticsScope::AffectedOnly;
-    if summary_scope_for(view_options.requested_level) == SummaryScope::ListedDiagnostics {
-        result.report.diagnostics.summary =
-            materialize_summary(&result.report.diagnostics.diagnostics);
-    }
+    align_diff_report_to_listed_diagnostics(&mut result.report);
     result.report.metadata.file_count = changed_files.len();
     result.exit_code = result
         .report
@@ -1251,24 +1234,6 @@ fn known_scope_ids(cpg: &UnifiedCpg) -> BTreeSet<ScopeId> {
     scopes.extend(module_scope_ids(cpg));
     scopes.insert(project_scope_id());
     scopes
-}
-
-fn summary_from_snapshots(
-    snapshots: &BTreeMap<ScopeId, ScopeDiagnosticSnapshot>,
-) -> DiagnosticSummary {
-    snapshots.values().fold(
-        DiagnosticSummary {
-            error_count: 0,
-            warning_count: 0,
-            info_count: 0,
-        },
-        |mut summary, snapshot| {
-            summary.error_count += snapshot.summary.error_count;
-            summary.warning_count += snapshot.summary.warning_count;
-            summary.info_count += snapshot.summary.info_count;
-            summary
-        },
-    )
 }
 
 fn increment_summary(summary: &mut DiagnosticSummary, severity: Severity) {
@@ -1927,7 +1892,6 @@ mod tests {
             },
             1,
             Vec::new(),
-            None,
         );
 
         assert_eq!(report.diagnostics.summary.error_count, 0);
@@ -1939,8 +1903,8 @@ mod tests {
     }
 
     #[test]
-    fn narrow_to_diff_scope_recomputes_exit_code_for_listed_diagnostics() {
-        let view_options = fixture_view_options(RequestedLevel::Function, false);
+    fn narrow_to_diff_scope_recomputes_summary_for_diff_reports() {
+        let view_options = fixture_view_options(RequestedLevel::All, false);
         let report = assemble_report(
             &fixture_config(),
             fixture_metrics(),
@@ -1969,7 +1933,6 @@ mod tests {
             view_options.clone(),
             2,
             Vec::new(),
-            None,
         );
         let mut result = finalize_result(report, None);
 
@@ -1981,7 +1944,6 @@ mod tests {
         narrow_to_diff_scope(
             &mut result,
             &BTreeSet::from([FilePath::from("src/changed.rs")]),
-            &view_options,
         );
 
         assert_eq!(
@@ -2665,7 +2627,7 @@ mod tests {
     }
 
     #[test]
-    fn run_diff_uses_merged_snapshots_for_whole_project_summary() {
+    fn run_diff_uses_listed_diagnostics_summary_in_affected_only_mode() {
         let config = fixture_config();
         let snapshot = DiffSnapshot {
             base_snapshot_hash: "base-tree".to_owned(),
@@ -2719,13 +2681,19 @@ mod tests {
         );
         assert_eq!(
             result.report.diagnostics.summary_scope,
-            SummaryScope::WholeProject
+            SummaryScope::ListedDiagnostics
         );
-        assert_eq!(result.report.diagnostics.summary.error_count, 1);
+        assert_eq!(result.report.diagnostics.summary.error_count, 0);
         assert_eq!(result.report.diagnostics.summary.warning_count, 1);
         assert_eq!(
+            (result.report.diagnostics.summary.error_count
+                + result.report.diagnostics.summary.warning_count
+                + result.report.diagnostics.summary.info_count) as usize,
+            result.report.diagnostics.diagnostics.len()
+        );
+        assert_eq!(
             result.exit_code,
-            crate::domains::diagnostics::ExitCode::DiagnosticFailure
+            crate::domains::diagnostics::ExitCode::Success
         );
         assert_eq!(result.report.diagnostics.diagnostics.len(), 1);
         assert_eq!(
@@ -2803,13 +2771,19 @@ mod tests {
         assert_eq!(result.report.diagnostics.summary.error_count, 0);
         assert_eq!(result.report.diagnostics.summary.warning_count, 1);
         assert_eq!(
+            (result.report.diagnostics.summary.error_count
+                + result.report.diagnostics.summary.warning_count
+                + result.report.diagnostics.summary.info_count) as usize,
+            result.report.diagnostics.diagnostics.len()
+        );
+        assert_eq!(
             result.exit_code,
             crate::domains::diagnostics::ExitCode::Success
         );
     }
 
     #[test]
-    fn run_diff_empty_diff_uses_baseline_summary_for_whole_project_reports() {
+    fn run_diff_empty_diff_reports_empty_listed_diagnostics_summary() {
         let config = fixture_config();
         let snapshot = DiffSnapshot {
             base_snapshot_hash: "base-tree".to_owned(),
@@ -2857,9 +2831,15 @@ mod tests {
         );
         assert_eq!(
             result.report.diagnostics.summary_scope,
-            SummaryScope::WholeProject
+            SummaryScope::ListedDiagnostics
         );
-        assert_eq!(result.report.diagnostics.summary.error_count, 1);
+        assert_eq!(result.report.diagnostics.summary.error_count, 0);
+        assert_eq!(result.report.diagnostics.summary.warning_count, 0);
+        assert_eq!(result.report.diagnostics.diagnostics.len(), 0);
+        assert_eq!(
+            result.exit_code,
+            crate::domains::diagnostics::ExitCode::Success
+        );
         assert!(pipeline.extractor.requests.borrow().is_empty());
     }
 
