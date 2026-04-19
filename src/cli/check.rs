@@ -97,7 +97,8 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     #[arg(
         long,
         value_name = "threshold",
-        help = "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"
+        help = "filter verbose metrics list by scope risk",
+        long_help = "filter verbose metrics list by scope risk.\n\nDefault: hide scopes with risk=0. Pass --min-risk 0 to include all scopes."
     )]
     pub min_risk: Option<f64>,
     #[arg(
