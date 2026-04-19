@@ -206,6 +206,9 @@ mod tests {
         assert!(help.contains("git base ref for differential analysis"));
         assert!(help.contains("enable llm-assisted analysis"));
         assert!(help.contains("treat warnings as errors"));
+        assert!(help.contains("KAL-PAT001 (god unit)"));
+        assert!(help.contains("overflow ratio"));
+        assert!(help.contains(".kalos.toml"));
         assert!(help.contains("show per-scope metrics in human output"));
         assert!(help.contains(
             "minimum scope risk for verbose metrics (default: hide risk=0; use 0 to show all)"

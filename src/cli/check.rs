@@ -81,7 +81,16 @@ pub struct CheckCommand {
     pub diff: Option<String>,
     #[arg(long, help = "enable llm-assisted analysis")]
     pub llm: bool,
-    #[arg(long, help = "treat warnings as errors")]
+    #[arg(
+        long,
+        help = "treat warnings as errors",
+        long_help = "treat warnings as errors
+
+returns exit code 1 when any warning-severity diagnostic is emitted.
+Examples of rules that may warn by default include KAL-PAT001 (god unit) and KAL-PAT002 (feature envy).
+Metric rules from KAL-F001 through KAL-P003 report warnings when overflow ratio is in [0.25, 0.60).
+Override severity per rule in .kalos.toml under [rules.<rule-id>]."
+    )]
     pub strict: bool,
     #[arg(long, help = "show per-scope metrics in human output")]
     pub verbose: bool,
