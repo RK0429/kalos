@@ -37,7 +37,11 @@ use crate::ports::PluginPort;
 #[derive(Debug, Clone, Args)]
 #[command(
     about = "run code quality analysis",
-    after_help = "NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
+    after_help = "NOTE: Normal `check` execution may write to locations such as:\n  \
+                  - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases.\n  \
+                  - `$KALOS_CACHE_DIR/baselines/` may store cached baselines for full-workspace runs in Git repositories.\n  \
+                  - `<repo>/.gitignore` may be created or updated to ignore `.kalos/`.\n\n\
+                  NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
                   which may cause significantly slower analysis on first invocation."
 )]
 pub struct CheckCommand {

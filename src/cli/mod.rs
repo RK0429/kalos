@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn check_help_shows_about_and_argument_help_text() {
-        let help = render_help(["kalos", "check", "-h"]);
+        let help = render_help(["kalos", "check", "--help"]);
 
         assert!(help.contains("run code quality analysis"));
         assert!(

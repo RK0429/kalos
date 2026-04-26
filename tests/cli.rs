@@ -222,6 +222,21 @@ fn kalos_check_help_mentions_apple_silicon() {
 }
 
 #[test]
+fn kalos_check_help_documents_filesystem_side_effects() {
+    let expected = r#"NOTE: Normal `check` execution may write to locations such as:
+  - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases.
+  - `$KALOS_CACHE_DIR/baselines/` may store cached baselines for full-workspace runs in Git repositories.
+  - `<repo>/.gitignore` may be created or updated to ignore `.kalos/`."#;
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(expected));
+}
+
+#[test]
 fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
@@ -234,6 +249,8 @@ fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
         .assert()
         .success()
         .stdout(predicate::str::is_empty().not());
+
+    assert!(temp.path().join(".kalos/codeql/rust.cache_key").exists());
 }
 
 #[test]
