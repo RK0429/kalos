@@ -574,8 +574,10 @@ fn kalos_check_help_mentions_apple_silicon() {
 #[test]
 fn kalos_check_help_documents_filesystem_side_effects() {
     let expected = r#"NOTE: Normal `check` execution may write to locations such as:
-  - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases.
-  - `$KALOS_CACHE_DIR/baselines/` may store cached baselines for full-workspace runs in Git repositories.
+  - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases unless --cache-dir is passed.
+  - `$KALOS_CACHE_DIR/codeql/` or `--cache-dir <path>/codeql/` may store managed CodeQL bundles.
+  - `$KALOS_CACHE_DIR/baselines/` or `--cache-dir <path>/baselines/` may store cached baselines for full-workspace runs in Git repositories.
+  - `--cache-dir <path>/codeql/databases/<language>/` stores per-language CodeQL databases when --cache-dir is passed.
   - `<repo>/.gitignore` is only created or updated when --update-gitignore is passed."#;
 
     Command::cargo_bin("kalos")
@@ -601,6 +603,27 @@ fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
         .stdout(predicate::str::is_empty().not());
 
     assert!(temp.path().join(".kalos/codeql/rust.cache_key").exists());
+}
+
+#[test]
+fn kalos_check_cache_dir_avoids_repo_local_kalos_directory() {
+    let temp = seeded_git_workspace();
+    let external = TempDir::new().unwrap();
+    let cache_dir = seed_fake_codeql_bundle(external.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("KALOS_CACHE_DIR")
+        .args(["check", "--cache-dir"])
+        .arg(&cache_dir)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore").not());
+
+    assert!(!temp.path().join(".kalos").exists());
+    assert!(cache_dir.join("codeql/databases/rust.cache_key").exists());
+    assert_eq!(baseline_entry_count(&cache_dir), 1);
 }
 
 #[test]
