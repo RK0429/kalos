@@ -486,6 +486,18 @@ fn kalos_root_help_uses_uppercase_cpg_in_about_text() {
 }
 
 #[test]
+fn kalos_root_help_mentions_init_filesystem_side_effects() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "init   create .kalos.toml and update .gitignore; see `kalos help init`",
+        ));
+}
+
+#[test]
 fn kalos_check_help_describes_omitted_severity_behavior() {
     Command::cargo_bin("kalos")
         .unwrap()

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 
-use crate::domains::config::{CONFIG_FILE_NAME, render_default_config};
+use crate::domains::config::{render_default_config, CONFIG_FILE_NAME};
 
 pub(super) const KALOS_DIR_ENTRY: &str = ".kalos/";
 
@@ -25,7 +25,7 @@ pub(super) enum GitignoreStatus {
 
 #[derive(Debug, Clone, Default, Args)]
 #[command(
-    about = "create a default configuration file",
+    about = "create .kalos.toml and update .gitignore; see `kalos help init`",
     long_about = "create a default configuration file.\n\
                   \n\
                   writes a default .kalos.toml to the current directory and ensures \
@@ -170,7 +170,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{GitignoreUpdate, KALOS_DIR_ENTRY, confirm_overwrite, ensure_gitignore_entry};
+    use super::{confirm_overwrite, ensure_gitignore_entry, GitignoreUpdate, KALOS_DIR_ENTRY};
 
     #[test]
     fn adds_kalos_entry_to_existing_gitignore() {
