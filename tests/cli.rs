@@ -1638,6 +1638,58 @@ fn kalos_check_diff_falls_back_to_full_analysis_when_baseline_is_missing() {
 }
 
 #[test]
+fn kalos_check_diff_explicit_target_reports_full_fallback_context() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let human = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1", "src/lib.rs"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "diff mode is not available for explicitly specified targets; falling back to full analysis",
+        ));
+    let human_stdout = String::from_utf8(human.get_output().stdout.clone()).unwrap();
+    assert!(
+        human_stdout.starts_with("Full analysis fallback completed; analyzed "),
+        "human headline should identify explicit-target diff fallback as full analysis, got:\n{human_stdout}"
+    );
+    assert!(
+        human_stdout.contains(
+            "note: diff requested base HEAD~1; base status not_evaluated; effective analysis full"
+        ),
+        "human output should include diff base evaluation state, got:\n{human_stdout}"
+    );
+
+    let json = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--diff", "HEAD~1", "src/lib.rs", "--format", "json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "diff mode is not available for explicitly specified targets; falling back to full analysis",
+        ));
+    let json_stdout = String::from_utf8(json.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&json_stdout).unwrap();
+
+    assert_eq!(parsed["diff_execution"]["requested_mode"], "diff");
+    assert_eq!(parsed["diff_execution"]["requested_base_ref"], "HEAD~1");
+    assert_eq!(parsed["diff_execution"]["base_status"], "not_evaluated");
+    assert_eq!(parsed["diff_execution"]["effective_mode"], "full");
+    assert_eq!(
+        parsed["diff_execution"]["fallback_reason"],
+        "diff mode is not available for explicitly specified targets; falling back to full analysis"
+    );
+    assert!(parsed["diff_execution"]["changed_file_count"].is_null());
+    assert_eq!(baseline_entry_count(&cache_dir), 0);
+}
+
+#[test]
 fn kalos_check_diff_json_surfaces_fallback_reason_in_analysis_warnings() {
     let temp = seeded_git_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());

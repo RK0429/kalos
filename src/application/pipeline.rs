@@ -26,7 +26,8 @@ use crate::domains::metrics::{
     project_hub_concentration_support,
 };
 use crate::domains::reporting::{
-    AnalysisReport, ReportMetadata, ReportViewOptions, materialize_summary,
+    AnalysisReport, DiffBaseStatus, DiffExecutionContext, EffectiveAnalysisMode, ReportMetadata,
+    ReportViewOptions, materialize_summary,
 };
 use crate::domains::{AnalysisLevel, FilePath, MetricId, ScopeId, Severity};
 use crate::ports::cache::CachePort;
@@ -317,7 +318,17 @@ where
             let mut result = self
                 .run(config, view_options, plugin_host, llm)
                 .map_err(DiffPipelineError::Pipeline)?;
-            prepend_analysis_warning(&mut result, fallback_reason);
+            prepend_analysis_warning(&mut result, fallback_reason.clone());
+            set_diff_execution(
+                &mut result,
+                DiffExecutionContext {
+                    requested_base_ref: diff_config.base_ref.clone(),
+                    base_status: DiffBaseStatus::NotEvaluated,
+                    effective_mode: EffectiveAnalysisMode::Full,
+                    fallback_reason: Some(fallback_reason),
+                    changed_file_count: None,
+                },
+            );
             return Ok(result);
         }
 
@@ -368,7 +379,18 @@ where
                 Vec::new(),
             );
             align_diff_report_to_listed_diagnostics(&mut report);
-            return Ok(finalize_result(report, None));
+            let mut result = finalize_result(report, None);
+            set_diff_execution(
+                &mut result,
+                DiffExecutionContext {
+                    requested_base_ref: diff_config.base_ref.clone(),
+                    base_status: DiffBaseStatus::Resolved,
+                    effective_mode: EffectiveAnalysisMode::Diff,
+                    fallback_reason: None,
+                    changed_file_count: Some(snapshot.changed_files.len()),
+                },
+            );
+            return Ok(result);
         }
 
         let diff_source_analysis = self
@@ -406,7 +428,17 @@ where
                 )
                 .map_err(DiffPipelineError::from_pipeline_or_cache)?;
             narrow_to_diff_scope(&mut result, &snapshot.changed_files);
-            prepend_analysis_warning(&mut result, fallback_reason);
+            prepend_analysis_warning(&mut result, fallback_reason.clone());
+            set_diff_execution(
+                &mut result,
+                DiffExecutionContext {
+                    requested_base_ref: diff_config.base_ref.clone(),
+                    base_status: DiffBaseStatus::Resolved,
+                    effective_mode: EffectiveAnalysisMode::Full,
+                    fallback_reason: Some(fallback_reason),
+                    changed_file_count: Some(snapshot.changed_files.len()),
+                },
+            );
             return Ok(result);
         }
 
@@ -430,7 +462,17 @@ where
                 )
                 .map_err(DiffPipelineError::from_pipeline_or_cache)?;
             narrow_to_diff_scope(&mut result, &snapshot.changed_files);
-            prepend_analysis_warning(&mut result, fallback_reason);
+            prepend_analysis_warning(&mut result, fallback_reason.clone());
+            set_diff_execution(
+                &mut result,
+                DiffExecutionContext {
+                    requested_base_ref: diff_config.base_ref.clone(),
+                    base_status: DiffBaseStatus::Resolved,
+                    effective_mode: EffectiveAnalysisMode::Full,
+                    fallback_reason: Some(fallback_reason),
+                    changed_file_count: Some(snapshot.changed_files.len()),
+                },
+            );
             return Ok(result);
         }
 
@@ -504,7 +546,18 @@ where
             })
             .map_err(DiffPipelineError::Cache)?;
 
-        Ok(finalize_result(report, llm_suggestions))
+        let mut result = finalize_result(report, llm_suggestions);
+        set_diff_execution(
+            &mut result,
+            DiffExecutionContext {
+                requested_base_ref: diff_config.base_ref.clone(),
+                base_status: DiffBaseStatus::Resolved,
+                effective_mode: EffectiveAnalysisMode::Diff,
+                fallback_reason: None,
+                changed_file_count: Some(snapshot.changed_files.len()),
+            },
+        );
+        Ok(result)
     }
 
     fn extract_and_resolve(
@@ -1011,6 +1064,10 @@ fn align_diff_report_to_listed_diagnostics(report: &mut AnalysisReport) {
 fn prepend_analysis_warning(result: &mut PipelineResult, warning: String) {
     result.report.analysis_warnings.insert(0, warning.clone());
     result.analysis_warnings.insert(0, warning);
+}
+
+fn set_diff_execution(result: &mut PipelineResult, diff_execution: DiffExecutionContext) {
+    result.report.diff_execution = Some(diff_execution);
 }
 
 fn narrow_to_diff_scope(result: &mut PipelineResult, changed_files: &BTreeSet<FilePath>) {

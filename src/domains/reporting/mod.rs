@@ -83,6 +83,27 @@ pub struct ProjectedScores {
     pub score_notes: Vec<ScoreNote>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffExecutionContext {
+    pub requested_base_ref: String,
+    pub base_status: DiffBaseStatus,
+    pub effective_mode: EffectiveAnalysisMode,
+    pub fallback_reason: Option<String>,
+    pub changed_file_count: Option<usize>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DiffBaseStatus {
+    Resolved,
+    NotEvaluated,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EffectiveAnalysisMode {
+    Diff,
+    Full,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportMetricValue {
     pub metric_id: crate::domains::MetricId,
@@ -105,6 +126,7 @@ pub struct AnalysisReport {
     pub view: ReportViewOptions,
     pub scores: ProjectedScores,
     pub analysis_warnings: Vec<String>,
+    pub diff_execution: Option<DiffExecutionContext>,
     pub metrics: Vec<ReportScopeMetrics>,
     pub diagnostics: DiagnosticReport,
 }
@@ -180,6 +202,7 @@ impl AnalysisReport {
             view: view.clone(),
             scores: project_scores(metrics, view.requested_level, file_count),
             analysis_warnings,
+            diff_execution: None,
             metrics: projected_metrics,
             diagnostics: DiagnosticReport {
                 diagnostics: projected_diagnostics,
@@ -302,6 +325,19 @@ impl AnalysisReport {
         for warning in &self.analysis_warnings {
             let _ = writeln!(output, "note: {warning}");
         }
+        if let Some(diff_execution) = &self.diff_execution {
+            let _ = writeln!(
+                output,
+                "note: diff requested base {}; base status {}; effective analysis {}{}",
+                diff_execution.requested_base_ref,
+                diff_base_status_str(diff_execution.base_status),
+                effective_analysis_mode_str(diff_execution.effective_mode),
+                diff_execution
+                    .changed_file_count
+                    .map(|count| format!("; changed files {count}"))
+                    .unwrap_or_default()
+            );
+        }
         if let Some(note) = human_test_module_structural_note(&diagnostics) {
             let _ = writeln!(output, "{note}");
         }
@@ -383,6 +419,7 @@ impl AnalysisReport {
                 .collect::<Vec<_>>(),
             "files_analyzed": self.metadata.file_count,
             "analysis_warnings": self.analysis_warnings,
+            "diff_execution": self.diff_execution.as_ref().map(diff_execution_json),
             "scores": {
                 "overall": self.scores.overall,
                 "function": self.scores.function,
@@ -507,6 +544,7 @@ impl AnalysisReport {
                 },
                 "properties": {
                     "analysis_warnings": self.analysis_warnings,
+                    "diff_execution": self.diff_execution.as_ref().map(diff_execution_json),
                     "kalos": {
                         "schema_version": self.metadata.schema_version,
                         "tool_version": self.metadata.tool_version,
@@ -1084,6 +1122,31 @@ fn score_note_json(note: &ScoreNote) -> Value {
         "level": analysis_level_str(note.level),
         "reason": note.reason,
     })
+}
+
+fn diff_execution_json(diff_execution: &DiffExecutionContext) -> Value {
+    json!({
+        "requested_mode": "diff",
+        "requested_base_ref": diff_execution.requested_base_ref,
+        "base_status": diff_base_status_str(diff_execution.base_status),
+        "effective_mode": effective_analysis_mode_str(diff_execution.effective_mode),
+        "fallback_reason": diff_execution.fallback_reason,
+        "changed_file_count": diff_execution.changed_file_count,
+    })
+}
+
+fn diff_base_status_str(status: DiffBaseStatus) -> &'static str {
+    match status {
+        DiffBaseStatus::Resolved => "resolved",
+        DiffBaseStatus::NotEvaluated => "not_evaluated",
+    }
+}
+
+fn effective_analysis_mode_str(mode: EffectiveAnalysisMode) -> &'static str {
+    match mode {
+        EffectiveAnalysisMode::Diff => "diff",
+        EffectiveAnalysisMode::Full => "full",
+    }
 }
 
 fn severity_str(severity: Severity) -> &'static str {
