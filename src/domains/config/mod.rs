@@ -75,6 +75,7 @@ pub struct ProjectConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolveOptions {
     pub cwd: PathBuf,
+    pub workspace_root: Option<PathBuf>,
     pub config_path: Option<PathBuf>,
     pub analysis_targets: Vec<PathBuf>,
     pub targets_explicitly_specified: bool,
@@ -266,6 +267,33 @@ impl ProjectConfig {
     pub fn discover_workspace(
         options: &ResolveOptions,
     ) -> Result<DiscoveredWorkspace, ConfigError> {
+        if let Some(workspace_root) = &options.workspace_root {
+            let workspace_root = absolute_from_base(&options.cwd, workspace_root);
+            let config_path = if let Some(config_path) = &options.config_path {
+                let config_path = absolute_from_base(&options.cwd, config_path);
+                if let Err(source) = fs::metadata(&config_path) {
+                    return Err(ConfigError::ReadConfig {
+                        path: config_path,
+                        source,
+                    });
+                }
+                Some(canonicalize_if_exists(&config_path)?)
+            } else {
+                let config_path = workspace_root.join(CONFIG_FILE_NAME);
+                config_path
+                    .exists()
+                    .then(|| canonicalize_if_exists(&config_path))
+                    .transpose()?
+            };
+
+            return Ok(DiscoveredWorkspace {
+                workspace_root: WorkspaceRoot {
+                    abs_path: canonicalize_workspace_root(&workspace_root)?,
+                },
+                config_path,
+            });
+        }
+
         if let Some(config_path) = &options.config_path {
             let config_path = absolute_from_base(&options.cwd, config_path);
             if let Err(source) = fs::metadata(&config_path) {
@@ -290,20 +318,7 @@ impl ProjectConfig {
         }
 
         let search_start = if options.targets_explicitly_specified {
-            options
-                .analysis_targets
-                .first()
-                .map(|target| absolute_from_base(&options.cwd, target))
-                .map(|target| {
-                    if fs::metadata(&target)
-                        .map(|metadata| metadata.is_dir())
-                        .unwrap_or(false)
-                    {
-                        target
-                    } else {
-                        target.parent().map(Path::to_path_buf).unwrap_or(target)
-                    }
-                })
+            common_target_ancestor(&options.cwd, &options.analysis_targets)
                 .unwrap_or_else(|| options.cwd.clone())
         } else {
             options.cwd.clone()
@@ -325,14 +340,16 @@ impl ProjectConfig {
             });
         }
 
-        if let Some(git_path) = find_upward(&search_start, ".git") {
-            let parent = git_path.parent().unwrap_or_else(|| Path::new("/"));
-            return Ok(DiscoveredWorkspace {
-                workspace_root: WorkspaceRoot {
-                    abs_path: canonicalize_workspace_root(parent)?,
-                },
-                config_path: None,
-            });
+        if options.targets_explicitly_specified {
+            if let Some(git_path) = find_upward(&search_start, ".git") {
+                let parent = git_path.parent().unwrap_or_else(|| Path::new("/"));
+                return Ok(DiscoveredWorkspace {
+                    workspace_root: WorkspaceRoot {
+                        abs_path: canonicalize_workspace_root(parent)?,
+                    },
+                    config_path: None,
+                });
+            }
         }
 
         Ok(DiscoveredWorkspace {
@@ -348,7 +365,14 @@ impl ProjectConfig {
         config_file: Option<&ConfigFile>,
         defaults: &Defaults,
     ) -> Result<Self, ConfigError> {
-        let workspace_root = if let Some(config_file) = config_file {
+        let workspace_root = if let Some(workspace_root) = &options.workspace_root {
+            WorkspaceRoot {
+                abs_path: canonicalize_workspace_root(&absolute_from_base(
+                    &options.cwd,
+                    workspace_root,
+                ))?,
+            }
+        } else if let Some(config_file) = config_file {
             let config_path = options
                 .config_path
                 .as_ref()
@@ -395,13 +419,18 @@ impl ProjectConfig {
         defaults: &Defaults,
     ) -> Result<Self, ConfigError> {
         let canonical_cwd = canonicalize_if_exists(&options.cwd)?;
+        let target_base = if options.workspace_root.is_some() {
+            workspace_root.as_path()
+        } else {
+            canonical_cwd.as_path()
+        };
         let effective_targets = if options.analysis_targets.is_empty() {
             vec![PathBuf::from(".")]
         } else {
             options
                 .analysis_targets
                 .iter()
-                .map(|target| absolute_from_base(&canonical_cwd, target))
+                .map(|target| absolute_from_base(target_base, target))
                 .collect()
         };
 
@@ -625,6 +654,44 @@ fn find_upward(start: &Path, needle: &str) -> Option<PathBuf> {
     }
 }
 
+fn common_target_ancestor(cwd: &Path, targets: &[PathBuf]) -> Option<PathBuf> {
+    let mut ancestors = targets
+        .iter()
+        .map(|target| target_search_start(cwd, target));
+    let mut common = ancestors.next()?;
+
+    for ancestor in ancestors {
+        common = common_path_prefix(&common, &ancestor);
+    }
+
+    Some(common)
+}
+
+fn target_search_start(cwd: &Path, target: &Path) -> PathBuf {
+    let target = absolute_from_base(cwd, target);
+    if fs::metadata(&target)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        target
+    } else {
+        target.parent().map(Path::to_path_buf).unwrap_or(target)
+    }
+}
+
+fn common_path_prefix(left: &Path, right: &Path) -> PathBuf {
+    let mut common = PathBuf::new();
+
+    for (left_component, right_component) in left.components().zip(right.components()) {
+        if left_component != right_component {
+            break;
+        }
+        common.push(left_component.as_os_str());
+    }
+
+    common
+}
+
 fn canonicalize_workspace_root(path: &Path) -> Result<PathBuf, ConfigError> {
     fs::canonicalize(path).map_err(|source| ConfigError::CanonicalizeWorkspaceRoot {
         path: path.to_path_buf(),
@@ -774,6 +841,7 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: nested.clone(),
+            workspace_root: None,
             config_path: Some(config_path.clone()),
             analysis_targets: vec![PathBuf::from(".")],
             targets_explicitly_specified: false,
@@ -796,6 +864,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let options = ResolveOptions {
             cwd: temp.path().to_path_buf(),
+            workspace_root: None,
             config_path: Some(PathBuf::from("/nonexistent/path/.kalos.toml")),
             analysis_targets: Vec::new(),
             targets_explicitly_specified: false,
@@ -828,6 +897,7 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: nested,
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![PathBuf::from(".")],
             targets_explicitly_specified: false,
@@ -842,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_root_falls_back_to_git_directory() {
+    fn explicit_workspace_root_falls_back_to_git_directory() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("repo");
         let nested = workspace.join("src/bin");
@@ -851,6 +921,31 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: nested,
+            workspace_root: None,
+            config_path: None,
+            analysis_targets: vec![PathBuf::from(".")],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let discovery = ProjectConfig::discover_workspace(&options).unwrap();
+        assert_eq!(
+            discovery.workspace_root.abs_path,
+            fs::canonicalize(&workspace).unwrap()
+        );
+    }
+
+    #[test]
+    fn default_workspace_root_does_not_fall_back_to_ancestor_git_directory() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("repo");
+        let nested = workspace.join("src/bin");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir(workspace.join(".git")).unwrap();
+
+        let options = ResolveOptions {
+            cwd: nested.clone(),
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![PathBuf::from(".")],
             targets_explicitly_specified: false,
@@ -860,7 +955,7 @@ mod tests {
         let discovery = ProjectConfig::discover_workspace(&options).unwrap();
         assert_eq!(
             discovery.workspace_root.abs_path,
-            fs::canonicalize(&workspace).unwrap()
+            fs::canonicalize(&nested).unwrap()
         );
     }
 
@@ -872,6 +967,7 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: cwd.clone(),
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![PathBuf::from(".")],
             targets_explicitly_specified: false,
@@ -897,6 +993,7 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: cwd_dir,
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![target_dir.clone()],
             targets_explicitly_specified: true,
@@ -923,6 +1020,7 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: cwd_dir,
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![target_dir.clone()],
             targets_explicitly_specified: true,
@@ -941,6 +1039,146 @@ mod tests {
     }
 
     #[test]
+    fn explicit_multiple_targets_use_common_ancestor_for_workspace_root() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("repo");
+        let src = workspace.join("src");
+        let scripts = workspace.join("scripts");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&scripts).unwrap();
+        fs::create_dir(workspace.join(".git")).unwrap();
+
+        let options = ResolveOptions {
+            cwd: workspace.clone(),
+            workspace_root: None,
+            config_path: None,
+            analysis_targets: vec![PathBuf::from("src"), PathBuf::from("scripts")],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let project = ProjectConfig::load_and_resolve(&options, &Defaults::default()).unwrap();
+        assert_eq!(
+            project.workspace_root.abs_path,
+            fs::canonicalize(&workspace).unwrap()
+        );
+        assert_eq!(
+            project.analysis_targets,
+            vec![FilePath::from("src"), FilePath::from("scripts")]
+        );
+    }
+
+    #[test]
+    fn explicit_multiple_targets_discover_config_at_common_ancestor() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("repo");
+        let src = workspace.join("src");
+        let scripts = workspace.join("scripts");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&scripts).unwrap();
+        let config_path = workspace.join(".kalos.toml");
+        fs::write(&config_path, "").unwrap();
+
+        let options = ResolveOptions {
+            cwd: workspace.clone(),
+            workspace_root: None,
+            config_path: None,
+            analysis_targets: vec![PathBuf::from("src"), PathBuf::from("scripts")],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let discovery = ProjectConfig::discover_workspace(&options).unwrap();
+        assert_eq!(
+            discovery.workspace_root.abs_path,
+            fs::canonicalize(&workspace).unwrap()
+        );
+        assert_eq!(
+            discovery.config_path,
+            Some(fs::canonicalize(&config_path).unwrap())
+        );
+    }
+
+    #[test]
+    fn explicit_workspace_root_rejects_external_analysis_target() {
+        let workspace_temp = TempDir::new().unwrap();
+        let external_temp = TempDir::new().unwrap();
+        let workspace = workspace_temp.path().join("repo");
+        let external = external_temp.path().join("external");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&external).unwrap();
+
+        let options = ResolveOptions {
+            cwd: workspace.clone(),
+            workspace_root: Some(workspace.clone()),
+            config_path: None,
+            analysis_targets: vec![external.clone()],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let error = ProjectConfig::load_and_resolve(&options, &Defaults::default()).unwrap_err();
+        assert!(
+            matches!(error, ConfigError::PathOutsideWorkspace { .. }),
+            "expected outside-workspace diagnostic, got: {error}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("analysis target path"));
+        assert!(message.contains("is outside workspace root"));
+    }
+
+    #[test]
+    fn explicit_workspace_root_resolves_relative_targets_from_workspace_root() {
+        let workspace_temp = TempDir::new().unwrap();
+        let cwd_temp = TempDir::new().unwrap();
+        let workspace = workspace_temp.path().join("repo");
+        let external_cwd = cwd_temp.path().join("external-cwd");
+        fs::create_dir_all(workspace.join("src")).unwrap();
+        fs::create_dir_all(&external_cwd).unwrap();
+
+        let options = ResolveOptions {
+            cwd: external_cwd,
+            workspace_root: Some(workspace.clone()),
+            config_path: None,
+            analysis_targets: vec![PathBuf::from("src")],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let project = ProjectConfig::load_and_resolve(&options, &Defaults::default()).unwrap();
+        assert_eq!(
+            project.workspace_root.abs_path,
+            fs::canonicalize(&workspace).unwrap()
+        );
+        assert_eq!(project.analysis_targets, vec![FilePath::from("src")]);
+    }
+
+    #[test]
+    fn explicit_workspace_root_does_not_discover_ancestor_config() {
+        let temp = TempDir::new().unwrap();
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("child");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(parent.join(".kalos.toml"), "").unwrap();
+
+        let options = ResolveOptions {
+            cwd: workspace.clone(),
+            workspace_root: Some(workspace.clone()),
+            config_path: None,
+            analysis_targets: vec![PathBuf::from(".")],
+            targets_explicitly_specified: false,
+            exclude_patterns: Vec::new(),
+        };
+
+        let discovery = ProjectConfig::discover_workspace(&options).unwrap();
+        assert_eq!(
+            discovery.workspace_root.abs_path,
+            fs::canonicalize(&workspace).unwrap()
+        );
+        assert_eq!(discovery.config_path, None);
+    }
+
+    #[test]
     fn explicit_child_target_normalizes_to_workspace_dot_when_workspace_is_child() {
         let temp = TempDir::new().unwrap();
         let parent_dir = temp.path().join("parent");
@@ -950,6 +1188,7 @@ mod tests {
 
         let options = ResolveOptions {
             cwd: parent_dir,
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![PathBuf::from("child")],
             targets_explicitly_specified: true,
@@ -996,6 +1235,7 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         let config_file = ConfigFile::load(&config_path).unwrap();
         let options = ResolveOptions {
             cwd: workspace.clone(),
+            workspace_root: None,
             config_path: Some(config_path),
             analysis_targets: vec![PathBuf::from("src")],
             targets_explicitly_specified: true,
@@ -1071,6 +1311,7 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         };
         let options = ResolveOptions {
             cwd: workspace.clone(),
+            workspace_root: None,
             config_path: Some(config_file.path.clone()),
             analysis_targets: Vec::new(),
             targets_explicitly_specified: false,
@@ -1112,6 +1353,7 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         };
         let options = ResolveOptions {
             cwd: workspace.clone(),
+            workspace_root: None,
             config_path: None,
             analysis_targets: vec![PathBuf::from("src/inner/../lib.rs"), PathBuf::from(".")],
             targets_explicitly_specified: true,
@@ -1166,6 +1408,7 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             };
             let options = ResolveOptions {
                 cwd: workspace.clone(),
+                workspace_root: None,
                 config_path: Some(config_file.path.clone()),
                 analysis_targets: vec![PathBuf::from(".")],
                 targets_explicitly_specified: false,
@@ -1204,6 +1447,7 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             };
             let options = ResolveOptions {
                 cwd: workspace.clone(),
+                workspace_root: None,
                 config_path: Some(config_file.path.clone()),
                 analysis_targets: vec![PathBuf::from(".")],
                 targets_explicitly_specified: false,
@@ -1250,6 +1494,7 @@ severity = "fatal"
         };
         let options = ResolveOptions {
             cwd: workspace,
+            workspace_root: None,
             config_path: Some(config_file.path.clone()),
             analysis_targets: vec![PathBuf::from(".")],
             targets_explicitly_specified: false,
