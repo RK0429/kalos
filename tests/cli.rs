@@ -321,6 +321,50 @@ fn kalos_check_appends_to_existing_gitignore_when_update_gitignore_flag_set() {
 }
 
 #[test]
+fn kalos_check_json_update_gitignore_keeps_stderr_free_of_human_notice() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    serde_json::from_str::<Value>(&stdout).unwrap();
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_check_sarif_update_gitignore_keeps_stderr_free_of_human_notice() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "sarif", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    serde_json::from_str::<Value>(&stdout).unwrap();
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+}
+
+#[test]
 fn kalos_check_update_gitignore_missing_diff_ref_does_not_create_gitignore() {
     let temp = seeded_git_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
