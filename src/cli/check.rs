@@ -229,35 +229,6 @@ impl CheckCommand {
         } else {
             None
         };
-        if self.update_gitignore {
-            match ensure_gitignore_entry(&config.workspace_root.abs_path) {
-                Ok(GitignoreUpdate::Created) => {
-                    eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
-                }
-                Ok(GitignoreUpdate::Added) => {
-                    eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
-                }
-                Ok(GitignoreUpdate::Unchanged) => {}
-                Err(error) => {
-                    eprintln!("warning: failed to update .gitignore: {error}");
-                }
-            }
-        } else {
-            match gitignore_entry_status(&config.workspace_root.abs_path) {
-                Ok(GitignoreStatus::EntryPresent) => {}
-                Ok(GitignoreStatus::Missing | GitignoreStatus::EntryAbsent) => {
-                    eprintln!(
-                        "warning: {KALOS_DIR_ENTRY} is not in .gitignore. \
-                         Run with --update-gitignore to add it, \
-                         or add it manually to avoid committing analysis cache."
-                    );
-                }
-                Err(error) => {
-                    eprintln!("warning: failed to inspect .gitignore: {error}");
-                }
-            }
-        }
-
         let manifest = match codeql_bundle_manifest() {
             Ok(manifest) => manifest,
             Err(error) => {
@@ -461,6 +432,12 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
 
+            handle_gitignore_policy(
+                self.update_gitignore,
+                &config.workspace_root.abs_path,
+                result.report.metadata.file_count,
+            );
+
             if !self.quiet {
                 let file_count = result.report.metadata.file_count;
                 let diagnostic_count = result.report.diagnostics.diagnostics.len();
@@ -478,10 +455,54 @@ impl CheckCommand {
                 );
             }
         } else {
+            handle_gitignore_policy(
+                self.update_gitignore,
+                &config.workspace_root.abs_path,
+                result.report.metadata.file_count,
+            );
             println!("{rendered}");
         }
 
         map_exit_code(result.exit_code)
+    }
+}
+
+fn handle_gitignore_policy(
+    update_gitignore: bool,
+    workspace_root: &std::path::Path,
+    file_count: usize,
+) {
+    if update_gitignore && file_count == 0 {
+        return;
+    }
+
+    if update_gitignore {
+        match ensure_gitignore_entry(workspace_root) {
+            Ok(GitignoreUpdate::Created) => {
+                eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+            }
+            Ok(GitignoreUpdate::Added) => {
+                eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
+            }
+            Ok(GitignoreUpdate::Unchanged) => {}
+            Err(error) => {
+                eprintln!("warning: failed to update .gitignore: {error}");
+            }
+        }
+    } else {
+        match gitignore_entry_status(workspace_root) {
+            Ok(GitignoreStatus::EntryPresent) => {}
+            Ok(GitignoreStatus::Missing | GitignoreStatus::EntryAbsent) => {
+                eprintln!(
+                    "warning: {KALOS_DIR_ENTRY} is not in .gitignore. \
+                     Run with --update-gitignore to add it, \
+                     or add it manually to avoid committing analysis cache."
+                );
+            }
+            Err(error) => {
+                eprintln!("warning: failed to inspect .gitignore: {error}");
+            }
+        }
     }
 }
 

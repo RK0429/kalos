@@ -115,12 +115,36 @@ fn managed_tool_cache_checksum_mismatch_exits_with_code_2_and_clear_error() {
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_CACHE_DIR", &cache_dir)
-        .arg("check")
+        .args(["check", "--update-gitignore"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("failed to resolve CodeQL bundle"))
         .stderr(predicate::str::contains("checksum mismatch"))
         .stderr(predicate::str::contains("kalos bootstrap").not());
+
+    assert!(!temp.path().join(".gitignore").exists());
+
+    let temp = seeded_workspace();
+    let cache_dir = seed_invalid_managed_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    let original_contents = "target/\n";
+    fs::write(&gitignore_path, original_contents).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("failed to resolve CodeQL bundle"))
+        .stderr(predicate::str::contains("checksum mismatch"))
+        .stderr(predicate::str::contains("kalos bootstrap").not());
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        original_contents
+    );
 }
 
 #[test]
