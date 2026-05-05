@@ -1292,6 +1292,33 @@ fn kalos_check_missing_config_json_error_output_is_structured() {
 }
 
 #[test]
+fn kalos_check_missing_target_json_error_output_names_requested_path() {
+    let temp = TempDir::new().unwrap();
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--level",
+            "project",
+            "does-not-exist-kalos-eval",
+        ])
+        .assert()
+        .code(2);
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(parsed["error"], Value::Bool(true));
+
+    let message = parsed["message"].as_str().unwrap();
+    assert!(message.contains("analysis target path"));
+    assert!(message.contains("does-not-exist-kalos-eval"));
+}
+
+#[test]
 fn kalos_check_missing_config_sarif_error_output_is_sarif_document() {
     let temp = TempDir::new().unwrap();
 
