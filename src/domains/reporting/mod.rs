@@ -248,15 +248,16 @@ impl AnalysisReport {
             output.push('\n');
         }
 
-        for diagnostic in diagnostics {
+        for diagnostic in &diagnostics {
             let _ = writeln!(
                 output,
-                "{}  {}[{}]  [{}] {}",
+                "{}  {}[{}]  [{}] {}{}",
                 format_location(&diagnostic.location),
                 render_severity(diagnostic.severity, use_color),
                 diagnostic.rule_id.as_str(),
                 diagnostic_kind_str(diagnostic.kind),
-                diagnostic.message
+                diagnostic.message,
+                human_test_module_structural_tag(diagnostic)
             );
 
             match diagnostic.kind {
@@ -300,6 +301,9 @@ impl AnalysisReport {
 
         for warning in &self.analysis_warnings {
             let _ = writeln!(output, "note: {warning}");
+        }
+        if let Some(note) = human_test_module_structural_note(&diagnostics) {
+            let _ = writeln!(output, "{note}");
         }
         let _ = writeln!(output, "── Summary ──────────────────────────");
         let _ = writeln!(output, "{}", self.human_score_line());
@@ -891,6 +895,52 @@ fn format_location(location: &crate::domains::diagnostics::FileLocation) -> Stri
         ),
         None => format!("{}:{}", location.file_path.as_str(), location.start_line),
     }
+}
+
+fn human_test_module_structural_tag(diagnostic: &Diagnostic) -> &'static str {
+    if is_test_module_structural_diagnostic(diagnostic) {
+        " [test module structural risk]"
+    } else {
+        ""
+    }
+}
+
+fn human_test_module_structural_note(diagnostics: &[&Diagnostic]) -> Option<String> {
+    let count = diagnostics
+        .iter()
+        .filter(|diagnostic| is_test_module_structural_diagnostic(diagnostic))
+        .count();
+    if count == 0 {
+        return None;
+    }
+
+    let noun = if count == 1 {
+        "diagnostic"
+    } else {
+        "diagnostics"
+    };
+    Some(format!(
+        "note: {count} test-module structural {noun} shown separately; these KAL-M001/KAL-M003 findings are test risk from --include-tests, not production module risk"
+    ))
+}
+
+fn is_test_module_structural_diagnostic(diagnostic: &Diagnostic) -> bool {
+    diagnostic.primary_scope_id.level == AnalysisLevel::Module
+        && matches!(diagnostic.rule_id.as_str(), "KAL-M001" | "KAL-M003")
+        && is_test_file(diagnostic.location.file_path.as_str())
+}
+
+fn is_test_file(path: &str) -> bool {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+
+    path.starts_with("tests/")
+        || path.contains("/tests/")
+        || path.starts_with("__tests__/")
+        || path.contains("/__tests__/")
+        || file_name.contains("_test.")
+        || file_name.contains(".test.")
+        || file_name.contains(".spec.")
+        || (file_name.starts_with("test_") && file_name.ends_with(".py"))
 }
 
 fn render_severity(severity: Severity, use_color: bool) -> String {
@@ -1803,6 +1853,156 @@ mod tests {
     }
 
     #[test]
+    fn human_output_marks_test_module_structural_diagnostics() {
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(fixture_test_module_structural_diagnostic(
+            "diag-test-module-fan-out",
+            "KAL-M001",
+            "tests/foo.rs",
+        ));
+        let report = AnalysisReport::project(
+            ReportMetadata::new(
+                vec![FilePath::from("src/"), FilePath::from("tests/")],
+                42,
+                "0.1.0",
+                "1.0.0",
+            ),
+            &fixture_metrics(),
+            diagnostics,
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                min_risk: None,
+                verbose: false,
+            },
+            Vec::new(),
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains(
+            "tests/foo.rs:1:1  warning[KAL-M001]  [metric] test module metric warning [test module structural risk]"
+        ));
+        assert!(rendered.contains(
+            "note: 1 test-module structural diagnostic shown separately; these KAL-M001/KAL-M003 findings are test risk from --include-tests, not production module risk"
+        ));
+    }
+
+    #[test]
+    fn human_output_marks_kal_m003_test_module_structural_diagnostic() {
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(fixture_test_module_structural_diagnostic(
+            "diag-test-module-instability",
+            "KAL-M003",
+            "tests/foo.rs",
+        ));
+        let report = AnalysisReport::project(
+            ReportMetadata::new(
+                vec![FilePath::from("src/"), FilePath::from("tests/")],
+                42,
+                "0.1.0",
+                "1.0.0",
+            ),
+            &fixture_metrics(),
+            diagnostics,
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                min_risk: None,
+                verbose: false,
+            },
+            Vec::new(),
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains(
+            "tests/foo.rs:1:1  warning[KAL-M003]  [metric] test module metric warning [test module structural risk]"
+        ));
+        assert!(rendered.contains(
+            "note: 1 test-module structural diagnostic shown separately; these KAL-M001/KAL-M003 findings are test risk from --include-tests, not production module risk"
+        ));
+    }
+
+    #[test]
+    fn human_output_counts_multiple_test_module_structural_diagnostics() {
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(fixture_test_module_structural_diagnostic(
+            "diag-test-module-fan-out",
+            "KAL-M001",
+            "tests/foo.rs",
+        ));
+        diagnostics.push(fixture_test_module_structural_diagnostic(
+            "diag-test-module-instability",
+            "KAL-M003",
+            "tests/bar.rs",
+        ));
+        let report = AnalysisReport::project(
+            ReportMetadata::new(
+                vec![FilePath::from("src/"), FilePath::from("tests/")],
+                42,
+                "0.1.0",
+                "1.0.0",
+            ),
+            &fixture_metrics(),
+            diagnostics,
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                min_risk: None,
+                verbose: false,
+            },
+            Vec::new(),
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains(
+            "tests/foo.rs:1:1  warning[KAL-M001]  [metric] test module metric warning [test module structural risk]"
+        ));
+        assert!(rendered.contains(
+            "tests/bar.rs:1:1  warning[KAL-M003]  [metric] test module metric warning [test module structural risk]"
+        ));
+        assert!(rendered.contains(
+            "note: 2 test-module structural diagnostics shown separately; these KAL-M001/KAL-M003 findings are test risk from --include-tests, not production module risk"
+        ));
+    }
+
+    #[test]
+    fn human_output_keeps_production_module_diagnostics_unmarked() {
+        let report = AnalysisReport::project(
+            ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
+            &fixture_metrics(),
+            fixture_diagnostics(),
+            DiagnosticsScope::WholeProject,
+            ReportViewOptions {
+                requested_level: RequestedLevel::All,
+                output_format: OutputFormat::Human,
+                strict: false,
+                minimum_severity: None,
+                min_risk: None,
+                verbose: false,
+            },
+            Vec::new(),
+        );
+
+        let rendered = report.render_human(None, false);
+
+        assert!(rendered.contains("src/lib.rs:1:1  error[KAL-M001]  [metric] module metric error"));
+        assert!(!rendered.contains("[test module structural risk]"));
+        assert!(!rendered.contains("test-module structural diagnostic"));
+    }
+
+    #[test]
     fn human_output_shows_note_when_module_score_is_na() {
         let report = AnalysisReport::project(
             ReportMetadata::new(vec![FilePath::from("src/")], 42, "0.1.0", "1.0.0"),
@@ -2381,6 +2581,44 @@ mod tests {
             pattern: None,
             template_suggestion: TemplateSuggestion {
                 explanation: "extract helper".to_owned(),
+                code_example: None,
+            },
+        }
+    }
+
+    fn fixture_test_module_structural_diagnostic(
+        id: &str,
+        rule_id: &str,
+        file_path: &str,
+    ) -> Diagnostic {
+        let metric_id = match rule_id {
+            "KAL-M003" => "M-M003",
+            _ => "M-M001",
+        };
+
+        Diagnostic {
+            id: DiagnosticId::from(id),
+            primary_scope_id: ScopeId::new(AnalysisLevel::Module, "crate::tests", file_path),
+            rule_id: RuleId::from(rule_id),
+            kind: DiagnosticKind::Metric,
+            severity: Severity::Warning,
+            location: FileLocation {
+                file_path: FilePath::from(file_path),
+                start_line: 1,
+                end_line: 80,
+                column: Some(1),
+            },
+            message: "test module metric warning".to_owned(),
+            metric: Some(MetricObservation {
+                metric_id: MetricId::from(metric_id),
+                raw_value: 4.0,
+                normalized_risk: 0.80,
+                threshold: 0.50,
+                overflow_ratio: 0.60,
+            }),
+            pattern: None,
+            template_suggestion: TemplateSuggestion {
+                explanation: "reduce test fan-out".to_owned(),
                 code_example: None,
             },
         }
