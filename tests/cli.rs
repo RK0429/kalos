@@ -988,16 +988,27 @@ fn kalos_check_output_flag_quiet_suppresses_acknowledgment() {
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_CACHE_DIR", &cache_dir)
-        .args(["check", "--format", "json", "--quiet", "--output"])
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--update-gitignore",
+            "--quiet",
+            "--output",
+        ])
         .arg(&output_path)
         .assert()
         .success()
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("wrote ").not());
+        .stderr(predicate::str::is_empty());
 
     let rendered = fs::read_to_string(&output_path).unwrap();
     let parsed: Value = serde_json::from_str(&rendered).unwrap();
     assert!(parsed.is_object(), "expected JSON object output");
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
 }
 
 #[test]
