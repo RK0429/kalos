@@ -739,6 +739,8 @@ fn kalos_check_emits_codeql_phase_progress_on_stderr() {
         .arg("check")
         .assert()
         .success()
+        .stderr(predicate::str::contains("setup bundle"))
+        .stderr(predicate::str::contains("setup bundle done"))
         .stderr(predicate::str::contains("database create"))
         .stderr(predicate::str::contains("database create done"))
         .stderr(predicate::str::contains("query run"))
@@ -775,6 +777,10 @@ fn kalos_check_emits_elapsed_time_on_database_create() {
         .arg("check")
         .assert()
         .success()
+        .stderr(
+            predicate::str::is_match(r"setup bundle done \(([0-9]+\.[0-9]s|[0-9]+m [0-9]+s)\)")
+                .unwrap(),
+        )
         .stderr(
             predicate::str::is_match(r"database create done \(([0-9]+\.[0-9]s|[0-9]+m [0-9]+s)\)")
                 .unwrap(),
@@ -920,6 +926,7 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Apple Silicon").not())
+        .stderr(predicate::str::contains("setup bundle").not())
         .stderr(predicate::str::contains("source files").not())
         .stderr(predicate::str::contains("slow-path guidance").not())
         .stderr(predicate::str::contains("first run").not())
@@ -941,6 +948,7 @@ fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Apple Silicon").not())
+        .stderr(predicate::str::contains("setup bundle").not())
         .stderr(predicate::str::contains("source files").not())
         .stderr(predicate::str::contains("slow-path guidance").not())
         .stderr(predicate::str::contains("first run").not())
