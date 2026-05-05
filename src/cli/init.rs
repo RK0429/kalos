@@ -130,7 +130,9 @@ pub(super) fn ensure_gitignore_entry(cwd: &std::path::Path) -> io::Result<Gitign
         }
 
         let mut updated_contents = contents;
-        updated_contents.push('\n');
+        if !updated_contents.is_empty() && !updated_contents.ends_with('\n') {
+            updated_contents.push('\n');
+        }
         updated_contents.push_str(KALOS_DIR_ENTRY);
         updated_contents.push('\n');
         fs::write(&gitignore_path, updated_contents)?;
@@ -182,7 +184,22 @@ mod tests {
 
         let contents = fs::read_to_string(gitignore_path).unwrap();
         assert_eq!(update, GitignoreUpdate::Added);
+        assert_eq!(contents, format!("target/\n{KALOS_DIR_ENTRY}\n"));
         assert!(contents.lines().any(|line| line.trim() == KALOS_DIR_ENTRY));
+        assert_eq!(kalos_entry_count(&contents), 1);
+    }
+
+    #[test]
+    fn adds_newline_before_kalos_entry_when_existing_gitignore_lacks_trailing_newline() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+        fs::write(&gitignore_path, "target/").unwrap();
+
+        let update = ensure_gitignore_entry(temp.path()).unwrap();
+
+        let contents = fs::read_to_string(gitignore_path).unwrap();
+        assert_eq!(update, GitignoreUpdate::Added);
+        assert_eq!(contents, format!("target/\n{KALOS_DIR_ENTRY}\n"));
         assert_eq!(kalos_entry_count(&contents), 1);
     }
 

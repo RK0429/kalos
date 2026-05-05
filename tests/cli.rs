@@ -162,7 +162,27 @@ fn kalos_init_appends_kalos_entry_to_existing_gitignore() {
 
     assert_eq!(
         fs::read_to_string(gitignore_path).unwrap(),
-        "target/\n\n.kalos/\n"
+        "target/\n.kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_init_appends_kalos_entry_after_existing_gitignore_without_trailing_newline() {
+    let temp = TempDir::new().unwrap();
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added .kalos/ to .gitignore"));
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        "target/\n.kalos/\n"
     );
 }
 
@@ -344,7 +364,7 @@ fn kalos_check_appends_to_existing_gitignore_when_update_gitignore_flag_set() {
 
     assert_eq!(
         fs::read_to_string(gitignore_path).unwrap(),
-        "target/\n\n.kalos/\n"
+        "target/\n.kalos/\n"
     );
 }
 
