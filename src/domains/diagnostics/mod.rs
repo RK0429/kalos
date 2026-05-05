@@ -160,6 +160,17 @@ pub struct PatternEvidence {
     pub pattern_type: PatternType,
     pub evidence_scopes: Vec<ScopeId>,
     pub evidence_message: String,
+    pub edge_provenance: Vec<PatternEdgeProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatternEdgeProvenance {
+    pub source_scope: ScopeId,
+    pub target_scope: ScopeId,
+    pub source_file_path: FilePath,
+    pub target_file_path: FilePath,
+    pub source_is_test: bool,
+    pub target_is_test: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -472,6 +483,7 @@ impl PatternRule {
                             "public_member_count={}, fan_out={}, average M-F002={:.6}",
                             public_member_count, fan_out, complexity_average
                         ),
+                        edge_provenance: Vec::new(),
                     }),
                     template_suggestion: template_suggestion(&self.suggestion_template),
                 })
@@ -555,6 +567,7 @@ impl PatternRule {
                             "foreign_accesses={}, local_accesses={}, foreign_ratio={:.6}",
                             foreign_accesses, local_accesses, foreign_ratio
                         ),
+                        edge_provenance: Vec::new(),
                     }),
                     template_suggestion: template_suggestion(&self.suggestion_template),
                 })
@@ -573,9 +586,10 @@ impl PatternRule {
         }
 
         graph
-            .non_trivial_sccs()
+            .production_non_trivial_sccs()
             .into_iter()
             .map(|component| {
+                let edge_provenance = graph.edge_provenance_for_component(&component);
                 let evidence_scopes = component
                     .into_iter()
                     .map(|module| scope_id_for_node(module, AnalysisLevel::Module))
@@ -585,6 +599,7 @@ impl PatternRule {
                     severity,
                     evidence_scopes,
                     "Circular dependency detected among modules".to_owned(),
+                    edge_provenance,
                 )
             })
             .collect()
@@ -655,6 +670,7 @@ fn build_cross_scope_pattern_diagnostic(
     severity: Severity,
     mut evidence_scopes: Vec<ScopeId>,
     summary: String,
+    edge_provenance: Vec<PatternEdgeProvenance>,
 ) -> Diagnostic {
     evidence_scopes.sort();
     let primary_scope_id = evidence_scopes
@@ -690,6 +706,7 @@ fn build_cross_scope_pattern_diagnostic(
             pattern_type: rule.pattern_type,
             evidence_scopes,
             evidence_message: cycle_description,
+            edge_provenance,
         }),
         template_suggestion: template_suggestion(&rule.suggestion_template),
     }
@@ -721,7 +738,8 @@ struct PatternModuleGraph<'a> {
     contains_graph: BTreeMap<NodeId, Vec<NodeId>>,
     ownership: BTreeMap<NodeId, BTreeSet<NodeId>>,
     outgoing: BTreeMap<NodeId, BTreeSet<NodeId>>,
-    sccs: Vec<Vec<&'a CpgNode>>,
+    edge_provenance: BTreeMap<(NodeId, NodeId), Vec<PatternEdgeProvenance>>,
+    production_sccs: Vec<Vec<&'a CpgNode>>,
 }
 
 impl<'a> PatternModuleGraph<'a> {
@@ -759,13 +777,18 @@ impl<'a> PatternModuleGraph<'a> {
             });
         let ownership = build_module_ownership(&modules, &contains_graph);
         let mut outgoing = BTreeMap::<NodeId, BTreeSet<NodeId>>::new();
+        let mut production_outgoing = BTreeMap::<NodeId, BTreeSet<NodeId>>::new();
+        let mut edge_provenance = BTreeMap::<(NodeId, NodeId), Vec<PatternEdgeProvenance>>::new();
         for module in &modules {
             outgoing.entry(module.id).or_default();
+            production_outgoing.entry(module.id).or_default();
         }
 
-        for edge in cpg.edges.iter().filter(|edge| {
-            matches!(edge.kind, EdgeKind::Call | EdgeKind::TypeReference)
-        }) {
+        for edge in cpg
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Call | EdgeKind::TypeReference))
+        {
             let Some(source_module) =
                 innermost_enclosing_module(edge.source, &node_by_id, &contains_parents)
             else {
@@ -778,14 +801,46 @@ impl<'a> PatternModuleGraph<'a> {
             };
 
             if source_module != target_module {
+                let Some(source_node) = node_by_id.get(&edge.source).copied() else {
+                    continue;
+                };
+                let Some(target_node) = node_by_id.get(&edge.target).copied() else {
+                    continue;
+                };
+                let Some(source_module_node) = node_by_id.get(&source_module).copied() else {
+                    continue;
+                };
+                let Some(target_module_node) = node_by_id.get(&target_module).copied() else {
+                    continue;
+                };
+                let source_is_test = is_test_file(source_node.location.file_path.as_str());
+                let target_is_test = is_test_file(target_node.location.file_path.as_str());
+
                 outgoing
                     .entry(source_module)
                     .or_default()
                     .insert(target_module);
+                edge_provenance
+                    .entry((source_module, target_module))
+                    .or_default()
+                    .push(PatternEdgeProvenance {
+                        source_scope: scope_id_for_node(source_module_node, AnalysisLevel::Module),
+                        target_scope: scope_id_for_node(target_module_node, AnalysisLevel::Module),
+                        source_file_path: source_node.location.file_path.clone(),
+                        target_file_path: target_node.location.file_path.clone(),
+                        source_is_test,
+                        target_is_test,
+                    });
+                if !source_is_test && !target_is_test {
+                    production_outgoing
+                        .entry(source_module)
+                        .or_default()
+                        .insert(target_module);
+                }
             }
         }
 
-        let sccs = build_non_trivial_sccs(&modules, &outgoing);
+        let production_sccs = build_non_trivial_sccs(&modules, &production_outgoing);
 
         Self {
             modules,
@@ -794,7 +849,8 @@ impl<'a> PatternModuleGraph<'a> {
             contains_graph,
             ownership,
             outgoing,
-            sccs,
+            edge_provenance,
+            production_sccs,
         }
     }
 
@@ -832,8 +888,49 @@ impl<'a> PatternModuleGraph<'a> {
         self.outgoing.get(&module_id).map_or(0, BTreeSet::len)
     }
 
-    fn non_trivial_sccs(&self) -> Vec<Vec<&'a CpgNode>> {
-        self.sccs.clone()
+    fn production_non_trivial_sccs(&self) -> Vec<Vec<&'a CpgNode>> {
+        self.production_sccs.clone()
+    }
+
+    fn edge_provenance_for_component(
+        &self,
+        component: &[&'a CpgNode],
+    ) -> Vec<PatternEdgeProvenance> {
+        let module_ids = component
+            .iter()
+            .map(|module| module.id)
+            .collect::<BTreeSet<_>>();
+        let mut provenance = component
+            .iter()
+            .flat_map(|source| {
+                component.iter().filter_map(|target| {
+                    self.edge_provenance
+                        .get(&(source.id, target.id))
+                        .map(|edges| {
+                            edges
+                                .iter()
+                                .filter(|edge| {
+                                    module_ids.contains(&source.id)
+                                        && module_ids.contains(&target.id)
+                                        && !edge.source_is_test
+                                        && !edge.target_is_test
+                                })
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        })
+                })
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        provenance.sort_by_key(|edge| {
+            (
+                edge.source_scope.qualified_name.clone(),
+                edge.target_scope.qualified_name.clone(),
+                edge.source_file_path.clone(),
+                edge.target_file_path.clone(),
+            )
+        });
+        provenance
     }
 }
 
@@ -969,6 +1066,19 @@ fn build_non_trivial_sccs<'a>(
             .expect("non-trivial SCC must contain at least one module")
     });
     components
+}
+
+fn is_test_file(path: &str) -> bool {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+
+    path.starts_with("tests/")
+        || path.contains("/tests/")
+        || path.starts_with("__tests__/")
+        || path.contains("/__tests__/")
+        || file_name.contains("_test.")
+        || file_name.contains(".test.")
+        || file_name.contains(".spec.")
+        || (file_name.starts_with("test_") && file_name.ends_with(".py"))
 }
 
 #[cfg(test)]
@@ -1353,6 +1463,55 @@ mod tests {
                 .len(),
             2
         );
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .pattern
+                .as_ref()
+                .is_some_and(|pattern| !pattern.edge_provenance.is_empty())
+        }));
+        assert!(
+            diagnostics
+                .iter()
+                .flat_map(|diagnostic| diagnostic.pattern.as_ref().unwrap().edge_provenance.iter())
+                .all(|edge| !edge.source_is_test && !edge.target_is_test)
+        );
+    }
+
+    #[test]
+    fn circular_dependency_detection_ignores_test_only_reverse_edge() {
+        for test_file_path in ["tests/b_test.rs", "src/b.spec.ts", "test_app.py"] {
+            let cpg = CpgBuilder::new()
+                .module_at("a", "crate::a", "src/a.rs", 1, 20)
+                .module_at("b", "crate::b", "src/b.rs", 1, 20)
+                .function_at("a_fn", "crate::a::f", "src/a.rs", 2, 2)
+                .function_at("b_fn", "crate::b::f", "src/b.rs", 2, 2)
+                .function_at("b_test", "crate::b::tests::uses_a", test_file_path, 3, 3)
+                .edge("a", "a_fn", EdgeKind::Contains)
+                .edge("b", "b_fn", EdgeKind::Contains)
+                .edge("b", "b_test", EdgeKind::Contains)
+                .edge("a_fn", "b_fn", EdgeKind::Call)
+                .edge("b_test", "a_fn", EdgeKind::Call)
+                .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+            let diagnostics = builtin_pattern_rules()
+                .into_iter()
+                .find(|rule| rule.id == RuleId::from("KAL-PAT003"))
+                .unwrap()
+                .detect(
+                    &project_subgraph(&UnifiedCpg {
+                        id: CpgId::from("test-only-reverse-cycle-regression"),
+                        nodes: cpg.nodes,
+                        edges: cpg.edges,
+                    }),
+                    &empty_metrics(),
+                    &RuleConfig {
+                        enabled: Some(true),
+                        threshold: None,
+                        severity: None,
+                    },
+                );
+
+            assert!(diagnostics.is_empty(), "path: {test_file_path}");
+        }
     }
 
     #[test]
@@ -1473,6 +1632,7 @@ mod tests {
                         "src/lib.rs",
                     )],
                     evidence_message: "evidence".to_owned(),
+                    edge_provenance: Vec::new(),
                 }),
                 template_suggestion: super::template_suggestion("pattern"),
             },
@@ -1497,6 +1657,7 @@ mod tests {
                         ScopeId::new(AnalysisLevel::Module, "crate::b", "src/b.rs"),
                     ],
                     evidence_message: "a -> b".to_owned(),
+                    edge_provenance: Vec::new(),
                 }),
                 template_suggestion: super::template_suggestion("cycle"),
             },
