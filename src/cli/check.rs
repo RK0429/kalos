@@ -5,37 +5,39 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use clap::{Args, ValueEnum};
 use serde_json::json;
 use tracing::debug;
 
 use super::init::{
-    GitignoreStatus, GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry,
-    gitignore_entry_status,
+    ensure_gitignore_entry, gitignore_entry_status, GitignoreStatus, GitignoreUpdate,
+    KALOS_DIR_ENTRY,
 };
 
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
 use crate::adapters::diff_source::GitDiffAdapter;
 use crate::adapters::extractor::CodeQlAdapter;
-use crate::adapters::llm::HttpLlmAdapter;
 use crate::adapters::llm::http::validate_llm_config;
+use crate::adapters::llm::HttpLlmAdapter;
 use crate::adapters::plugin::{
     EvaluationWarning, ModuleLoadWarning, PluginHostError, WasmPluginHost,
 };
-use crate::adapters::tool_cache::{ManagedToolCacheAdapter, Platform, codeql_bundle_manifest};
+use crate::adapters::tool_cache::{codeql_bundle_manifest, ManagedToolCacheAdapter, Platform};
 use crate::application::pipeline::{AnalysisPipeline, DiffConfig};
-use crate::domains::MetricId;
-use crate::domains::Severity;
 use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
 use crate::domains::metrics::builtin_metric_definitions;
 use crate::domains::reporting::{
-    OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
-    render_sarif_error_document,
+    render_sarif_error_document, OutputFormat as DomainOutputFormat, ReportViewOptions,
+    RequestedLevel as DomainRequestedLevel,
 };
+use crate::domains::MetricId;
+use crate::domains::Severity;
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
+use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
 use crate::ports::PluginPort;
 
 #[derive(Debug, Clone, Args)]
@@ -286,6 +288,8 @@ impl CheckCommand {
             Some(cache_dir) => ManagedToolCacheAdapter::with_cache_dir(manifest, cache_dir.clone()),
             None => ManagedToolCacheAdapter::new(manifest),
         };
+        let tool_cache =
+            ProgressToolCacheAdapter::new(tool_cache, self.format == OutputFormat::Human);
         let exclude_patterns = config
             .exclude_patterns
             .iter()
@@ -511,6 +515,54 @@ impl CheckCommand {
         }
 
         map_exit_code(result.exit_code)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ProgressToolCacheAdapter<T> {
+    inner: T,
+    progress: bool,
+}
+
+impl<T> ProgressToolCacheAdapter<T> {
+    fn new(inner: T, progress: bool) -> Self {
+        Self { inner, progress }
+    }
+}
+
+impl<T> ToolCachePort for ProgressToolCacheAdapter<T>
+where
+    T: ToolCachePort,
+{
+    type Error = T::Error;
+
+    fn resolve_bundle(
+        &self,
+        request: &ToolCacheRequest,
+    ) -> Result<ResolvedToolBundle, Self::Error> {
+        if !self.progress {
+            return self.inner.resolve_bundle(request);
+        }
+
+        eprintln!("  codeql: setup bundle ...");
+        let started = Instant::now();
+        let bundle = self.inner.resolve_bundle(request)?;
+        eprintln!(
+            "  codeql: setup bundle done ({})",
+            format_elapsed(started.elapsed())
+        );
+        Ok(bundle)
+    }
+}
+
+fn format_elapsed(elapsed: Duration) -> String {
+    if elapsed.as_secs() < 60 {
+        let secs = elapsed.as_secs();
+        let tenths = elapsed.subsec_millis() / 100;
+        format!("{secs}.{tenths}s")
+    } else {
+        let secs = elapsed.as_secs();
+        format!("{}m {}s", secs / 60, secs % 60)
     }
 }
 
