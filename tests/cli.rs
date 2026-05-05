@@ -1444,6 +1444,14 @@ fn kalos_check_diff_falls_back_to_full_analysis_when_baseline_is_missing() {
             "compatible diff baseline was not found; falling back to full analysis",
         ));
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.starts_with("Full analysis fallback completed; showing "),
+        "human headline should make full-analysis fallback explicit, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.starts_with("Analyzed "),
+        "human headline must not look like a plain diff-scoped analysis after fallback, got:\n{stdout}"
+    );
     let note_position = stdout
         .find("note: compatible diff baseline was not found; falling back to full analysis")
         .expect("human output should surface the fallback notice");
