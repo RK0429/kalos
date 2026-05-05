@@ -537,6 +537,13 @@ pub fn render_default_config() -> String {
     output.push_str("[general]\n");
     output.push_str("# exclude = [\"vendor/**\", \"generated/**\"]\n\n");
     output.push_str("# Metric rule thresholds (defaults shown as comments)\n");
+    output.push_str("# CI baseline gates should normally use `kalos check --level project`.\n");
+    output.push_str(
+        "# Module/all runs expose architecture triage diagnostics and may be noisy on highly connected repositories.\n",
+    );
+    output.push_str(
+        "# For noisy module rules, raise `threshold`, lower `severity`, or set `enabled = false`; remediate by reducing fan-out, breaking cycles, or moving orchestration behind a higher-level boundary.\n",
+    );
 
     for (rule_id, threshold) in DEFAULT_METRIC_RULE_THRESHOLDS {
         let description = rule_descriptions
@@ -1523,6 +1530,10 @@ severity = "fatal"
         assert!(rendered.contains("# [rules.KAL-F001]"));
         assert!(rendered.contains(&format!("# {metric_description}")));
         assert!(rendered.contains("# threshold = 0.55"));
+        assert!(rendered
+            .contains("# CI baseline gates should normally use `kalos check --level project`."));
+        assert!(rendered.contains("# Module/all runs expose architecture triage diagnostics"));
+        assert!(rendered.contains("raise `threshold`, lower `severity`, or set `enabled = false`"));
         assert!(rendered.contains("# [rules.KAL-PAT003]"));
         assert!(rendered.contains(&format!("# {pattern_description}")));
         assert!(rendered.contains("project = 0.25"));

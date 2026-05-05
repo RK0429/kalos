@@ -32,6 +32,11 @@ fn kalos_init_creates_default_config_file() {
     let config = fs::read_to_string(temp.path().join(".kalos.toml")).unwrap();
     assert!(config.contains("[score.weights]"));
     assert!(config.contains(&format!("# {metric_description}")));
+    assert!(
+        config.contains("# CI baseline gates should normally use `kalos check --level project`.")
+    );
+    assert!(config.contains("# Module/all runs expose architecture triage diagnostics"));
+    assert!(config.contains("raise `threshold`, lower `severity`, or set `enabled = false`"));
     assert!(config.contains("# [rules.KAL-F001]"));
     assert!(config.contains("# [rules.KAL-PAT003]"));
 }
@@ -558,6 +563,25 @@ fn kalos_check_help_describes_omitted_severity_behavior() {
         .success()
         .stdout(predicate::str::contains(
             "minimum severity threshold for diagnostics (omit to show all)",
+        ));
+}
+
+#[test]
+fn kalos_check_help_explains_project_gate_and_module_triage() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "`--level project` is the recommended baseline gate for CI",
+        ))
+        .stdout(predicate::str::contains(
+            "module diagnostics such as KAL-M001, KAL-M002, and KAL-M003",
+        ))
+        .stdout(predicate::str::contains("tune noisy"))
+        .stdout(predicate::str::contains(
+            "threshold, severity, or enabled overrides",
         ));
 }
 
