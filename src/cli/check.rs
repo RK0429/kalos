@@ -71,6 +71,12 @@ pub struct CheckCommand {
     pub config: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "path",
+        help = "workspace root to resolve target paths against"
+    )]
+    pub workspace_root: Option<PathBuf>,
+    #[arg(
+        long,
         value_name = "pattern",
         help = "glob patterns to exclude from analysis (repeatable)"
     )]
@@ -175,6 +181,7 @@ impl CheckCommand {
     pub fn resolve_options(&self, cwd: PathBuf) -> ResolveOptions {
         ResolveOptions {
             cwd,
+            workspace_root: self.workspace_root.clone(),
             config_path: self.config.clone(),
             analysis_targets: self.requested_paths(),
             targets_explicitly_specified: self.targets_explicitly_specified(),

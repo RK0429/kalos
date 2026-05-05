@@ -232,6 +232,34 @@ fn kalos_check_does_not_modify_parent_gitignore_when_run_from_nested_subdirector
 }
 
 #[test]
+fn kalos_check_update_gitignore_from_nested_subdirectory_does_not_modify_parent_gitignore() {
+    let parent_workspace = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(parent_workspace.path());
+    let parent_gitignore = parent_workspace.path().join(".gitignore");
+    fs::write(&parent_gitignore, "target/\n").unwrap();
+    let nested_dir = parent_workspace.path().join("tmp").join("sandbox");
+    fs::create_dir_all(&nested_dir).unwrap();
+    fs::write(nested_dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(&nested_dir)
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "notice: created .gitignore with .kalos/ entry",
+        ));
+
+    assert_eq!(fs::read_to_string(&parent_gitignore).unwrap(), "target/\n");
+    assert_eq!(
+        fs::read_to_string(nested_dir.join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+}
+
+#[test]
 fn kalos_check_does_not_warn_when_gitignore_already_contains_kalos_entry() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
@@ -541,6 +569,48 @@ fn kalos_check_with_external_target_path_succeeds() {
         .env("KALOS_CACHE_DIR", &cache_dir)
         .arg("check")
         .arg(&target_workspace_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
+fn kalos_check_workspace_root_rejects_external_target_path() {
+    let workspace = seeded_workspace();
+    let external = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(workspace.path());
+    let workspace_path = fs::canonicalize(workspace.path()).unwrap();
+    let external_path = fs::canonicalize(external.path()).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(workspace.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .arg("--workspace-root")
+        .arg(&workspace_path)
+        .arg(&external_path)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("analysis target path"))
+        .stderr(predicate::str::contains("is outside workspace root"));
+}
+
+#[test]
+fn kalos_check_workspace_root_resolves_relative_target_from_outside_cwd() {
+    let workspace = seeded_workspace();
+    let external_cwd = TempDir::new().unwrap();
+    let cache_dir = seed_fake_codeql_bundle(workspace.path());
+    let workspace_path = fs::canonicalize(workspace.path()).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(external_cwd.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .arg("--workspace-root")
+        .arg(&workspace_path)
+        .arg("src")
         .assert()
         .success()
         .stdout(predicate::str::is_empty().not());

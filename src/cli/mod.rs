@@ -92,6 +92,8 @@ mod tests {
             "module",
             "--config",
             "config/.kalos.toml",
+            "--workspace-root",
+            "workspace",
             "--exclude",
             "vendor/**",
             "--exclude",
@@ -120,6 +122,10 @@ mod tests {
         assert_eq!(
             command.config,
             Some(std::path::PathBuf::from("config/.kalos.toml"))
+        );
+        assert_eq!(
+            command.workspace_root,
+            Some(std::path::PathBuf::from("workspace"))
         );
         assert_eq!(
             command.exclude,
@@ -212,6 +218,7 @@ mod tests {
         assert!(help.contains("analysis granularity level"));
         assert!(help.contains("[default: all]"));
         assert!(help.contains("path to configuration file (.kalos.toml)"));
+        assert!(help.contains("workspace root to resolve target paths against"));
         assert!(help.contains("glob patterns to exclude from analysis (repeatable)"));
         assert!(help.contains("minimum severity threshold for diagnostics (omit to show all)"));
         assert!(help.contains("git base ref for differential analysis"));
