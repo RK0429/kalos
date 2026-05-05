@@ -321,6 +321,86 @@ fn kalos_check_appends_to_existing_gitignore_when_update_gitignore_flag_set() {
 }
 
 #[test]
+fn kalos_check_update_gitignore_missing_diff_ref_does_not_create_gitignore() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore", "--diff", "missing-ref"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(".gitignore").not());
+
+    assert!(!temp.path().join(".gitignore").exists());
+}
+
+#[test]
+fn kalos_check_update_gitignore_output_directory_failure_does_not_create_gitignore() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_dir = temp.path().join("report-dir");
+    fs::create_dir(&output_dir).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .arg("--update-gitignore")
+        .arg("--output")
+        .arg(&output_dir)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("failed to write output file"))
+        .stderr(predicate::str::contains(".gitignore").not());
+
+    assert!(!temp.path().join(".gitignore").exists());
+}
+
+#[test]
+fn kalos_check_update_gitignore_no_supported_files_does_not_create_gitignore() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("README.md"), "# placeholder\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Analyzed 0 files"))
+        .stderr(predicate::str::contains(".gitignore").not());
+
+    assert!(!temp.path().join(".gitignore").exists());
+}
+
+#[test]
+fn kalos_check_update_gitignore_no_supported_files_preserves_existing_gitignore() {
+    let temp = TempDir::new().unwrap();
+    let gitignore_path = temp.path().join(".gitignore");
+    let original_contents = "target/\n";
+    fs::write(temp.path().join("README.md"), "# placeholder\n").unwrap();
+    fs::write(&gitignore_path, original_contents).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Analyzed 0 files"))
+        .stderr(predicate::str::contains(".gitignore").not());
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        original_contents
+    );
+}
+
+#[test]
 fn kalos_root_help_uses_uppercase_cpg_in_about_text() {
     Command::cargo_bin("kalos")
         .unwrap()
