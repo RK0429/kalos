@@ -436,6 +436,7 @@ impl CheckCommand {
                 self.update_gitignore,
                 &config.workspace_root.abs_path,
                 result.report.metadata.file_count,
+                self.format == OutputFormat::Human,
             );
 
             if !self.quiet {
@@ -459,6 +460,7 @@ impl CheckCommand {
                 self.update_gitignore,
                 &config.workspace_root.abs_path,
                 result.report.metadata.file_count,
+                self.format == OutputFormat::Human,
             );
             println!("{rendered}");
         }
@@ -471,6 +473,7 @@ fn handle_gitignore_policy(
     update_gitignore: bool,
     workspace_root: &std::path::Path,
     file_count: usize,
+    emit_messages: bool,
 ) {
     if update_gitignore && file_count == 0 {
         return;
@@ -479,28 +482,38 @@ fn handle_gitignore_policy(
     if update_gitignore {
         match ensure_gitignore_entry(workspace_root) {
             Ok(GitignoreUpdate::Created) => {
-                eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+                if emit_messages {
+                    eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+                }
             }
             Ok(GitignoreUpdate::Added) => {
-                eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
+                if emit_messages {
+                    eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
+                }
             }
             Ok(GitignoreUpdate::Unchanged) => {}
             Err(error) => {
-                eprintln!("warning: failed to update .gitignore: {error}");
+                if emit_messages {
+                    eprintln!("warning: failed to update .gitignore: {error}");
+                }
             }
         }
     } else {
         match gitignore_entry_status(workspace_root) {
             Ok(GitignoreStatus::EntryPresent) => {}
             Ok(GitignoreStatus::Missing | GitignoreStatus::EntryAbsent) => {
-                eprintln!(
-                    "warning: {KALOS_DIR_ENTRY} is not in .gitignore. \
-                     Run with --update-gitignore to add it, \
-                     or add it manually to avoid committing analysis cache."
-                );
+                if emit_messages {
+                    eprintln!(
+                        "warning: {KALOS_DIR_ENTRY} is not in .gitignore. \
+                         Run with --update-gitignore to add it, \
+                         or add it manually to avoid committing analysis cache."
+                    );
+                }
             }
             Err(error) => {
-                eprintln!("warning: failed to inspect .gitignore: {error}");
+                if emit_messages {
+                    eprintln!("warning: failed to inspect .gitignore: {error}");
+                }
             }
         }
     }
