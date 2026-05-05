@@ -3805,6 +3805,7 @@ mod tests {
                 pattern_type: PatternType::FeatureEnvy,
                 evidence_scopes,
                 evidence_message: "cross-module access".to_owned(),
+                edge_provenance: Vec::new(),
             }),
             template_suggestion: TemplateSuggestion {
                 explanation: "move the behavior closer to the data".to_owned(),

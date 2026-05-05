@@ -8,7 +8,8 @@ pub const SARIF_VERSION: &str = "2.1.0";
 
 use crate::domains::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope,
-    LlmSuggestionBundle, PatternType, SummaryScope, builtin_metric_rules, builtin_pattern_rules,
+    LlmSuggestionBundle, PatternEdgeProvenance, PatternType, SummaryScope, builtin_metric_rules,
+    builtin_pattern_rules,
 };
 use crate::domains::metrics::{
     AnalysisMetrics, MetricMetadata, MetricParticipation, MetricValue, ScopeMetrics,
@@ -987,6 +988,22 @@ fn pattern_evidence_json(pattern: &crate::domains::diagnostics::PatternEvidence)
             .map(scope_json)
             .collect::<Vec<_>>(),
         "evidence_message": pattern.evidence_message,
+        "edge_provenance": pattern
+            .edge_provenance
+            .iter()
+            .map(edge_provenance_json)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn edge_provenance_json(edge: &PatternEdgeProvenance) -> Value {
+    json!({
+        "source_scope": scope_json(&edge.source_scope),
+        "target_scope": scope_json(&edge.target_scope),
+        "source_file_path": edge.source_file_path.as_str(),
+        "target_file_path": edge.target_file_path.as_str(),
+        "source_is_test": edge.source_is_test,
+        "target_is_test": edge.target_is_test,
     })
 }
 
@@ -1171,7 +1188,7 @@ mod tests {
     };
     use crate::domains::diagnostics::{
         Diagnostic, DiagnosticKind, DiagnosticsScope, FileLocation, MetricObservation,
-        PatternEvidence, PatternType, TemplateSuggestion,
+        PatternEdgeProvenance, PatternEvidence, PatternType, TemplateSuggestion,
     };
     use crate::domains::metrics::{
         AnalysisMetrics, MetricMetadata, MetricParticipation, MetricValue, OverallScore,
@@ -1525,6 +1542,33 @@ mod tests {
         let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
 
         assert_eq!(parsed["files_analyzed"], expected_file_count);
+    }
+
+    #[test]
+    fn json_output_includes_pattern_edge_provenance() {
+        let report = project_report(
+            RequestedLevel::All,
+            None,
+            &fixture_metrics(),
+            fixture_diagnostics(),
+        );
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let cycle_diagnostic = parsed["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "KAL-PAT003")
+            .expect("cycle diagnostic");
+        let edge_provenance = cycle_diagnostic["pattern"]["edge_provenance"]
+            .as_array()
+            .expect("edge provenance array");
+
+        assert_eq!(edge_provenance.len(), 2);
+        assert_eq!(edge_provenance[0]["source_file_path"], "src/parser.rs");
+        assert_eq!(edge_provenance[0]["target_file_path"], "src/lexer.rs");
+        assert_eq!(edge_provenance[0]["source_is_test"], false);
+        assert_eq!(edge_provenance[0]["target_is_test"], false);
     }
 
     #[test]
@@ -2270,6 +2314,40 @@ mod tests {
                         ScopeId::new(AnalysisLevel::Module, "lexer", "src/lexer.rs"),
                     ],
                     evidence_message: "parser -> lexer -> parser".to_owned(),
+                    edge_provenance: vec![
+                        PatternEdgeProvenance {
+                            source_scope: ScopeId::new(
+                                AnalysisLevel::Module,
+                                "parser",
+                                "src/parser.rs",
+                            ),
+                            target_scope: ScopeId::new(
+                                AnalysisLevel::Module,
+                                "lexer",
+                                "src/lexer.rs",
+                            ),
+                            source_file_path: FilePath::from("src/parser.rs"),
+                            target_file_path: FilePath::from("src/lexer.rs"),
+                            source_is_test: false,
+                            target_is_test: false,
+                        },
+                        PatternEdgeProvenance {
+                            source_scope: ScopeId::new(
+                                AnalysisLevel::Module,
+                                "lexer",
+                                "src/lexer.rs",
+                            ),
+                            target_scope: ScopeId::new(
+                                AnalysisLevel::Module,
+                                "parser",
+                                "src/parser.rs",
+                            ),
+                            source_file_path: FilePath::from("src/lexer.rs"),
+                            target_file_path: FilePath::from("src/parser.rs"),
+                            source_is_test: false,
+                            target_is_test: false,
+                        },
+                    ],
                 }),
                 template_suggestion: TemplateSuggestion {
                     explanation: "break the cycle".to_owned(),
