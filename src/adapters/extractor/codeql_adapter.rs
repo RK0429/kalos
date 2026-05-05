@@ -163,6 +163,7 @@ pub struct CodeQlAdapter<F, R, T> {
     progress: bool,
     is_emulated: bool,
     min_language_ratio: f64,
+    database_root: Option<PathBuf>,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -183,6 +184,7 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             progress: false,
             is_emulated: false,
             min_language_ratio: DEFAULT_MIN_LANGUAGE_RATIO,
+            database_root: None,
         }
     }
 
@@ -198,6 +200,11 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
 
     pub fn with_min_language_ratio(mut self, ratio: f64) -> Self {
         self.min_language_ratio = ratio;
+        self
+    }
+
+    pub fn with_database_root(mut self, database_root: impl Into<PathBuf>) -> Self {
+        self.database_root = Some(database_root.into());
         self
     }
 
@@ -329,11 +336,7 @@ where
             if self.progress {
                 eprintln!("  codeql: analyzing {} ...", language_name(language));
             }
-            let database_path = request
-                .workspace_root
-                .join(".kalos")
-                .join("codeql")
-                .join(&lang_dir);
+            let database_path = self.database_root(&request.workspace_root).join(&lang_dir);
             let cache_key_path = database_path.with_extension("cache_key");
             let decoded_cache_path = database_path.with_extension("decoded.json");
             let bqrs_path = database_path.with_extension("bqrs");
@@ -537,6 +540,14 @@ where
         }
         analysis.warnings.extend(language_warnings);
         Ok(analysis)
+    }
+}
+
+impl<F, R, T> CodeQlAdapter<F, R, T> {
+    fn database_root(&self, workspace_root: &Path) -> PathBuf {
+        self.database_root
+            .clone()
+            .unwrap_or_else(|| workspace_root.join(".kalos").join("codeql"))
     }
 }
 
@@ -1127,6 +1138,61 @@ mod tests {
                 .created_dirs()
                 .contains(&PathBuf::from("/workspace/.kalos/codeql"))
         );
+    }
+
+    #[test]
+    fn codeql_adapter_uses_external_database_root_when_configured() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
+        let file_system_for_assertion = file_system.clone();
+        let command_runner = MockCommandRunner::new();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: b"{}".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner,
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_database_root("/external/kalos-cache/codeql/databases");
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let created_dirs = file_system_for_assertion.created_dirs();
+        assert!(created_dirs.contains(&PathBuf::from("/external/kalos-cache/codeql/databases")));
+        assert!(!created_dirs.contains(&PathBuf::from("/workspace/.kalos/codeql")));
     }
 
     #[test]

@@ -42,8 +42,10 @@ use crate::ports::PluginPort;
 #[command(
     about = "run code quality analysis",
     after_help = "NOTE: Normal `check` execution may write to locations such as:\n  \
-                  - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases.\n  \
-                  - `$KALOS_CACHE_DIR/baselines/` may store cached baselines for full-workspace runs in Git repositories.\n  \
+                  - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases unless --cache-dir is passed.\n  \
+                  - `$KALOS_CACHE_DIR/codeql/` or `--cache-dir <path>/codeql/` may store managed CodeQL bundles.\n  \
+                  - `$KALOS_CACHE_DIR/baselines/` or `--cache-dir <path>/baselines/` may store cached baselines for full-workspace runs in Git repositories.\n  \
+                  - `--cache-dir <path>/codeql/databases/<language>/` stores per-language CodeQL databases when --cache-dir is passed.\n  \
                   - `<repo>/.gitignore` is only created or updated when --update-gitignore is passed.\n\n\
                   NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
                   which may cause significantly slower analysis on first invocation."
@@ -69,6 +71,12 @@ pub struct CheckCommand {
         help = "path to configuration file (.kalos.toml)"
     )]
     pub config: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "path",
+        help = "store managed bundles, baselines, and CodeQL databases under this cache directory"
+    )]
+    pub cache_dir: Option<PathBuf>,
     #[arg(
         long,
         value_name = "path",
@@ -257,7 +265,10 @@ impl CheckCommand {
             }
         }
         let codeql_version = manifest.version.clone();
-        let tool_cache = ManagedToolCacheAdapter::new(manifest);
+        let tool_cache = match &self.cache_dir {
+            Some(cache_dir) => ManagedToolCacheAdapter::with_cache_dir(manifest, cache_dir.clone()),
+            None => ManagedToolCacheAdapter::new(manifest),
+        };
         let exclude_patterns = config
             .exclude_patterns
             .iter()
@@ -270,6 +281,9 @@ impl CheckCommand {
             codeql_version,
             exclude_patterns,
         );
+        if let Some(cache_dir) = &self.cache_dir {
+            extractor = extractor.with_database_root(cache_dir.join("codeql").join("databases"));
+        }
         if self.format == OutputFormat::Human {
             extractor = extractor.with_progress();
         }
@@ -308,7 +322,7 @@ impl CheckCommand {
         );
 
         let result = if let Some(base_ref) = &self.diff {
-            let cache = match BaselineCacheAdapter::new() {
+            let cache = match baseline_cache_adapter(self.cache_dir.as_ref()) {
                 Ok(cache) => cache,
                 Err(error) => {
                     let message = error.to_string();
@@ -350,10 +364,12 @@ impl CheckCommand {
                 }
             }
         } else {
-            let baseline_result = BaselineCacheAdapter::new().ok().and_then(|cache| {
-                let head_tree_hash = resolve_head_tree_hash(&config.workspace_root.abs_path)?;
-                Some((cache, head_tree_hash))
-            });
+            let baseline_result = baseline_cache_adapter(self.cache_dir.as_ref())
+                .ok()
+                .and_then(|cache| {
+                    let head_tree_hash = resolve_head_tree_hash(&config.workspace_root.abs_path)?;
+                    Some((cache, head_tree_hash))
+                });
 
             let run_result = if let Some((cache, head_tree_hash)) = baseline_result.as_ref() {
                 pipeline.run_full_workspace(
@@ -440,12 +456,14 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
 
-            handle_gitignore_policy(
-                self.update_gitignore,
-                &config.workspace_root.abs_path,
-                result.report.metadata.file_count,
-                self.format == OutputFormat::Human,
-            );
+            if self.cache_dir.is_none() {
+                handle_gitignore_policy(
+                    self.update_gitignore,
+                    &config.workspace_root.abs_path,
+                    result.report.metadata.file_count,
+                    self.format == OutputFormat::Human,
+                );
+            }
 
             if !self.quiet {
                 let file_count = result.report.metadata.file_count;
@@ -464,16 +482,27 @@ impl CheckCommand {
                 );
             }
         } else {
-            handle_gitignore_policy(
-                self.update_gitignore,
-                &config.workspace_root.abs_path,
-                result.report.metadata.file_count,
-                self.format == OutputFormat::Human,
-            );
+            if self.cache_dir.is_none() {
+                handle_gitignore_policy(
+                    self.update_gitignore,
+                    &config.workspace_root.abs_path,
+                    result.report.metadata.file_count,
+                    self.format == OutputFormat::Human,
+                );
+            }
             println!("{rendered}");
         }
 
         map_exit_code(result.exit_code)
+    }
+}
+
+fn baseline_cache_adapter(
+    cache_dir: Option<&PathBuf>,
+) -> Result<BaselineCacheAdapter, crate::adapters::baseline_cache::CacheError> {
+    match cache_dir {
+        Some(cache_dir) => Ok(BaselineCacheAdapter::with_cache_dir(cache_dir.clone())),
+        None => BaselineCacheAdapter::new(),
     }
 }
 
