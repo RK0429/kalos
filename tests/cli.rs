@@ -746,6 +746,24 @@ fn kalos_check_analyzes_all_languages_when_min_ratio_zero() {
 }
 
 #[test]
+fn kalos_check_rejects_min_language_ratio_outside_unit_range() {
+    for args in [
+        vec!["check", "--min-language-ratio", "1.5"],
+        vec!["check", "--min-language-ratio=-0.1"],
+    ] {
+        Command::cargo_bin("kalos")
+            .unwrap()
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("invalid value"))
+            .stderr(predicate::str::contains(
+                "ratio must be between 0.0 and 1.0",
+            ));
+    }
+}
+
+#[test]
 fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
