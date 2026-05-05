@@ -217,11 +217,32 @@ impl AnalysisReport {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let _ = writeln!(
-            output,
-            "Analyzed {} files in {}",
-            self.metadata.file_count, analysis_targets
-        );
+        if self.is_full_analysis_fallback()
+            && self.diagnostics.diagnostics_scope == DiagnosticsScope::AffectedOnly
+        {
+            let noun = if self.metadata.file_count == 1 {
+                "file"
+            } else {
+                "files"
+            };
+            let _ = writeln!(
+                output,
+                "Full analysis fallback completed; showing {} changed {} in {}",
+                self.metadata.file_count, noun, analysis_targets
+            );
+        } else if self.is_full_analysis_fallback() {
+            let _ = writeln!(
+                output,
+                "Full analysis fallback completed; analyzed {} files in {}",
+                self.metadata.file_count, analysis_targets
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "Analyzed {} files in {}",
+                self.metadata.file_count, analysis_targets
+            );
+        }
         if !diagnostics.is_empty() {
             output.push('\n');
         }
@@ -323,6 +344,12 @@ impl AnalysisReport {
         }
 
         output
+    }
+
+    fn is_full_analysis_fallback(&self) -> bool {
+        self.analysis_warnings
+            .iter()
+            .any(|warning| warning.contains("falling back to full analysis"))
     }
 
     pub fn render_json(
