@@ -28,6 +28,18 @@ fn supported_extensions_display() -> String {
         .join(", ")
 }
 
+fn format_analysis_targets(analysis_targets: &[FilePath]) -> String {
+    if analysis_targets.is_empty() {
+        ".".to_owned()
+    } else {
+        analysis_targets
+            .iter()
+            .map(FilePath::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 fn codeql_executable_path(bundle_cache_path: &Path) -> PathBuf {
     bundle_cache_path.join(format!("codeql{}", std::env::consts::EXE_SUFFIX))
 }
@@ -221,9 +233,12 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
 
 #[derive(Debug, Error)]
 pub enum CodeQlAdapterError {
-    #[error("failed to collect source files under `{workspace_root}`: {source}")]
+    #[error(
+        "failed to collect source files under `{workspace_root}` for analysis target path(s) `{analysis_targets}`: {source}"
+    )]
     CollectFiles {
         workspace_root: PathBuf,
+        analysis_targets: String,
         #[source]
         source: io::Error,
     },
@@ -280,6 +295,7 @@ where
             .collect(&request.analysis_targets)
             .map_err(|source| CodeQlAdapterError::CollectFiles {
                 workspace_root: request.workspace_root.clone(),
+                analysis_targets: format_analysis_targets(&request.analysis_targets),
                 source,
             })?;
         if source_files.is_empty() {
