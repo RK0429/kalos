@@ -12,33 +12,33 @@ use serde_json::json;
 use tracing::debug;
 
 use super::init::{
-    ensure_gitignore_entry, gitignore_entry_status, GitignoreStatus, GitignoreUpdate,
-    KALOS_DIR_ENTRY,
+    GitignoreStatus, GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry,
+    gitignore_entry_status,
 };
 
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
 use crate::adapters::diff_source::GitDiffAdapter;
 use crate::adapters::extractor::CodeQlAdapter;
-use crate::adapters::llm::http::validate_llm_config;
 use crate::adapters::llm::HttpLlmAdapter;
+use crate::adapters::llm::http::validate_llm_config;
 use crate::adapters::plugin::{
     EvaluationWarning, ModuleLoadWarning, PluginHostError, WasmPluginHost,
 };
-use crate::adapters::tool_cache::{codeql_bundle_manifest, ManagedToolCacheAdapter, Platform};
+use crate::adapters::tool_cache::{ManagedToolCacheAdapter, Platform, codeql_bundle_manifest};
 use crate::application::pipeline::{AnalysisPipeline, DiffConfig};
+use crate::domains::MetricId;
+use crate::domains::Severity;
 use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
 use crate::domains::metrics::builtin_metric_definitions;
 use crate::domains::reporting::{
-    render_sarif_error_document, OutputFormat as DomainOutputFormat, ReportViewOptions,
-    RequestedLevel as DomainRequestedLevel,
+    OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
+    render_sarif_error_document,
 };
-use crate::domains::MetricId;
-use crate::domains::Severity;
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
-use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
 use crate::ports::PluginPort;
+use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
 
 #[derive(Debug, Clone, Args)]
 #[command(

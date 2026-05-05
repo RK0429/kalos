@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 
-use crate::domains::config::{render_default_config, CONFIG_FILE_NAME};
+use crate::domains::config::{CONFIG_FILE_NAME, render_default_config};
 
 pub(super) const KALOS_DIR_ENTRY: &str = ".kalos/";
 
@@ -172,7 +172,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{confirm_overwrite, ensure_gitignore_entry, GitignoreUpdate, KALOS_DIR_ENTRY};
+    use super::{GitignoreUpdate, KALOS_DIR_ENTRY, confirm_overwrite, ensure_gitignore_entry};
 
     #[test]
     fn adds_kalos_entry_to_existing_gitignore() {

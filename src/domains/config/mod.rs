@@ -1530,8 +1530,10 @@ severity = "fatal"
         assert!(rendered.contains("# [rules.KAL-F001]"));
         assert!(rendered.contains(&format!("# {metric_description}")));
         assert!(rendered.contains("# threshold = 0.55"));
-        assert!(rendered
-            .contains("# CI baseline gates should normally use `kalos check --level project`."));
+        assert!(
+            rendered
+                .contains("# CI baseline gates should normally use `kalos check --level project`.")
+        );
         assert!(rendered.contains("# Module/all runs expose architecture triage diagnostics"));
         assert!(rendered.contains("raise `threshold`, lower `severity`, or set `enabled = false`"));
         assert!(rendered.contains("# [rules.KAL-PAT003]"));
