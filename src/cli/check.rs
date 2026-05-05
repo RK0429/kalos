@@ -118,6 +118,7 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     #[arg(
         long,
         value_name = "ratio",
+        value_parser = parse_min_language_ratio,
         help = "minimum file ratio (0.0-1.0) for a language to be analyzed (default: 0.05)"
     )]
     pub min_language_ratio: Option<f64>,
@@ -528,6 +529,17 @@ fn handle_gitignore_policy(
 
 const FULL_PLUGIN_AGGREGATE_FUEL_BUDGET: u64 = 30_000_000;
 const DIFF_PLUGIN_AGGREGATE_FUEL_BUDGET: u64 = 5_000_000;
+
+fn parse_min_language_ratio(value: &str) -> Result<f64, String> {
+    let ratio = value
+        .parse::<f64>()
+        .map_err(|error| format!("invalid ratio `{value}`: {error}"))?;
+    if (0.0..=1.0).contains(&ratio) {
+        Ok(ratio)
+    } else {
+        Err(format!("ratio must be between 0.0 and 1.0, got {value}"))
+    }
+}
 
 fn resolve_head_tree_hash(workspace_root: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new("git")
