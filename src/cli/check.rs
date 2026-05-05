@@ -222,6 +222,16 @@ impl CheckCommand {
             }
         };
         config.include_tests = self.include_tests;
+        if let Some(path) = &self.output {
+            if path.is_dir() {
+                let message = format!(
+                    "output path `{}` is a directory; pass a file path to --output",
+                    path.display()
+                );
+                emit_error(self.format, self.output.as_deref(), &message, None);
+                return ExitCode::from(2);
+            }
+        }
         debug!(
             workspace_root = %config.workspace_root.abs_path.display(),
             target_count = config.analysis_targets.len(),

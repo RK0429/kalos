@@ -478,7 +478,7 @@ fn kalos_check_update_gitignore_output_directory_failure_does_not_create_gitigno
         .arg(&output_dir)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("failed to write output file"))
+        .stderr(predicate::str::contains("is a directory; pass a file path"))
         .stderr(predicate::str::contains(".gitignore").not());
 
     assert!(!temp.path().join(".gitignore").exists());
@@ -1036,6 +1036,41 @@ fn kalos_check_output_flag_creates_parent_directories() {
     assert!(rendered.ends_with('\n'), "expected trailing newline");
     let parsed: Value = serde_json::from_str(&rendered).unwrap();
     assert!(parsed.is_object(), "expected JSON object output");
+}
+
+#[test]
+fn kalos_check_output_directory_fails_before_codeql_setup() {
+    let temp = seeded_workspace();
+    let output_dir = temp.path().join("report-dir");
+    fs::create_dir(&output_dir).unwrap();
+    let expected_message = format!(
+        "output path `{}` is a directory; pass a file path to --output",
+        output_dir.display()
+    );
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("KALOS_CACHE_DIR")
+        .args(["check", "--format", "json", "--output"])
+        .arg(&output_dir)
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error\":true"))
+        .stderr(predicate::str::contains(expected_message.clone()))
+        .stderr(predicate::str::contains("CodeQL").not())
+        .stderr(predicate::str::contains("bundle").not())
+        .stderr(predicate::str::contains("download").not());
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(parsed.get("error").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        parsed.get("message").and_then(Value::as_str),
+        Some(expected_message.as_str())
+    );
+    assert!(output_dir.is_dir());
 }
 
 #[test]
