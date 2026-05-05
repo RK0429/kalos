@@ -62,7 +62,14 @@ pub struct CheckCommand {
         long,
         value_enum,
         default_value_t = RequestedLevel::All,
-        help = "analysis granularity level"
+        help = "analysis granularity level",
+        long_help = "analysis granularity level
+
+`--level project` is the recommended baseline gate for CI. `--level module` and
+`--level all` expose module diagnostics such as KAL-M001, KAL-M002, and KAL-M003;
+large or highly connected repositories may emit many module findings and return
+exit code 1 by design. Use module/all for architecture triage, then tune noisy
+module rules in .kalos.toml with threshold, severity, or enabled overrides."
     )]
     pub level: RequestedLevel,
     #[arg(
