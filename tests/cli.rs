@@ -758,6 +758,39 @@ fn kalos_check_emits_elapsed_time_on_database_create() {
 }
 
 #[test]
+fn kalos_check_human_format_emits_source_inventory_before_codeql_slow_path() {
+    let temp = seeded_large_workspace(100);
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+
+    let source_inventory = "codeql: found 100 source files (rust=100)";
+    let inventory_index = stderr
+        .find(source_inventory)
+        .expect("source inventory should be emitted");
+    let database_create_index = stderr
+        .find("database create")
+        .expect("CodeQL database progress should be emitted");
+
+    assert!(
+        inventory_index < database_create_index,
+        "source inventory should be emitted before database create progress: {stderr}"
+    );
+    assert!(stderr.contains("slow-path guidance"));
+    assert!(stderr.contains("--exclude"));
+    assert!(stderr.contains("--cache-dir"));
+    assert!(stderr.contains("--diff"));
+    assert!(stderr.contains("--min-language-ratio"));
+}
+
+#[test]
 fn kalos_check_cached_run_does_not_emit_first_run_hint() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
@@ -852,7 +885,7 @@ fn kalos_check_rejects_min_language_ratio_outside_unit_range() {
 
 #[test]
 fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
-    let temp = seeded_workspace();
+    let temp = seeded_large_workspace(100);
     let cache_dir = seed_fake_codeql_bundle(temp.path());
 
     Command::cargo_bin("kalos")
@@ -863,6 +896,8 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Apple Silicon").not())
+        .stderr(predicate::str::contains("source files").not())
+        .stderr(predicate::str::contains("slow-path guidance").not())
         .stderr(predicate::str::contains("first run").not())
         .stderr(predicate::str::contains("database create").not())
         .stderr(predicate::str::contains("query run").not())
@@ -871,7 +906,7 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
 
 #[test]
 fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
-    let temp = seeded_workspace();
+    let temp = seeded_large_workspace(100);
     let cache_dir = seed_fake_codeql_bundle(temp.path());
 
     Command::cargo_bin("kalos")
@@ -882,6 +917,8 @@ fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Apple Silicon").not())
+        .stderr(predicate::str::contains("source files").not())
+        .stderr(predicate::str::contains("slow-path guidance").not())
         .stderr(predicate::str::contains("first run").not())
         .stderr(predicate::str::contains("database create").not())
         .stderr(predicate::str::contains("query run").not())
@@ -1728,6 +1765,19 @@ fn seeded_mixed_language_workspace() -> TempDir {
         "def tool() -> int:\n    return 1\n",
     )
     .unwrap();
+    temp
+}
+
+fn seeded_large_workspace(source_file_count: usize) -> TempDir {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    for index in 0..source_file_count {
+        fs::write(
+            temp.path().join(format!("src/module_{index}.rs")),
+            format!("pub fn module_{index}() -> i32 {{ {index} }}\n"),
+        )
+        .unwrap();
+    }
     temp
 }
 

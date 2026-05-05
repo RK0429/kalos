@@ -18,6 +18,7 @@ use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
 const DEFAULT_EXTENSIONS: [&str; 5] = [".py", ".ts", ".tsx", ".rs", ".go"];
 const DEFAULT_MIN_LANGUAGE_RATIO: f64 = 0.05;
+const SLOW_PATH_SOURCE_FILE_THRESHOLD: usize = 100;
 
 fn supported_extensions_display() -> String {
     DEFAULT_EXTENSIONS
@@ -301,23 +302,19 @@ where
             });
         }
 
-        let bundle = self
-            .tool_cache
-            .resolve_bundle(&ToolCacheRequest {
-                tool_name: "codeql".to_owned(),
-                version: self.bundle_version.clone(),
-            })
-            .map_err(|error| CodeQlAdapterError::ResolveBundle {
-                message: error.to_string(),
-            })?;
-        let codeql_program = codeql_executable_path(&bundle.cache_path);
-        let mut combined_output = CodeQlQueryOutput::default();
         let language_counts = count_source_files_by_language(&source_files);
         let (languages, language_warnings) =
             filter_incidental_languages(&source_files, self.min_language_ratio);
 
         if self.progress {
+            emit_analysis_inventory_progress(&language_counts);
             let total_files = source_files.len();
+            if total_files >= SLOW_PATH_SOURCE_FILE_THRESHOLD {
+                eprintln!(
+                    "  codeql: slow-path guidance: {} source files may take several minutes on the first run; interrupt and retry with --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL databases, or --min-language-ratio to skip incidental languages",
+                    total_files
+                );
+            }
             for (language, count) in &language_counts {
                 if !languages.contains(language) {
                     eprintln!(
@@ -330,6 +327,18 @@ where
                 }
             }
         }
+
+        let bundle = self
+            .tool_cache
+            .resolve_bundle(&ToolCacheRequest {
+                tool_name: "codeql".to_owned(),
+                version: self.bundle_version.clone(),
+            })
+            .map_err(|error| CodeQlAdapterError::ResolveBundle {
+                message: error.to_string(),
+            })?;
+        let codeql_program = codeql_executable_path(&bundle.cache_path);
+        let mut combined_output = CodeQlQueryOutput::default();
 
         for language in languages {
             let lang_dir = Self::language_pack(language).replace('/', "-");
@@ -660,6 +669,19 @@ fn count_source_files_by_language(
         *counts.entry(source_file.language).or_insert(0) += 1;
     }
     counts
+}
+
+fn emit_analysis_inventory_progress(language_counts: &BTreeMap<Language, usize>) {
+    let total_files = language_counts.values().sum::<usize>();
+    let language_breakdown = language_counts
+        .iter()
+        .map(|(language, count)| format!("{}={}", language_name(*language), count))
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!(
+        "  codeql: found {} source files ({})",
+        total_files, language_breakdown
+    );
 }
 
 fn filter_incidental_languages(
