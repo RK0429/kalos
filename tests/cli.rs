@@ -322,6 +322,38 @@ fn kalos_check_warns_when_gitignore_exists_without_kalos_entry() {
 }
 
 #[test]
+fn kalos_check_preserves_tracked_gitignore_by_default() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n").unwrap();
+    run_git(temp.path(), &["add", ".gitignore"]);
+    run_git(temp.path(), &["commit", "-m", "track gitignore"]);
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("notice: added .kalos/ to .gitignore").not());
+
+    assert_eq!(fs::read_to_string(&gitignore_path).unwrap(), "target/\n");
+    let output = StdCommand::new("git")
+        .args(["status", "--short", "--", ".gitignore"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git status --short -- .gitignore should succeed"
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+}
+
+#[test]
 fn kalos_check_creates_gitignore_when_update_gitignore_flag_set() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
