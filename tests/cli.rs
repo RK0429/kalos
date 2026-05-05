@@ -187,6 +187,140 @@ fn kalos_init_skips_gitignore_when_kalos_entry_exists() {
 }
 
 #[test]
+fn kalos_check_does_not_modify_gitignore_by_default() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("--update-gitignore"))
+        .stderr(predicate::str::contains("notice: created .gitignore").not())
+        .stderr(predicate::str::contains("notice: added .kalos/ to .gitignore").not());
+
+    assert!(!temp.path().join(".gitignore").exists());
+}
+
+#[test]
+fn kalos_check_does_not_modify_parent_gitignore_when_run_from_nested_subdirectory() {
+    let parent_workspace = seeded_git_workspace();
+    let cache_dir = seed_fake_codeql_bundle(parent_workspace.path());
+    let parent_gitignore = parent_workspace.path().join(".gitignore");
+    fs::write(&parent_gitignore, "target/\n").unwrap();
+    let nested_dir = parent_workspace.path().join("tmp").join("sandbox");
+    fs::create_dir_all(&nested_dir).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(&nested_dir)
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("--update-gitignore"))
+        .stderr(predicate::str::contains("notice: added .kalos/ to .gitignore").not())
+        .stderr(predicate::str::contains("notice: created .gitignore").not());
+
+    assert_eq!(fs::read_to_string(&parent_gitignore).unwrap(), "target/\n");
+    assert!(!nested_dir.join(".gitignore").exists());
+}
+
+#[test]
+fn kalos_check_does_not_warn_when_gitignore_already_contains_kalos_entry() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n.kalos/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore").not());
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        "target/\n.kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_check_warns_when_gitignore_exists_without_kalos_entry() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore"))
+        .stderr(predicate::str::contains("--update-gitignore"));
+
+    assert_eq!(fs::read_to_string(gitignore_path).unwrap(), "target/\n");
+}
+
+#[test]
+fn kalos_check_creates_gitignore_when_update_gitignore_flag_set() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "notice: created .gitignore with .kalos/ entry",
+        ))
+        .stderr(predicate::str::contains(".kalos/ is not in .gitignore").not());
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+}
+
+#[test]
+fn kalos_check_appends_to_existing_gitignore_when_update_gitignore_flag_set() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let gitignore_path = temp.path().join(".gitignore");
+    fs::write(&gitignore_path, "target/\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--update-gitignore"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "notice: added .kalos/ to .gitignore",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(gitignore_path).unwrap(),
+        "target/\n\n.kalos/\n"
+    );
+}
+
+#[test]
 fn kalos_root_help_uses_uppercase_cpg_in_about_text() {
     Command::cargo_bin("kalos")
         .unwrap()
@@ -226,7 +360,7 @@ fn kalos_check_help_documents_filesystem_side_effects() {
     let expected = r#"NOTE: Normal `check` execution may write to locations such as:
   - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases.
   - `$KALOS_CACHE_DIR/baselines/` may store cached baselines for full-workspace runs in Git repositories.
-  - `<repo>/.gitignore` may be created or updated to ignore `.kalos/`."#;
+  - `<repo>/.gitignore` is only created or updated when --update-gitignore is passed."#;
 
     Command::cargo_bin("kalos")
         .unwrap()
@@ -1075,9 +1209,9 @@ fn kalos_check_diff_json_surfaces_fallback_reason_in_analysis_warnings() {
         .as_array()
         .expect("analysis_warnings should be an array");
     assert!(
-        warnings.iter().any(|warning| warning
-            .as_str()
-            .is_some_and(|text| text
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|text| text
                 == "compatible diff baseline was not found; falling back to full analysis")),
         "JSON analysis_warnings should include the fallback reason, got {warnings:?}",
     );

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tracing::{debug, warn};
 
 use super::cpg_normalizer::{CodeQlQueryOutput, CpgNormalizer, NormalizationError};
 use super::file_collector::FileCollector;
@@ -50,7 +51,18 @@ fn compute_source_fingerprint<F: FileSystem>(
             continue;
         }
         let abs_path = workspace_root.join(path.as_str());
-        let content = file_system.read_to_string(&abs_path).ok()?;
+        let content = match file_system.read_to_string(&abs_path) {
+            Ok(content) => content,
+            Err(error) => {
+                warn!(
+                    path = %abs_path.display(),
+                    language = ?language,
+                    error = %error,
+                    "kalos cache: failed to read source file while computing fingerprint; cache will be disabled this run"
+                );
+                return None;
+            }
+        };
         hasher.update(path.as_str().as_bytes());
         hasher.update(b"\0");
         hasher.update(content.as_bytes());
@@ -63,14 +75,81 @@ fn try_load_cache(
     fingerprint: &str,
     cache_key_path: &Path,
     decoded_cache_path: &Path,
-) -> Option<CodeQlQueryOutput> {
-    let stored_key = std::fs::read_to_string(cache_key_path).ok()?;
+) -> Result<CodeQlQueryOutput, CacheMissReason> {
+    let stored_key =
+        std::fs::read_to_string(cache_key_path).map_err(CacheMissReason::KeyFileMissing)?;
     if stored_key.trim() != fingerprint {
-        return None;
+        return Err(CacheMissReason::KeyMismatch);
     }
 
-    let cached_bytes = std::fs::read(decoded_cache_path).ok()?;
-    CpgNormalizer::parse_output(&cached_bytes).ok()
+    let cached_bytes =
+        std::fs::read(decoded_cache_path).map_err(CacheMissReason::DecodedFileMissing)?;
+    CpgNormalizer::parse_output(&cached_bytes).map_err(CacheMissReason::DecodedParseError)
+}
+
+#[derive(Debug)]
+enum CacheMissReason {
+    KeyFileMissing(io::Error),
+    KeyMismatch,
+    DecodedFileMissing(io::Error),
+    DecodedParseError(NormalizationError),
+}
+
+impl std::fmt::Display for CacheMissReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CacheMissReason::KeyFileMissing(error) => {
+                write!(f, "cache key file missing or unreadable ({error})")
+            }
+            CacheMissReason::KeyMismatch => {
+                write!(f, "stored cache key does not match fingerprint")
+            }
+            CacheMissReason::DecodedFileMissing(error) => {
+                write!(f, "decoded cache payload missing or unreadable ({error})")
+            }
+            CacheMissReason::DecodedParseError(error) => {
+                write!(f, "decoded cache payload failed to parse ({error})")
+            }
+        }
+    }
+}
+
+fn write_cache_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("cache path `{}` has no parent directory", path.display()),
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("cache path `{}` has no valid file name", path.display()),
+            )
+        })?;
+    let unique = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0),
+        file_name
+    );
+    let tmp = parent.join(format!(".{unique}.tmp"));
+
+    if let Err(error) = std::fs::write(&tmp, data) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -290,15 +369,34 @@ where
             );
 
             if let Some(ref fingerprint) = source_fingerprint {
-                if let Some(parsed) =
-                    try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path)
-                {
-                    if self.progress {
-                        eprintln!("    cached");
+                match try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path) {
+                    Ok(parsed) => {
+                        if self.progress {
+                            eprintln!("    cached");
+                        }
+                        debug!(
+                            language = ?language,
+                            cache_key = %cache_key_path.display(),
+                            "kalos cache hit"
+                        );
+                        combined_output.extend_from(parsed);
+                        continue;
                     }
-                    combined_output.extend_from(parsed);
-                    continue;
+                    Err(reason) => {
+                        debug!(
+                            language = ?language,
+                            cache_key = %cache_key_path.display(),
+                            decoded = %decoded_cache_path.display(),
+                            reason = %reason,
+                            "kalos cache miss"
+                        );
+                    }
                 }
+            } else {
+                debug!(
+                    language = ?language,
+                    "kalos cache skipped (fingerprint unavailable)"
+                );
             }
 
             let lock_path = database_path.with_extension("lock");
@@ -312,14 +410,26 @@ where
 
             // Re-check cache: another process may have completed while we waited for the lock.
             if let Some(ref fingerprint) = source_fingerprint {
-                if let Some(parsed) =
-                    try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path)
-                {
-                    if self.progress {
-                        eprintln!("    cached (after lock)");
+                match try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path) {
+                    Ok(parsed) => {
+                        if self.progress {
+                            eprintln!("    cached (after lock)");
+                        }
+                        debug!(
+                            language = ?language,
+                            cache_key = %cache_key_path.display(),
+                            "kalos cache hit (after lock)"
+                        );
+                        combined_output.extend_from(parsed);
+                        continue;
                     }
-                    combined_output.extend_from(parsed);
-                    continue;
+                    Err(reason) => {
+                        debug!(
+                            language = ?language,
+                            reason = %reason,
+                            "kalos cache miss (after lock)"
+                        );
+                    }
                 }
             }
 
@@ -383,8 +493,27 @@ where
                 );
             }
             if let Some(ref fingerprint) = source_fingerprint {
-                let _ = std::fs::write(&decoded_cache_path, &decode_output.stdout);
-                let _ = std::fs::write(&cache_key_path, fingerprint.as_str());
+                if let Err(error) = write_cache_atomic(&decoded_cache_path, &decode_output.stdout) {
+                    warn!(
+                        path = %decoded_cache_path.display(),
+                        error = %error,
+                        "kalos cache: failed to persist decoded cache payload; next run will full-rebuild"
+                    );
+                } else if let Err(error) =
+                    write_cache_atomic(&cache_key_path, fingerprint.as_bytes())
+                {
+                    warn!(
+                        path = %cache_key_path.display(),
+                        error = %error,
+                        "kalos cache: failed to persist cache key; next run will full-rebuild"
+                    );
+                } else {
+                    debug!(
+                        language = ?language,
+                        cache_key = %cache_key_path.display(),
+                        "kalos cache written"
+                    );
+                }
             }
             combined_output.extend_from(CpgNormalizer::parse_output(&decode_output.stdout)?);
         }
@@ -620,9 +749,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        CodeQlAdapter, CodeQlAdapterError, codeql_executable_path, compute_source_fingerprint,
-        database_create_progress_message, filter_incidental_languages, format_command_guidance,
-        format_elapsed, supported_extensions_display,
+        CacheMissReason, CodeQlAdapter, CodeQlAdapterError, codeql_executable_path,
+        compute_source_fingerprint, database_create_progress_message, filter_incidental_languages,
+        format_command_guidance, format_elapsed, supported_extensions_display, try_load_cache,
+        write_cache_atomic,
     };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
@@ -1396,6 +1526,91 @@ mod tests {
             fp_old, fp_new,
             "changing query content must invalidate the cache fingerprint"
         );
+    }
+
+    #[test]
+    fn write_cache_atomic_creates_final_file_and_cleans_up_tmp() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("rust.cache_key");
+
+        write_cache_atomic(&target, b"deadbeef").unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "deadbeef");
+        let leftover = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| name.ends_with(".tmp"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        assert!(leftover.is_empty(), "no temp files should remain");
+    }
+
+    #[test]
+    fn write_cache_atomic_replaces_existing_content() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("rust.cache_key");
+        fs::write(&target, b"stale").unwrap();
+
+        write_cache_atomic(&target, b"fresh").unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "fresh");
+    }
+
+    #[test]
+    fn try_load_cache_reports_missing_key_file() {
+        let temp = TempDir::new().unwrap();
+        let reason = try_load_cache(
+            "fingerprint",
+            &temp.path().join("rust.cache_key"),
+            &temp.path().join("rust.decoded.json"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(reason, CacheMissReason::KeyFileMissing(_)));
+    }
+
+    #[test]
+    fn try_load_cache_reports_key_mismatch_when_fingerprint_changed() {
+        let temp = TempDir::new().unwrap();
+        let cache_key_path = temp.path().join("rust.cache_key");
+        let decoded_cache_path = temp.path().join("rust.decoded.json");
+        fs::write(&cache_key_path, "old-fingerprint").unwrap();
+        fs::write(&decoded_cache_path, b"{}").unwrap();
+
+        let reason =
+            try_load_cache("new-fingerprint", &cache_key_path, &decoded_cache_path).unwrap_err();
+
+        assert!(matches!(reason, CacheMissReason::KeyMismatch));
+    }
+
+    #[test]
+    fn try_load_cache_reports_missing_decoded_payload() {
+        let temp = TempDir::new().unwrap();
+        let cache_key_path = temp.path().join("rust.cache_key");
+        let decoded_cache_path = temp.path().join("rust.decoded.json");
+        fs::write(&cache_key_path, "fp").unwrap();
+
+        let reason = try_load_cache("fp", &cache_key_path, &decoded_cache_path).unwrap_err();
+
+        assert!(matches!(reason, CacheMissReason::DecodedFileMissing(_)));
+    }
+
+    #[test]
+    fn try_load_cache_reports_parse_error_on_truncated_payload() {
+        let temp = TempDir::new().unwrap();
+        let cache_key_path = temp.path().join("rust.cache_key");
+        let decoded_cache_path = temp.path().join("rust.decoded.json");
+        fs::write(&cache_key_path, "fp").unwrap();
+        fs::write(&decoded_cache_path, b"{\"functions\": [").unwrap();
+
+        let reason = try_load_cache("fp", &cache_key_path, &decoded_cache_path).unwrap_err();
+
+        assert!(matches!(reason, CacheMissReason::DecodedParseError(_)));
     }
 
     #[test]

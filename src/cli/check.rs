@@ -10,7 +10,10 @@ use clap::{Args, ValueEnum};
 use serde_json::json;
 use tracing::debug;
 
-use super::init::{GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry};
+use super::init::{
+    GitignoreStatus, GitignoreUpdate, KALOS_DIR_ENTRY, ensure_gitignore_entry,
+    gitignore_entry_status,
+};
 
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
@@ -41,7 +44,7 @@ use crate::ports::PluginPort;
     after_help = "NOTE: Normal `check` execution may write to locations such as:\n  \
                   - `<repo>/.kalos/codeql/<language>/` stores per-language CodeQL databases.\n  \
                   - `$KALOS_CACHE_DIR/baselines/` may store cached baselines for full-workspace runs in Git repositories.\n  \
-                  - `<repo>/.gitignore` may be created or updated to ignore `.kalos/`.\n\n\
+                  - `<repo>/.gitignore` is only created or updated when --update-gitignore is passed.\n\n\
                   NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
                   which may cause significantly slower analysis on first invocation."
 )]
@@ -149,6 +152,11 @@ Test files are detected by path:
         help = "suppress the stderr acknowledgment printed on --output success"
     )]
     pub quiet: bool,
+    #[arg(
+        long,
+        help = "add .kalos/ to .gitignore when missing (default: warn only, do not modify .gitignore)"
+    )]
+    pub update_gitignore: bool,
 }
 
 impl CheckCommand {
@@ -221,16 +229,32 @@ impl CheckCommand {
         } else {
             None
         };
-        match ensure_gitignore_entry(&config.workspace_root.abs_path) {
-            Ok(GitignoreUpdate::Created) => {
-                eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+        if self.update_gitignore {
+            match ensure_gitignore_entry(&config.workspace_root.abs_path) {
+                Ok(GitignoreUpdate::Created) => {
+                    eprintln!("notice: created .gitignore with {KALOS_DIR_ENTRY} entry");
+                }
+                Ok(GitignoreUpdate::Added) => {
+                    eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
+                }
+                Ok(GitignoreUpdate::Unchanged) => {}
+                Err(error) => {
+                    eprintln!("warning: failed to update .gitignore: {error}");
+                }
             }
-            Ok(GitignoreUpdate::Added) => {
-                eprintln!("notice: added {KALOS_DIR_ENTRY} to .gitignore");
-            }
-            Ok(GitignoreUpdate::Unchanged) => {}
-            Err(error) => {
-                eprintln!("warning: failed to update .gitignore: {error}");
+        } else {
+            match gitignore_entry_status(&config.workspace_root.abs_path) {
+                Ok(GitignoreStatus::EntryPresent) => {}
+                Ok(GitignoreStatus::Missing | GitignoreStatus::EntryAbsent) => {
+                    eprintln!(
+                        "warning: {KALOS_DIR_ENTRY} is not in .gitignore. \
+                         Run with --update-gitignore to add it, \
+                         or add it manually to avoid committing analysis cache."
+                    );
+                }
+                Err(error) => {
+                    eprintln!("warning: failed to inspect .gitignore: {error}");
+                }
             }
         }
 

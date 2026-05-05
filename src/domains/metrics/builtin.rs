@@ -637,12 +637,11 @@ impl<'a> ModuleDependencyGraph<'a> {
             incoming.entry(module.id).or_default();
         }
 
-        for edge in subgraph.edges.iter().filter(|edge| {
-            matches!(
-                edge.kind,
-                EdgeKind::Call | EdgeKind::Contains | EdgeKind::TypeReference
-            )
-        }) {
+        for edge in subgraph
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Call | EdgeKind::TypeReference))
+        {
             let Some(source_modules) = ownership.get(&edge.source) else {
                 continue;
             };
@@ -1343,6 +1342,65 @@ mod tests {
     }
 
     #[test]
+    fn circular_dependency_risk_ignores_parent_child_contains_edges() {
+        let metric = CircularDependencyParticipationRisk::new();
+        let parent_graph = CpgBuilder::new()
+            .module_at("parent", "crate::parent", "src/parent.rs", 1, 10)
+            .module_at(
+                "child",
+                "crate::parent::child",
+                "src/parent/child.rs",
+                1,
+                10,
+            )
+            .function_at(
+                "child_fn",
+                "crate::parent::child::f",
+                "src/parent/child.rs",
+                2,
+                2,
+            )
+            .edge("parent", "child", EdgeKind::Contains)
+            .edge("child", "child_fn", EdgeKind::Contains)
+            .build(ScopeId::new(
+                AnalysisLevel::Module,
+                "crate::parent",
+                "src/parent.rs",
+            ));
+        let child_graph = CpgBuilder::new()
+            .module_at("parent", "crate::parent", "src/parent.rs", 1, 10)
+            .module_at(
+                "child",
+                "crate::parent::child",
+                "src/parent/child.rs",
+                1,
+                10,
+            )
+            .function_at(
+                "child_fn",
+                "crate::parent::child::f",
+                "src/parent/child.rs",
+                2,
+                2,
+            )
+            .edge("parent", "child", EdgeKind::Contains)
+            .edge("child", "child_fn", EdgeKind::Contains)
+            .build(ScopeId::new(
+                AnalysisLevel::Module,
+                "crate::parent::child",
+                "src/parent/child.rs",
+            ));
+
+        let parent_value = metric.compute(&parent_graph, &config()).unwrap();
+        let child_value = metric.compute(&child_graph, &config()).unwrap();
+
+        assert_eq!(parent_value.raw_value, 0.0);
+        assert_eq!(parent_value.normalized_risk, 0.0);
+        assert_eq!(child_value.raw_value, 0.0);
+        assert_eq!(child_value.normalized_risk, 0.0);
+    }
+
+    #[test]
     fn module_metrics_use_full_graph_for_module_scope_subgraphs() {
         let fan_out_metric = ModuleFanOutRisk::new();
         let cycle_metric = CircularDependencyParticipationRisk::new();
@@ -1512,6 +1570,35 @@ mod tests {
         assert_eq!(empty_entropy.raw_value, 0.0);
         assert_eq!(empty_hub.raw_value, 0.0);
         assert_eq!(hub, repeat);
+    }
+
+    #[test]
+    fn cyclic_coupling_risk_ignores_parent_child_contains_edges() {
+        let metric = CyclicCouplingRisk::new();
+        let graph = CpgBuilder::new()
+            .module_at("parent", "crate::parent", "src/parent.rs", 1, 10)
+            .module_at(
+                "child",
+                "crate::parent::child",
+                "src/parent/child.rs",
+                1,
+                10,
+            )
+            .function_at(
+                "child_fn",
+                "crate::parent::child::f",
+                "src/parent/child.rs",
+                2,
+                2,
+            )
+            .edge("parent", "child", EdgeKind::Contains)
+            .edge("child", "child_fn", EdgeKind::Contains)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        let value = metric.compute(&graph, &config()).unwrap();
+
+        assert_eq!(value.raw_value, 0.0);
+        assert_eq!(value.normalized_risk, 0.0);
     }
 
     // Regression for kalos #59: on tiny projects the M-P003 ratio is forced

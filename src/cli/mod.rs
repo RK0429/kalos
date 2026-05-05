@@ -130,6 +130,7 @@ mod tests {
         assert_eq!(command.min_risk, Some(0.5));
         assert!(command.llm);
         assert!(command.strict);
+        assert!(!command.update_gitignore);
     }
 
     #[test]
@@ -176,6 +177,16 @@ mod tests {
     }
 
     #[test]
+    fn check_parses_update_gitignore_flag() {
+        let cli = Cli::try_parse_from(["kalos", "check", "--update-gitignore"]).unwrap();
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert!(command.update_gitignore);
+    }
+
+    #[test]
     fn init_parses() {
         let cli = Cli::try_parse_from(["kalos", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Init(_)));
@@ -212,17 +223,21 @@ mod tests {
         assert!(help.contains("show per-scope metrics in human output"));
         assert!(help.contains("filter verbose metrics list by scope risk"));
         assert!(help.contains("write output to a file instead of stdout"));
-        assert!(help.contains(
-            "suppress the stderr acknowledgment printed on --output success"
-        ));
-        assert!(help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)"));
+        assert!(help.contains("suppress the stderr acknowledgment printed on --output success"));
+        assert!(help.contains("add .kalos/ to .gitignore when missing"));
+        assert!(help.contains("default: warn only"));
+        assert!(
+            help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)")
+        );
     }
 
     #[test]
     fn check_help_explains_default_suppression_for_include_tests() {
         let help = render_help(["kalos", "check", "--help"]);
 
-        assert!(help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)"));
+        assert!(
+            help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)")
+        );
         assert!(help.contains("KAL-M001 (module fan-out)"));
         assert!(help.contains("KAL-M003 (instability)"));
         assert!(help.contains("Test files are NOT excluded from analysis"));
