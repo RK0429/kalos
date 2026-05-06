@@ -679,7 +679,7 @@ fn emit_error(
             if let Some(source) = source {
                 payload["cause"] = json!(source.to_string());
             }
-            eprintln!("{payload}");
+            println!("{payload}");
         }
         OutputFormat::Sarif => {
             let cause = source.map(|source| source.to_string());
