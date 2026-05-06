@@ -22,9 +22,9 @@ use crate::domains::impact::{
     analyze_impact, build_dependency_index_from_cpg,
 };
 use crate::domains::metrics::{
-    AnalysisMetrics, MIN_HUB_CONCENTRATION_IN_DEGREE, MetricConfig, MetricDefinition,
-    MetricMetadata, ScopeMetrics, builtin_metric_definitions, metric_catalog_from_definitions,
-    project_hub_concentration_support,
+    AnalysisMetrics, MIN_HUB_CONCENTRATION_IN_DEGREE, MIN_MODULE_INSTABILITY_DEPENDENCY_SUPPORT,
+    MetricConfig, MetricDefinition, MetricMetadata, ScopeMetrics, builtin_metric_definitions,
+    metric_catalog_from_definitions, project_hub_concentration_support,
 };
 use crate::domains::reporting::{
     AnalysisReport, DiffBaseStatus, DiffExecutionContext, EffectiveAnalysisMode, ReportMetadata,
@@ -846,6 +846,15 @@ fn analysis_warnings(
             warnings.push(hub_warning);
         }
     }
+    if let Some(instability_warning) = module_instability_small_sample_warning(metrics) {
+        let duplicate = warnings.iter().any(|warning| {
+            warning.file_path == instability_warning.file_path
+                && warning.message == instability_warning.message
+        });
+        if !duplicate {
+            warnings.push(instability_warning);
+        }
+    }
     warnings
 }
 
@@ -896,6 +905,35 @@ fn hub_concentration_small_sample_warning(
     Some(AnalysisWarning {
         file_path: FilePath::from("."),
         message,
+        user_facing: true,
+    })
+}
+
+fn module_instability_small_sample_warning(metrics: &AnalysisMetrics) -> Option<AnalysisWarning> {
+    let suppressed_count = metrics
+        .module_metrics
+        .iter()
+        .flat_map(|scope_metrics| scope_metrics.values.iter())
+        .filter(|value| {
+            value.metric_id.as_str() == "M-M003"
+                && value.raw_value > 0.0
+                && value.normalized_risk == 0.0
+        })
+        .count();
+    if suppressed_count == 0 {
+        return None;
+    }
+
+    let module_noun = if suppressed_count == 1 {
+        "module"
+    } else {
+        "modules"
+    };
+    Some(AnalysisWarning {
+        file_path: FilePath::from("."),
+        message: format!(
+            "M-M003 (Module Instability) is reported with normalized_risk=0 for {suppressed_count} {module_noun} because fan-in/fan-out support is below {MIN_MODULE_INSTABILITY_DEPENDENCY_SUPPORT} dependency edges; raw_value is retained for inspection, but KAL-M003 is suppressed as a low-confidence small-sample signal."
+        ),
         user_facing: true,
     })
 }
@@ -2836,11 +2874,156 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pipeline_suppresses_kal_m003_and_warns_for_tiny_leaf_adapter() {
+        let source_analysis = tiny_leaf_adapter_source_analysis();
+        let pipeline =
+            AnalysisPipeline::new(MockExtractor { source_analysis }, NullDependencyResolver);
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Json,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        assert!(
+            result
+                .report
+                .diagnostics
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != RuleId::from("KAL-M003")),
+            "KAL-M003 should be suppressed for tiny leaf adapters, got {:?}",
+            result.report.diagnostics.diagnostics
+        );
+        assert_eq!(result.report.diagnostics.summary.error_count, 0);
+
+        let adapter_metric = result
+            .report
+            .metrics
+            .iter()
+            .find(|scope| scope.scope_id.qualified_name == "src/adapter.py")
+            .and_then(|scope| {
+                scope
+                    .values
+                    .iter()
+                    .find(|value| value.metric_id.as_str() == "M-M003")
+            })
+            .expect("M-M003 should be present for adapter module");
+        assert_eq!(adapter_metric.raw_value, 1.0);
+        assert_eq!(adapter_metric.normalized_risk, 0.0);
+        assert!(
+            contains_instability_small_sample_warning(&result.report.analysis_warnings),
+            "expected M-M003 small-sample warning, got {:?}",
+            result.report.analysis_warnings
+        );
+    }
+
+    #[test]
+    fn pipeline_does_not_emit_kal_m003_for_standalone_script() {
+        let source_analysis = standalone_script_source_analysis();
+        let pipeline =
+            AnalysisPipeline::new(MockExtractor { source_analysis }, NullDependencyResolver);
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Json,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        assert!(
+            result
+                .report
+                .diagnostics
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != RuleId::from("KAL-M003")),
+            "standalone scripts should not emit KAL-M003, got {:?}",
+            result.report.diagnostics.diagnostics
+        );
+        assert!(
+            !contains_instability_small_sample_warning(&result.report.analysis_warnings),
+            "standalone scripts without dependency signal should not warn, got {:?}",
+            result.report.analysis_warnings
+        );
+    }
+
+    #[test]
+    fn pipeline_reports_kal_m003_for_supported_unstable_module() {
+        let source_analysis = unstable_module_source_analysis();
+        let pipeline =
+            AnalysisPipeline::new(MockExtractor { source_analysis }, NullDependencyResolver);
+
+        let result = pipeline
+            .run(
+                &fixture_config(),
+                ReportViewOptions {
+                    requested_level: RequestedLevel::All,
+                    output_format: OutputFormat::Json,
+                    strict: false,
+                    minimum_severity: None,
+                    min_risk: None,
+                    verbose: false,
+                },
+                None,
+                None,
+            )
+            .expect("pipeline should succeed");
+
+        let instability_diagnostics = result
+            .report
+            .diagnostics
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == RuleId::from("KAL-M003"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instability_diagnostics.len(),
+            1,
+            "expected exactly one KAL-M003 diagnostic, got {:?}",
+            result.report.diagnostics.diagnostics
+        );
+        assert_eq!(instability_diagnostics[0].severity, Severity::Error);
+        assert!(
+            !contains_instability_small_sample_warning(&result.report.analysis_warnings),
+            "supported instability should not warn, got {:?}",
+            result.report.analysis_warnings
+        );
+    }
+
     fn contains_hub_small_sample_warning(warnings: &[String]) -> bool {
         warnings.iter().any(|warning| {
             warning.contains(
                 "M-P003 (Hub Dependency Concentration) is reported with normalized_risk=0",
             ) && warning.contains("module-level dependency edge")
+        })
+    }
+
+    fn contains_instability_small_sample_warning(warnings: &[String]) -> bool {
+        warnings.iter().any(|warning| {
+            warning.contains("M-M003 (Module Instability) is reported with normalized_risk=0")
+                && warning.contains("KAL-M003 is suppressed")
+                && warning.contains("low-confidence small-sample signal")
         })
     }
 
@@ -2947,6 +3130,129 @@ mod tests {
                     FilePath::from("tests/test_app.py"),
                     SourceFile {
                         path: FilePath::from("tests/test_app.py"),
+                        language: Language::Python,
+                    },
+                ),
+            ]),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn tiny_leaf_adapter_source_analysis() -> SourceAnalysis {
+        let cpg = CpgBuilder::new()
+            .module_at("module_adapter", "src/adapter.py", "src/adapter.py", 1, 2)
+            .module_at("module_sdk", "src/sdk.py", "src/sdk.py", 1, 2)
+            .function_at("call_sdk", "adapter.call_sdk", "src/adapter.py", 1, 2)
+            .function_at("request", "sdk.request", "src/sdk.py", 1, 2)
+            .edge("module_adapter", "call_sdk", EdgeKind::Contains)
+            .edge("module_sdk", "request", EdgeKind::Contains)
+            .edge("call_sdk", "request", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("issue-116-leaf-adapter"),
+                nodes: cpg.nodes,
+                edges: cpg.edges,
+            },
+            source_files: BTreeMap::from([
+                (
+                    FilePath::from("src/adapter.py"),
+                    SourceFile {
+                        path: FilePath::from("src/adapter.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("src/sdk.py"),
+                    SourceFile {
+                        path: FilePath::from("src/sdk.py"),
+                        language: Language::Python,
+                    },
+                ),
+            ]),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn standalone_script_source_analysis() -> SourceAnalysis {
+        let cpg = CpgBuilder::new()
+            .module_at("module_script", "scripts/task.py", "scripts/task.py", 1, 5)
+            .function_at("main", "task.main", "scripts/task.py", 1, 5)
+            .edge("module_script", "main", EdgeKind::Contains)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("issue-116-standalone"),
+                nodes: cpg.nodes,
+                edges: cpg.edges,
+            },
+            source_files: BTreeMap::from([(
+                FilePath::from("scripts/task.py"),
+                SourceFile {
+                    path: FilePath::from("scripts/task.py"),
+                    language: Language::Python,
+                },
+            )]),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn unstable_module_source_analysis() -> SourceAnalysis {
+        let cpg = CpgBuilder::new()
+            .module_at("module_root", "src/root.py", "src/root.py", 1, 10)
+            .module_at("module_a", "src/a.py", "src/a.py", 1, 2)
+            .module_at("module_b", "src/b.py", "src/b.py", 1, 2)
+            .module_at("module_c", "src/c.py", "src/c.py", 1, 2)
+            .function_at("root", "root.run", "src/root.py", 1, 10)
+            .function_at("a", "a.handle", "src/a.py", 1, 2)
+            .function_at("b", "b.handle", "src/b.py", 1, 2)
+            .function_at("c", "c.handle", "src/c.py", 1, 2)
+            .edge("module_root", "root", EdgeKind::Contains)
+            .edge("module_a", "a", EdgeKind::Contains)
+            .edge("module_b", "b", EdgeKind::Contains)
+            .edge("module_c", "c", EdgeKind::Contains)
+            .edge("root", "a", EdgeKind::Call)
+            .edge("root", "b", EdgeKind::Call)
+            .edge("root", "c", EdgeKind::Call)
+            .build(ScopeId::new(AnalysisLevel::Project, "<project>", "."));
+
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from("issue-116-unstable"),
+                nodes: cpg.nodes,
+                edges: cpg.edges,
+            },
+            source_files: BTreeMap::from([
+                (
+                    FilePath::from("src/root.py"),
+                    SourceFile {
+                        path: FilePath::from("src/root.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("src/a.py"),
+                    SourceFile {
+                        path: FilePath::from("src/a.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("src/b.py"),
+                    SourceFile {
+                        path: FilePath::from("src/b.py"),
+                        language: Language::Python,
+                    },
+                ),
+                (
+                    FilePath::from("src/c.py"),
+                    SourceFile {
+                        path: FilePath::from("src/c.py"),
                         language: Language::Python,
                     },
                 ),
