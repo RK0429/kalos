@@ -1095,15 +1095,18 @@ fn kalos_check_output_directory_fails_before_codeql_setup() {
         .arg(&output_dir)
         .assert()
         .code(2)
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("\"error\":true"))
-        .stderr(predicate::str::contains(expected_message.clone()))
+        .stdout(predicate::str::contains("\"error\":true"))
+        .stdout(predicate::str::contains(expected_message.clone()))
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("CodeQL").not())
+        .stdout(predicate::str::contains("bundle").not())
+        .stdout(predicate::str::contains("download").not())
         .stderr(predicate::str::contains("CodeQL").not())
         .stderr(predicate::str::contains("bundle").not())
         .stderr(predicate::str::contains("download").not());
 
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(parsed.get("error").and_then(Value::as_bool), Some(true));
     assert_eq!(
         parsed.get("message").and_then(Value::as_str),
@@ -1313,8 +1316,9 @@ fn kalos_check_missing_config_json_error_output_is_structured() {
         .assert()
         .code(2);
 
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("JSON failure output on stdout should parse as JSON");
     assert_eq!(parsed["error"], Value::Bool(true));
     assert!(
         parsed["message"]
@@ -1327,6 +1331,10 @@ fn kalos_check_missing_config_json_error_output_is_structured() {
             .as_str()
             .unwrap()
             .contains("No such file or directory")
+    );
+    assert!(
+        assert.get_output().stderr.is_empty(),
+        "stderr should not carry JSON failure payload"
     );
 }
 
@@ -1348,13 +1356,18 @@ fn kalos_check_missing_target_json_error_output_names_requested_path() {
         .assert()
         .code(2);
 
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
-    let parsed: Value = serde_json::from_str(&stderr).unwrap();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("JSON failure output on stdout should parse as JSON");
     assert_eq!(parsed["error"], Value::Bool(true));
 
     let message = parsed["message"].as_str().unwrap();
     assert!(message.contains("analysis target path"));
     assert!(message.contains("does-not-exist-kalos-eval"));
+    assert!(
+        assert.get_output().stderr.is_empty(),
+        "stderr should not carry JSON failure payload"
+    );
 }
 
 #[test]
