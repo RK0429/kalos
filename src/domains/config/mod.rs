@@ -539,7 +539,10 @@ pub fn render_default_config() -> String {
     output.push_str("# Metric rule thresholds (defaults shown as comments)\n");
     output.push_str("# CI baseline gates should normally use `kalos check --level project`.\n");
     output.push_str(
-        "# Module/all runs expose architecture triage diagnostics and may be noisy on highly connected repositories.\n",
+        "# Module/all runs are domain-owner architecture triage, not the default CI gate.\n",
+    );
+    output.push_str(
+        "# For KAL-M003 bursts, inspect dependency direction, owner boundaries, and these configured thresholds before deciding whether the finding is actionable.\n",
     );
     output.push_str(
         "# For noisy module rules, raise `threshold`, lower `severity`, or set `enabled = false`; remediate by reducing fan-out, breaking cycles, or moving orchestration behind a higher-level boundary.\n",
@@ -1534,7 +1537,8 @@ severity = "fatal"
             rendered
                 .contains("# CI baseline gates should normally use `kalos check --level project`.")
         );
-        assert!(rendered.contains("# Module/all runs expose architecture triage diagnostics"));
+        assert!(rendered.contains("# Module/all runs are domain-owner architecture triage"));
+        assert!(rendered.contains("For KAL-M003 bursts, inspect dependency direction"));
         assert!(rendered.contains("raise `threshold`, lower `severity`, or set `enabled = false`"));
         assert!(rendered.contains("# [rules.KAL-PAT003]"));
         assert!(rendered.contains(&format!("# {pattern_description}")));
