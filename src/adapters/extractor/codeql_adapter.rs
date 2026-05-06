@@ -177,6 +177,7 @@ pub struct CodeQlAdapter<F, R, T> {
     is_emulated: bool,
     min_language_ratio: f64,
     database_root: Option<PathBuf>,
+    codeql_ram_mib: Option<u32>,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -198,6 +199,7 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             is_emulated: false,
             min_language_ratio: DEFAULT_MIN_LANGUAGE_RATIO,
             database_root: None,
+            codeql_ram_mib: None,
         }
     }
 
@@ -218,6 +220,11 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
 
     pub fn with_database_root(mut self, database_root: impl Into<PathBuf>) -> Self {
         self.database_root = Some(database_root.into());
+        self
+    }
+
+    pub fn with_codeql_ram_mib(mut self, ram_mib: u32) -> Self {
+        self.codeql_ram_mib = Some(ram_mib);
         self
     }
 
@@ -340,7 +347,7 @@ where
             let total_files = source_files.len();
             if total_files >= SLOW_PATH_SOURCE_FILE_THRESHOLD {
                 eprintln!(
-                    "  codeql: slow-path guidance: {} source files may take several minutes on the first run; interrupt and retry with --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL databases, or --min-language-ratio to skip incidental languages",
+                    "  codeql: slow-path guidance: {} source files may take several minutes on the first run; interrupt and retry with --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL databases, or --min-language-ratio to skip incidental languages",
                     total_files
                 );
             }
@@ -488,7 +495,12 @@ where
             };
             self.run_checked(
                 &codeql_program,
-                build_database_create_args(&database_path, &request.workspace_root, language),
+                build_database_create_args(
+                    &database_path,
+                    &request.workspace_root,
+                    language,
+                    self.codeql_ram_mib,
+                ),
                 &request.workspace_root,
                 "database create",
                 language,
@@ -508,7 +520,13 @@ where
             };
             self.run_checked(
                 &codeql_program,
-                build_query_run_args(&database_path, &query_path, &bqrs_path, &bundle.cache_path),
+                build_query_run_args(
+                    &database_path,
+                    &query_path,
+                    &bqrs_path,
+                    &bundle.cache_path,
+                    self.codeql_ram_mib,
+                ),
                 &request.workspace_root,
                 "query run",
                 language,
@@ -674,8 +692,9 @@ fn build_database_create_args(
     database_path: &Path,
     workspace_root: &Path,
     language: Language,
+    codeql_ram_mib: Option<u32>,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "database".to_owned(),
         "create".to_owned(),
         "--overwrite".to_owned(),
@@ -684,7 +703,12 @@ fn build_database_create_args(
         CodeQlAdapter::<(), (), ()>::language_pack(language).to_owned(),
         "--source-root".to_owned(),
         workspace_root.to_string_lossy().into_owned(),
-    ]
+    ];
+    if let Some(ram_mib) = codeql_ram_mib {
+        args.push("--ram".to_owned());
+        args.push(ram_mib.to_string());
+    }
+    args
 }
 
 fn build_query_run_args(
@@ -692,8 +716,9 @@ fn build_query_run_args(
     query_path: &Path,
     bqrs_path: &Path,
     search_path: &Path,
+    codeql_ram_mib: Option<u32>,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "query".to_owned(),
         "run".to_owned(),
         query_path.to_string_lossy().into_owned(),
@@ -703,7 +728,12 @@ fn build_query_run_args(
         bqrs_path.to_string_lossy().into_owned(),
         "--search-path".to_owned(),
         search_path.to_string_lossy().into_owned(),
-    ]
+    ];
+    if let Some(ram_mib) = codeql_ram_mib {
+        args.push("--ram".to_owned());
+        args.push(ram_mib.to_string());
+    }
+    args
 }
 
 fn build_bqrs_decode_args(bqrs_path: &Path) -> Vec<String> {
@@ -762,7 +792,7 @@ fn emit_long_running_phase_context(language: Language) {
         language_name(language)
     );
     eprintln!(
-        "    timeout mitigation: if a CodeQL phase exceeds the harness timeout, retry with --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
+        "    timeout mitigation: if a CodeQL phase exceeds the harness timeout or memory budget, retry with --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
     );
 }
 
@@ -856,12 +886,25 @@ fn classify_codeql_error(stderr: &str) -> (&'static str, &'static str) {
             "the CodeQL database output directory does not exist",
             "This is likely a kalos internal error. Please report an issue: https://github.com/RK0429/kalos/issues",
         )
+    } else if is_codeql_memory_error(stderr) {
+        (
+            "CodeQL ran out of memory while evaluating the query",
+            "Retry with more CodeQL heap, for example:\n        kalos check --codeql-ram 4096\n    - If the repository is still too large, combine this with --cache-dir, --diff, --exclude, or --min-language-ratio to reduce CodeQL work",
+        )
     } else {
         (
             "CodeQL encountered an error during extraction",
             "Verify that CodeQL supports your project's language and build configuration. If the problem persists, please report an issue: https://github.com/RK0429/kalos/issues",
         )
     }
+}
+
+fn is_codeql_memory_error(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("out of memory")
+        || stderr.contains("outofmemoryerror")
+        || stderr.contains("java heap")
+        || stderr.contains("java heap space")
 }
 
 fn language_name(language: Language) -> &'static str {
@@ -890,7 +933,8 @@ mod tests {
         CacheMissReason, CodeQlAdapter, CodeQlAdapterError, codeql_executable_path,
         compute_source_fingerprint, database_create_progress_message, filter_incidental_languages,
         format_available_languages, format_command_guidance, format_elapsed,
-        parse_resolved_languages, supported_extensions_display, try_load_cache, write_cache_atomic,
+        is_codeql_memory_error, parse_resolved_languages, supported_extensions_display,
+        try_load_cache, write_cache_atomic,
     };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
@@ -1243,6 +1287,76 @@ mod tests {
         let invocations = command_runner.invocations().unwrap();
         assert_eq!(invocations.len(), 4);
         assert!(invocations[1].args.iter().any(|arg| arg == "--overwrite"));
+    }
+
+    #[test]
+    fn codeql_adapter_passes_configured_ram_to_codeql_heavy_phases() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.rs", "fn main() {}\n");
+        let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: b"{}".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_codeql_ram_mib(4096);
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(
+            invocations[1]
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--ram")
+                .map(|pair| pair[1].as_str()),
+            Some("4096")
+        );
+        assert_eq!(
+            invocations[2]
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--ram")
+                .map(|pair| pair[1].as_str()),
+            Some("4096")
+        );
+        assert!(!invocations[3].args.iter().any(|arg| arg == "--ram"));
     }
 
     #[test]
@@ -2220,6 +2334,25 @@ mod tests {
         let query_missing_display = query_missing_error.to_string();
         assert!(query_missing_display.contains("a required CodeQL query file is missing"));
         assert!(query_missing_display.contains("bundle may be incomplete"));
+    }
+
+    #[test]
+    fn classify_codeql_error_detects_java_heap_oom() {
+        let stderr = "Query evaluation ran out of Java heap (Java heap maximum: 1435 MiB).\n(eventual cause: OutOfMemoryError \"Java heap space\")\nCodeQL is out of memory. Try increasing the memory available to CodeQL using the --ram option.".to_owned();
+        let error = CodeQlAdapterError::CommandFailed {
+            stage: "query run",
+            language: "rust".to_owned(),
+            exit_code: 2,
+            stderr: stderr.clone(),
+            guidance: format_command_guidance(&stderr),
+        };
+
+        let display = error.to_string();
+        assert!(is_codeql_memory_error(&stderr));
+        assert!(display.contains("CodeQL ran out of memory"));
+        assert!(display.contains("kalos check --codeql-ram 4096"));
+        assert!(display.contains("--cache-dir"));
+        assert!(display.contains("--diff"));
     }
 
     #[test]

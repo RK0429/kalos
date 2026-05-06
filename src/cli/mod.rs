@@ -106,6 +106,8 @@ mod tests {
             "--strict",
             "--min-risk",
             "0.5",
+            "--codeql-ram",
+            "4096",
         ])
         .unwrap();
 
@@ -134,6 +136,7 @@ mod tests {
         assert_eq!(command.severity, Some(MinimumSeverity::Warning));
         assert_eq!(command.diff.as_deref(), Some("origin/main"));
         assert_eq!(command.min_risk, Some(0.5));
+        assert_eq!(command.codeql_ram, Some(4096));
         assert!(command.llm);
         assert!(command.strict);
         assert!(!command.update_gitignore);
@@ -228,6 +231,7 @@ mod tests {
         assert!(help.contains("overflow ratio"));
         assert!(help.contains(".kalos.toml"));
         assert!(help.contains("show per-scope metrics in human output"));
+        assert!(help.contains("maximum RAM in MiB passed to CodeQL"));
         assert!(help.contains("filter verbose metrics list by scope risk"));
         assert!(help.contains("write output to a file instead of stdout"));
         assert!(help.contains("suppress the stderr acknowledgment printed on --output success"));
