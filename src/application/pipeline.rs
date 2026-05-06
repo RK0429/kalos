@@ -14,7 +14,8 @@ use crate::domains::cpg::{AnalysisWarning, SourceAnalysis, SourceLocation, Unifi
 use crate::domains::diagnostics::{
     CpgSubgraphExcerpt, Diagnostic, DiagnosticSummary, DiagnosticsScope, ExitCode, FileLocation,
     InlineSuppression, LlmSuggestionBundle, MetricRule, RuleConfig, SummaryScope,
-    apply_suppressions, builtin_metric_rules, builtin_pattern_rules, project_subgraph,
+    apply_suppressions, attach_module_edge_provenance, builtin_metric_rules, builtin_pattern_rules,
+    project_subgraph,
 };
 use crate::domains::impact::{
     BaselineFingerprint, DiffBaseline, ImpactAnalysisInput, ScopeDiagnosticSnapshot,
@@ -1514,6 +1515,8 @@ fn generate_diagnostics(
         }
     }
 
+    attach_module_edge_provenance(&mut diagnostics, &source_analysis.cpg);
+
     let suppressions = source_analysis
         .suppressions
         .iter()
@@ -2169,6 +2172,69 @@ mod tests {
             .map(|diagnostic| diagnostic.rule_id.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(rule_ids, BTreeSet::from(["KAL-M001", "KAL-M003"]));
+    }
+
+    #[test]
+    fn module_metric_diagnostics_include_edge_evidence_for_supported_languages() {
+        let cases = [
+            (
+                Language::Rust,
+                "src/service.rs",
+                "src/repository.rs",
+                "crate::service",
+                "crate::repository",
+            ),
+            (
+                Language::TypeScript,
+                "web/service.ts",
+                "web/repository.ts",
+                "web/service",
+                "web/repository",
+            ),
+            (
+                Language::Python,
+                "app/service.py",
+                "app/repository.py",
+                "app.service",
+                "app.repository",
+            ),
+        ];
+
+        for (language, source_path, target_path, source_scope, target_scope) in cases {
+            let source_analysis = module_edge_source_analysis(
+                language,
+                source_path,
+                target_path,
+                source_scope,
+                target_scope,
+            );
+            let diagnostics = generate_diagnostics(
+                &source_analysis,
+                &single_scope_metrics(
+                    AnalysisLevel::Module,
+                    source_scope,
+                    source_path,
+                    0.8,
+                    vec![("M-M001", 4.0, 0.8)],
+                ),
+                &fixture_config(),
+            );
+
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.rule_id == RuleId::from("KAL-M001"))
+                .unwrap_or_else(|| panic!("expected KAL-M001 for {source_path}"));
+            assert_eq!(diagnostic.location.start_line, 7, "{source_path}");
+            assert_eq!(diagnostic.template_suggestion.code_example, None);
+            assert_eq!(diagnostic.edge_provenance.len(), 1, "{source_path}");
+            let edge = &diagnostic.edge_provenance[0];
+            assert_eq!(edge.source_scope.qualified_name, source_scope);
+            assert_eq!(edge.target_scope.qualified_name, target_scope);
+            assert_eq!(edge.source_file_path, FilePath::from(source_path));
+            assert_eq!(edge.target_file_path, FilePath::from(target_path));
+            assert_eq!(edge.source_start_line, 12);
+            assert_eq!(edge.target_start_line, 4);
+        }
     }
 
     #[test]
@@ -3592,6 +3658,62 @@ mod tests {
         }
     }
 
+    fn module_edge_source_analysis(
+        language: Language,
+        source_path: &str,
+        target_path: &str,
+        source_scope: &str,
+        target_scope: &str,
+    ) -> SourceAnalysis {
+        let subgraph = CpgBuilder::new()
+            .module_at("source", source_scope, source_path, 7, 40)
+            .module_at("target", target_scope, target_path, 1, 20)
+            .function_at(
+                "source_fn",
+                &format!("{source_scope}::run"),
+                source_path,
+                12,
+                15,
+            )
+            .function_at(
+                "target_fn",
+                &format!("{target_scope}::load"),
+                target_path,
+                4,
+                6,
+            )
+            .edge("source", "source_fn", EdgeKind::Contains)
+            .edge("target", "target_fn", EdgeKind::Contains)
+            .edge("source_fn", "target_fn", EdgeKind::Call)
+            .build(project_scope_id());
+
+        SourceAnalysis {
+            cpg: UnifiedCpg {
+                id: CpgId::from(format!("module-edge:{source_path}")),
+                nodes: subgraph.nodes,
+                edges: subgraph.edges,
+            },
+            source_files: BTreeMap::from([
+                (
+                    FilePath::from(source_path),
+                    SourceFile {
+                        path: FilePath::from(source_path),
+                        language,
+                    },
+                ),
+                (
+                    FilePath::from(target_path),
+                    SourceFile {
+                        path: FilePath::from(target_path),
+                        language,
+                    },
+                ),
+            ]),
+            suppressions: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
     fn single_scope_metrics(
         level: AnalysisLevel,
         qualified_name: &str,
@@ -3918,6 +4040,7 @@ mod tests {
                 overflow_ratio: 0.25,
             }),
             pattern: None,
+            edge_provenance: Vec::new(),
             template_suggestion: TemplateSuggestion {
                 explanation: "fix it".to_owned(),
                 code_example: None,
@@ -3946,6 +4069,7 @@ mod tests {
                 evidence_message: "cross-module access".to_owned(),
                 edge_provenance: Vec::new(),
             }),
+            edge_provenance: Vec::new(),
             template_suggestion: TemplateSuggestion {
                 explanation: "move the behavior closer to the data".to_owned(),
                 code_example: None,

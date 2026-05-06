@@ -9,6 +9,8 @@ use crate::domains::metrics::{AnalysisMetrics, round_half_up};
 
 use super::{AnalysisLevel, DiagnosticId, FilePath, MetricId, RuleId, ScopeId, Severity};
 
+const MAX_MODULE_EDGE_EVIDENCE: usize = 5;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiagnosticReport {
     pub diagnostics: Vec<Diagnostic>,
@@ -38,6 +40,7 @@ pub struct Diagnostic {
     pub message: String,
     pub metric: Option<MetricObservation>,
     pub pattern: Option<PatternEvidence>,
+    pub edge_provenance: Vec<PatternEdgeProvenance>,
     pub template_suggestion: TemplateSuggestion,
 }
 
@@ -107,6 +110,7 @@ impl MetricRule {
                 overflow_ratio,
             }),
             pattern: None,
+            edge_provenance: Vec::new(),
             template_suggestion: template_suggestion(&self.suggestion_template),
         })
     }
@@ -169,6 +173,10 @@ pub struct PatternEdgeProvenance {
     pub target_scope: ScopeId,
     pub source_file_path: FilePath,
     pub target_file_path: FilePath,
+    pub source_start_line: u32,
+    pub source_end_line: u32,
+    pub target_start_line: u32,
+    pub target_end_line: u32,
     pub source_is_test: bool,
     pub target_is_test: bool,
 }
@@ -464,6 +472,7 @@ impl PatternRule {
                 }
 
                 let scope_id = scope_id_for_node(module, AnalysisLevel::Module);
+                let edge_provenance = graph.edge_provenance_for_module(module.id);
                 Some(Diagnostic {
                     id: DiagnosticId::from(format!("{}-{}", self.id, scope_id.qualified_name)),
                     primary_scope_id: scope_id.clone(),
@@ -483,8 +492,9 @@ impl PatternRule {
                             "public_member_count={}, fan_out={}, average M-F002={:.6}",
                             public_member_count, fan_out, complexity_average
                         ),
-                        edge_provenance: Vec::new(),
+                        edge_provenance: edge_provenance.clone(),
                     }),
+                    edge_provenance,
                     template_suggestion: template_suggestion(&self.suggestion_template),
                 })
             })
@@ -569,6 +579,7 @@ impl PatternRule {
                         ),
                         edge_provenance: Vec::new(),
                     }),
+                    edge_provenance: Vec::new(),
                     template_suggestion: template_suggestion(&self.suggestion_template),
                 })
             })
@@ -652,6 +663,25 @@ fn function_metric_lookup(
         .collect()
 }
 
+pub fn attach_module_edge_provenance(diagnostics: &mut [Diagnostic], cpg: &UnifiedCpg) {
+    let project = project_subgraph(cpg);
+    let graph = PatternModuleGraph::build(&project);
+
+    for diagnostic in diagnostics.iter_mut().filter(|diagnostic| {
+        diagnostic.primary_scope_id.level == AnalysisLevel::Module
+            && matches!(
+                diagnostic.rule_id.as_str(),
+                "KAL-M001" | "KAL-M002" | "KAL-M003"
+            )
+            && diagnostic.edge_provenance.is_empty()
+    }) {
+        let Some(module) = graph.module_for_scope(&diagnostic.primary_scope_id) else {
+            continue;
+        };
+        diagnostic.edge_provenance = graph.edge_provenance_for_module(module.id);
+    }
+}
+
 fn scope_id_for_node(node: &CpgNode, level: AnalysisLevel) -> ScopeId {
     ScopeId::new(level, node.name.clone(), node.location.file_path.clone())
 }
@@ -706,8 +736,9 @@ fn build_cross_scope_pattern_diagnostic(
             pattern_type: rule.pattern_type,
             evidence_scopes,
             evidence_message: cycle_description,
-            edge_provenance,
+            edge_provenance: edge_provenance.clone(),
         }),
+        edge_provenance,
         template_suggestion: template_suggestion(&rule.suggestion_template),
     }
 }
@@ -828,6 +859,10 @@ impl<'a> PatternModuleGraph<'a> {
                         target_scope: scope_id_for_node(target_module_node, AnalysisLevel::Module),
                         source_file_path: source_node.location.file_path.clone(),
                         target_file_path: target_node.location.file_path.clone(),
+                        source_start_line: source_node.location.start_line,
+                        source_end_line: source_node.location.end_line,
+                        target_start_line: target_node.location.start_line,
+                        target_end_line: target_node.location.end_line,
                         source_is_test,
                         target_is_test,
                     });
@@ -888,6 +923,24 @@ impl<'a> PatternModuleGraph<'a> {
         self.outgoing.get(&module_id).map_or(0, BTreeSet::len)
     }
 
+    fn edge_provenance_for_module(&self, module_id: NodeId) -> Vec<PatternEdgeProvenance> {
+        let mut provenance = self
+            .edge_provenance
+            .iter()
+            .filter(|((source, _), _)| *source == module_id)
+            .flat_map(|(_, edges)| {
+                edges
+                    .iter()
+                    .filter(|edge| !edge.source_is_test && !edge.target_is_test)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        provenance.sort_by_key(edge_provenance_sort_key);
+        provenance.dedup();
+        provenance.truncate(MAX_MODULE_EDGE_EVIDENCE);
+        provenance
+    }
+
     fn production_non_trivial_sccs(&self) -> Vec<Vec<&'a CpgNode>> {
         self.production_sccs.clone()
     }
@@ -928,10 +981,25 @@ impl<'a> PatternModuleGraph<'a> {
                 edge.target_scope.qualified_name.clone(),
                 edge.source_file_path.clone(),
                 edge.target_file_path.clone(),
+                edge.source_start_line,
+                edge.target_start_line,
             )
         });
         provenance
     }
+}
+
+fn edge_provenance_sort_key(
+    edge: &PatternEdgeProvenance,
+) -> (String, String, FilePath, FilePath, u32, u32) {
+    (
+        edge.source_scope.qualified_name.clone(),
+        edge.target_scope.qualified_name.clone(),
+        edge.source_file_path.clone(),
+        edge.target_file_path.clone(),
+        edge.source_start_line,
+        edge.target_start_line,
+    )
 }
 
 fn match_node_for_scope<'a>(nodes: &[&'a CpgNode], scope_id: &ScopeId) -> Option<&'a CpgNode> {
@@ -1608,6 +1676,7 @@ mod tests {
                 message: "metric".to_owned(),
                 metric: None,
                 pattern: None,
+                edge_provenance: Vec::new(),
                 template_suggestion: super::template_suggestion("metric"),
             },
             Diagnostic {
@@ -1634,6 +1703,7 @@ mod tests {
                     evidence_message: "evidence".to_owned(),
                     edge_provenance: Vec::new(),
                 }),
+                edge_provenance: Vec::new(),
                 template_suggestion: super::template_suggestion("pattern"),
             },
             Diagnostic {
@@ -1659,6 +1729,7 @@ mod tests {
                     evidence_message: "a -> b".to_owned(),
                     edge_provenance: Vec::new(),
                 }),
+                edge_provenance: Vec::new(),
                 template_suggestion: super::template_suggestion("cycle"),
             },
         ];
