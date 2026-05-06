@@ -9,8 +9,9 @@ pub mod types;
 pub use builtin::{
     CfgBranchEntropyRisk, CircularDependencyParticipationRisk, CyclicCouplingRisk,
     CyclomaticComplexityRisk, DataFlowDensityRisk, HubDependencyConcentrationRisk,
-    IdentifierRepetitionRisk, InstabilityRisk, MIN_HUB_CONCENTRATION_IN_DEGREE, ModuleFanOutRisk,
-    ModuleSizeEntropyImbalanceRisk, builtin_metric_definitions, project_hub_concentration_support,
+    IdentifierRepetitionRisk, InstabilityRisk, MIN_HUB_CONCENTRATION_IN_DEGREE,
+    MIN_MODULE_INSTABILITY_DEPENDENCY_SUPPORT, ModuleFanOutRisk, ModuleSizeEntropyImbalanceRisk,
+    builtin_metric_definitions, project_hub_concentration_support,
 };
 pub use types::{
     MetricConfig, MetricDefinition, MetricOrigin, MetricParticipation, MetricValue, round_half_up,

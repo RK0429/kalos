@@ -20,6 +20,16 @@ use super::types::{
 /// freshly scaffolded projects. See GitHub issue #59.
 pub const MIN_HUB_CONCENTRATION_IN_DEGREE: u32 = 3;
 
+/// Minimum number of module-level fan-in/fan-out dependency edges required for
+/// M-M003 (module instability) to produce a meaningful normalized risk.
+///
+/// Below this support level `fan_out / (fan_in + fan_out)` is dominated by
+/// structural inevitability (e.g. a thin leaf adapter with one outward
+/// dependency yields 1.0) and cannot be distinguished from genuinely unstable
+/// architecture, so the normalized risk is clamped to 0 to avoid spurious
+/// KAL-M003 diagnostics on tiny modules. See GitHub issue #116.
+pub const MIN_MODULE_INSTABILITY_DEPENDENCY_SUPPORT: u32 = 3;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CfgBranchEntropyRisk {
     id: MetricId,
@@ -398,7 +408,7 @@ fn compute_circular_dependency_participation_risk(
 
 fn compute_instability_risk(subgraph: &CpgSubgraph, metric_id: &MetricId) -> Option<MetricValue> {
     let module_graph = ModuleDependencyGraph::build(subgraph);
-    let raw_value = module_graph
+    let (raw_value, normalized_risk) = module_graph
         .module_for_scope(&subgraph.scope_id)
         .map(|module_id| {
             let fan_in = module_graph.fan_in(module_id) as f64;
@@ -406,14 +416,21 @@ fn compute_instability_risk(subgraph: &CpgSubgraph, metric_id: &MetricId) -> Opt
             let denominator = fan_in + fan_out;
 
             if denominator == 0.0 {
-                0.0
+                (0.0, 0.0)
             } else {
-                fan_out / denominator
+                let raw_ratio = fan_out / denominator;
+                let normalized =
+                    if denominator < f64::from(MIN_MODULE_INSTABILITY_DEPENDENCY_SUPPORT) {
+                        0.0
+                    } else {
+                        raw_ratio
+                    };
+                (raw_ratio, normalized)
             }
         })
-        .unwrap_or(0.0);
+        .unwrap_or((0.0, 0.0));
 
-    finalize_metric_value(metric_id, raw_value, raw_value)
+    finalize_metric_value(metric_id, raw_value, normalized_risk)
 }
 
 fn compute_cyclic_coupling_risk(
@@ -1620,6 +1637,60 @@ mod tests {
 
         assert_eq!(value.raw_value, 1.0);
         assert_eq!(value.normalized_risk, 0.0);
+    }
+
+    #[test]
+    fn instability_suppresses_normalized_risk_for_tiny_leaf_adapter() {
+        let metric = InstabilityRisk::new();
+        let graph = CpgBuilder::new()
+            .module_at("adapter", "src/adapter.py", "src/adapter.py", 1, 2)
+            .module_at("sdk", "src/sdk.py", "src/sdk.py", 1, 2)
+            .function_at("call_sdk", "adapter.call_sdk", "src/adapter.py", 1, 2)
+            .function_at("request", "sdk.request", "src/sdk.py", 1, 2)
+            .edge("adapter", "call_sdk", EdgeKind::Contains)
+            .edge("sdk", "request", EdgeKind::Contains)
+            .edge("call_sdk", "request", EdgeKind::Call)
+            .build(ScopeId::new(
+                AnalysisLevel::Module,
+                "src/adapter.py",
+                "src/adapter.py",
+            ));
+
+        let value = metric.compute(&graph, &config()).unwrap();
+
+        assert_eq!(value.raw_value, 1.0);
+        assert_eq!(value.normalized_risk, 0.0);
+    }
+
+    #[test]
+    fn instability_retains_normalized_risk_at_minimum_sample() {
+        let metric = InstabilityRisk::new();
+        let graph = CpgBuilder::new()
+            .module_at("root", "crate::root", "src/root.rs", 1, 10)
+            .module_at("a", "crate::a", "src/a.rs", 1, 2)
+            .module_at("b", "crate::b", "src/b.rs", 1, 2)
+            .module_at("c", "crate::c", "src/c.rs", 1, 2)
+            .function_at("root_fn", "root_fn", "src/root.rs", 2, 4)
+            .function_at("a_fn", "a_fn", "src/a.rs", 1, 2)
+            .function_at("b_fn", "b_fn", "src/b.rs", 1, 2)
+            .function_at("c_fn", "c_fn", "src/c.rs", 1, 2)
+            .edge("root", "root_fn", EdgeKind::Contains)
+            .edge("a", "a_fn", EdgeKind::Contains)
+            .edge("b", "b_fn", EdgeKind::Contains)
+            .edge("c", "c_fn", EdgeKind::Contains)
+            .edge("root_fn", "a_fn", EdgeKind::Call)
+            .edge("root_fn", "b_fn", EdgeKind::Call)
+            .edge("root_fn", "c_fn", EdgeKind::Call)
+            .build(ScopeId::new(
+                AnalysisLevel::Module,
+                "crate::root",
+                "src/root.rs",
+            ));
+
+        let value = metric.compute(&graph, &config()).unwrap();
+
+        assert_eq!(value.raw_value, 1.0);
+        assert_eq!(value.normalized_risk, 1.0);
     }
 
     #[test]
