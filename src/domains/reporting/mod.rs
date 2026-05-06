@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 pub const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 pub const SARIF_VERSION: &str = "2.1.0";
+const KAL_M003_GATE_GUIDANCE_PREFIX: &str = "module/all gate guidance: KAL-M003";
 
 use crate::domains::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope,
@@ -196,6 +197,12 @@ impl AnalysisReport {
             SummaryScope::WholeProject => &diagnostics,
             SummaryScope::ListedDiagnostics => &projected_diagnostics,
         });
+
+        let analysis_warnings = append_module_gate_guidance(
+            analysis_warnings,
+            view.requested_level,
+            &projected_diagnostics,
+        );
 
         Self {
             metadata,
@@ -863,6 +870,50 @@ pub fn project_scores(
         project,
         score_notes: collect_score_notes(requested_level, function, module, project),
     }
+}
+
+fn append_module_gate_guidance(
+    mut analysis_warnings: Vec<String>,
+    requested_level: RequestedLevel,
+    diagnostics: &[Diagnostic],
+) -> Vec<String> {
+    if !requested_level.includes(AnalysisLevel::Module) {
+        return analysis_warnings;
+    }
+
+    let kal_m003_diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id.as_str() == "KAL-M003")
+        .collect::<Vec<_>>();
+    if kal_m003_diagnostics.is_empty() {
+        return analysis_warnings;
+    }
+
+    let thresholds = kal_m003_diagnostics
+        .iter()
+        .filter_map(|diagnostic| diagnostic.metric.as_ref().map(|metric| metric.threshold))
+        .map(|threshold| format!("{threshold:.6}"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let threshold_clause = if thresholds.is_empty() {
+        "configured threshold unavailable".to_owned()
+    } else {
+        format!("configured threshold(s) {thresholds}")
+    };
+    let warning = format!(
+        "{KAL_M003_GATE_GUIDANCE_PREFIX} reported {} module instability diagnostic(s); use --level project as the baseline CI gate, and treat module/all as a domain-owner architecture review gate. Before failing that gate, inspect dependency direction, owner boundaries, and {threshold_clause}.",
+        kal_m003_diagnostics.len()
+    );
+
+    if !analysis_warnings
+        .iter()
+        .any(|existing| existing == &warning)
+    {
+        analysis_warnings.push(warning);
+    }
+    analysis_warnings
 }
 
 pub fn summary_scope_for(requested_level: RequestedLevel) -> SummaryScope {
@@ -2292,6 +2343,79 @@ mod tests {
         );
     }
 
+    #[test]
+    fn json_output_adds_kal_m003_module_gate_guidance_for_all_level() {
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(fixture_kal_m003_module_diagnostic());
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let warnings = parsed["analysis_warnings"]
+            .as_array()
+            .expect("analysis warnings array");
+
+        assert!(warnings.iter().any(|warning| {
+            warning
+                .as_str()
+                .is_some_and(|text| text.contains("module/all gate guidance: KAL-M003"))
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning
+                .as_str()
+                .is_some_and(|text| text.contains("configured threshold(s) 0.750000"))
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning
+                .as_str()
+                .is_some_and(|text| text.contains("domain-owner architecture review gate"))
+        }));
+    }
+
+    #[test]
+    fn sarif_output_adds_kal_m003_module_gate_guidance_for_module_level() {
+        let report = project_report(
+            RequestedLevel::Module,
+            None,
+            &fixture_metrics(),
+            vec![fixture_kal_m003_module_diagnostic()],
+        );
+
+        let rendered = report.render_sarif(None).expect("sarif should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif should parse");
+        let warnings = parsed["runs"][0]["properties"]["analysis_warnings"]
+            .as_array()
+            .expect("analysis warnings array");
+
+        assert!(warnings.iter().any(|warning| {
+            warning
+                .as_str()
+                .is_some_and(|text| text.contains("module/all gate guidance: KAL-M003"))
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning
+                .as_str()
+                .is_some_and(|text| text.contains("use --level project as the baseline CI gate"))
+        }));
+    }
+
+    #[test]
+    fn function_output_does_not_add_kal_m003_module_gate_guidance() {
+        let report = project_report(
+            RequestedLevel::Function,
+            None,
+            &fixture_metrics(),
+            vec![fixture_kal_m003_module_diagnostic()],
+        );
+
+        assert!(
+            report
+                .analysis_warnings
+                .iter()
+                .all(|warning| !warning.contains("module/all gate guidance: KAL-M003"))
+        );
+    }
+
     fn project_report(
         requested_level: RequestedLevel,
         minimum_severity: Option<Severity>,
@@ -2682,6 +2806,39 @@ mod tests {
             pattern: None,
             template_suggestion: TemplateSuggestion {
                 explanation: "reduce test fan-out".to_owned(),
+                code_example: None,
+            },
+        }
+    }
+
+    fn fixture_kal_m003_module_diagnostic() -> Diagnostic {
+        Diagnostic {
+            id: DiagnosticId::from("diag-module-instability"),
+            primary_scope_id: ScopeId::new(
+                AnalysisLevel::Module,
+                "crate::service",
+                "src/service.rs",
+            ),
+            rule_id: RuleId::from("KAL-M003"),
+            kind: DiagnosticKind::Metric,
+            severity: Severity::Error,
+            location: FileLocation {
+                file_path: FilePath::from("src/service.rs"),
+                start_line: 1,
+                end_line: 120,
+                column: Some(1),
+            },
+            message: "M-M003 normalized risk 0.900000 exceeded threshold 0.750000".to_owned(),
+            metric: Some(MetricObservation {
+                metric_id: MetricId::from("M-M003"),
+                raw_value: 0.9,
+                normalized_risk: 0.9,
+                threshold: 0.75,
+                overflow_ratio: 0.6,
+            }),
+            pattern: None,
+            template_suggestion: TemplateSuggestion {
+                explanation: "review dependency direction".to_owned(),
                 code_example: None,
             },
         }

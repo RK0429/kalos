@@ -35,7 +35,8 @@ fn kalos_init_creates_default_config_file() {
     assert!(
         config.contains("# CI baseline gates should normally use `kalos check --level project`.")
     );
-    assert!(config.contains("# Module/all runs expose architecture triage diagnostics"));
+    assert!(config.contains("# Module/all runs are domain-owner architecture triage"));
+    assert!(config.contains("For KAL-M003 bursts, inspect dependency direction"));
     assert!(config.contains("raise `threshold`, lower `severity`, or set `enabled = false`"));
     assert!(config.contains("# [rules.KAL-F001]"));
     assert!(config.contains("# [rules.KAL-PAT003]"));
@@ -580,6 +581,12 @@ fn kalos_check_help_explains_project_gate_and_module_triage() {
             "module diagnostics such as KAL-M001, KAL-M002, and KAL-M003",
         ))
         .stdout(predicate::str::contains("tune noisy"))
+        .stdout(predicate::str::contains(
+            "owner: inspect dependency direction, owner boundaries, and configured thresholds",
+        ))
+        .stdout(predicate::str::contains(
+            "Use project for the CI baseline gate",
+        ))
         .stdout(predicate::str::contains(
             "threshold, severity, or enabled overrides",
         ));
