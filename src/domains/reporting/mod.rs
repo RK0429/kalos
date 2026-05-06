@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 pub const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 pub const SARIF_VERSION: &str = "2.1.0";
 const KAL_M003_GATE_GUIDANCE_PREFIX: &str = "module/all gate guidance: KAL-M003";
+const MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE: usize = 25;
 
 use crate::domains::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope,
@@ -198,6 +199,12 @@ impl AnalysisReport {
             SummaryScope::ListedDiagnostics => &projected_diagnostics,
         });
 
+        let analysis_warnings = append_function_metric_flood_guidance(
+            analysis_warnings,
+            view.requested_level,
+            diagnostics.len(),
+            projected_diagnostics.len(),
+        );
         let analysis_warnings = append_module_gate_guidance(
             analysis_warnings,
             view.requested_level,
@@ -829,11 +836,17 @@ pub fn project_diagnostics(
     diagnostics: &[Diagnostic],
     requested_level: RequestedLevel,
 ) -> Vec<Diagnostic> {
-    diagnostics
+    let projected = diagnostics
         .iter()
         .filter(|diagnostic| requested_level.includes(diagnostic.primary_scope_id.level))
         .cloned()
-        .collect()
+        .collect::<Vec<_>>();
+
+    if requested_level == RequestedLevel::All {
+        cap_all_level_function_metric_diagnostics(projected)
+    } else {
+        projected
+    }
 }
 
 pub fn project_scores(
@@ -926,6 +939,110 @@ fn append_module_gate_guidance(
         analysis_warnings.push(warning);
     }
     analysis_warnings
+}
+
+fn append_function_metric_flood_guidance(
+    mut analysis_warnings: Vec<String>,
+    requested_level: RequestedLevel,
+    original_count: usize,
+    projected_count: usize,
+) -> Vec<String> {
+    if requested_level != RequestedLevel::All || projected_count >= original_count {
+        return analysis_warnings;
+    }
+
+    let hidden_count = original_count - projected_count;
+    let warning = format!(
+        "function metric flood control: hid {hidden_count} lower-priority function metric diagnostic(s) in --level all; showing at most {MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE} per function metric rule. Use --level function for the full function diagnostic inventory."
+    );
+    if !analysis_warnings
+        .iter()
+        .any(|existing| existing == &warning)
+    {
+        analysis_warnings.push(warning);
+    }
+    analysis_warnings
+}
+
+fn cap_all_level_function_metric_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let mut non_function_metric_diagnostics = Vec::new();
+    let mut function_metric_diagnostics_by_rule: BTreeMap<String, Vec<Diagnostic>> =
+        BTreeMap::new();
+
+    for diagnostic in diagnostics {
+        if is_function_metric_diagnostic(&diagnostic) {
+            function_metric_diagnostics_by_rule
+                .entry(diagnostic.rule_id.as_str().to_owned())
+                .or_default()
+                .push(diagnostic);
+        } else {
+            non_function_metric_diagnostics.push(diagnostic);
+        }
+    }
+
+    let mut capped = non_function_metric_diagnostics;
+    for diagnostics in function_metric_diagnostics_by_rule.values_mut() {
+        diagnostics.sort_by(compare_function_metric_priority);
+        capped.extend(
+            diagnostics
+                .iter()
+                .take(MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE)
+                .cloned(),
+        );
+    }
+    capped.sort_by(compare_diagnostic_output_order);
+    capped
+}
+
+fn is_function_metric_diagnostic(diagnostic: &Diagnostic) -> bool {
+    diagnostic.primary_scope_id.level == AnalysisLevel::Function
+        && diagnostic.kind == DiagnosticKind::Metric
+}
+
+fn compare_function_metric_priority(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
+    right
+        .severity
+        .cmp(&left.severity)
+        .then_with(|| metric_overflow_ratio(right).total_cmp(&metric_overflow_ratio(left)))
+        .then_with(|| metric_normalized_risk(right).total_cmp(&metric_normalized_risk(left)))
+        .then_with(|| compare_diagnostic_output_order(left, right))
+}
+
+fn compare_diagnostic_output_order(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
+    (
+        left.primary_scope_id.level,
+        left.location.file_path.as_str(),
+        left.location.start_line,
+        left.location.end_line,
+        left.rule_id.as_str(),
+        left.primary_scope_id.qualified_name.as_str(),
+        left.id.as_str(),
+    )
+        .cmp(&(
+            right.primary_scope_id.level,
+            right.location.file_path.as_str(),
+            right.location.start_line,
+            right.location.end_line,
+            right.rule_id.as_str(),
+            right.primary_scope_id.qualified_name.as_str(),
+            right.id.as_str(),
+        ))
+}
+
+fn metric_overflow_ratio(diagnostic: &Diagnostic) -> f64 {
+    diagnostic
+        .metric
+        .as_ref()
+        .map(|metric| metric.overflow_ratio)
+        .unwrap_or(0.0)
+}
+
+fn metric_normalized_risk(diagnostic: &Diagnostic) -> f64 {
+    diagnostic
+        .metric
+        .as_ref()
+        .map(|metric| metric.normalized_risk)
+        .unwrap_or(0.0)
 }
 
 pub fn summary_scope_for(requested_level: RequestedLevel) -> SummaryScope {
@@ -1526,6 +1643,80 @@ mod tests {
                 project: Some(75),
                 score_notes: vec![],
             }
+        );
+    }
+
+    #[test]
+    fn all_level_caps_function_metric_diagnostics_per_rule() {
+        let mut diagnostics = (0..30)
+            .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
+            .collect::<Vec<_>>();
+        diagnostics.extend((0..3).map(|index| {
+            fixture_function_metric_diagnostic("KAL-F002", "M-F002", index + 100, 0.4)
+        }));
+        diagnostics.push(fixture_kal_m003_module_diagnostic());
+
+        let report = project_report(
+            RequestedLevel::All,
+            None,
+            &fixture_metrics(),
+            diagnostics.clone(),
+        );
+        let projected = &report.diagnostics.diagnostics;
+
+        assert_eq!(projected.len(), 29);
+        assert_eq!(
+            projected
+                .iter()
+                .filter(|diagnostic| diagnostic.rule_id.as_str() == "KAL-F001")
+                .count(),
+            super::MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert_eq!(
+            projected
+                .iter()
+                .filter(|diagnostic| diagnostic.rule_id.as_str() == "KAL-F002")
+                .count(),
+            3
+        );
+        assert!(
+            projected
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id.as_str() == "KAL-M003")
+        );
+        assert!(
+            projected
+                .iter()
+                .filter(|diagnostic| diagnostic.rule_id.as_str() == "KAL-F001")
+                .all(|diagnostic| diagnostic.primary_scope_id.qualified_name != "crate::f0"),
+            "lowest-priority function metric diagnostic should be hidden"
+        );
+        assert_eq!(report.diagnostics.summary.error_count, 34);
+        assert!(report.analysis_warnings.iter().any(|warning| {
+            warning.contains("function metric flood control: hid 5")
+                && warning.contains("Use --level function")
+        }));
+    }
+
+    #[test]
+    fn function_level_keeps_full_function_metric_inventory() {
+        let diagnostics = (0..30)
+            .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
+            .collect::<Vec<_>>();
+
+        let report = project_report(
+            RequestedLevel::Function,
+            None,
+            &fixture_metrics(),
+            diagnostics,
+        );
+
+        assert_eq!(report.diagnostics.diagnostics.len(), 30);
+        assert!(
+            report
+                .analysis_warnings
+                .iter()
+                .all(|warning| !warning.contains("function metric flood control"))
         );
     }
 
@@ -3026,6 +3217,46 @@ mod tests {
                 normalized_risk: 0.8,
                 threshold: 0.55,
                 overflow_ratio: 0.25,
+            }),
+            pattern: None,
+            edge_provenance: Vec::new(),
+            template_suggestion: TemplateSuggestion {
+                explanation: "extract helper".to_owned(),
+                code_example: None,
+            },
+        }
+    }
+
+    fn fixture_function_metric_diagnostic(
+        rule_id: &str,
+        metric_id: &str,
+        index: u32,
+        base_risk: f64,
+    ) -> Diagnostic {
+        let normalized_risk = base_risk + f64::from(index) / 1000.0;
+        Diagnostic {
+            id: DiagnosticId::from(format!("diag-function-{rule_id}-{index}")),
+            primary_scope_id: ScopeId::new(
+                AnalysisLevel::Function,
+                format!("crate::f{index}"),
+                format!("src/f{index}.rs"),
+            ),
+            rule_id: RuleId::from(rule_id),
+            kind: DiagnosticKind::Metric,
+            severity: Severity::Error,
+            location: FileLocation {
+                file_path: FilePath::from(format!("src/f{index}.rs")),
+                start_line: index + 1,
+                end_line: index + 2,
+                column: Some(1),
+            },
+            message: "function metric flood".to_owned(),
+            metric: Some(MetricObservation {
+                metric_id: MetricId::from(metric_id),
+                raw_value: f64::from(index),
+                normalized_risk,
+                threshold: 0.50,
+                overflow_ratio: normalized_risk - 0.50,
             }),
             pattern: None,
             edge_provenance: Vec::new(),
