@@ -27,9 +27,84 @@
       "language": "typescript"
     }
   ],
+  "parameters": [
+    {
+      "id": "p1",
+      "name": "viewModel",
+      "file": "web/app.ts",
+      "start_line": 1,
+      "end_line": 1,
+      "language": "typescript"
+    },
+    {
+      "id": "p2",
+      "name": "mountNode",
+      "file": "web/app.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "language": "typescript"
+    }
+  ],
+  "variables": [
+    {
+      "id": "v1",
+      "name": "renderResult",
+      "file": "web/app.ts",
+      "start_line": 2,
+      "end_line": 2,
+      "language": "typescript"
+    },
+    {
+      "id": "v2",
+      "name": "mountResult",
+      "file": "web/app.ts",
+      "start_line": 6,
+      "end_line": 6,
+      "language": "typescript"
+    }
+  ],
   "calls": [
     {
       "source": "f2",
+      "target": "f1",
+      "language": "typescript"
+    }
+  ],
+  "data_flows": [
+    {
+      "source": "p1",
+      "target": "v1",
+      "language": "typescript"
+    },
+    {
+      "source": "p2",
+      "target": "v2",
+      "language": "typescript"
+    }
+  ],
+  "control_flows": [
+    {
+      "source": "f1",
+      "target": "p1",
+      "language": "typescript"
+    },
+    {
+      "source": "p1",
+      "target": "v1",
+      "language": "typescript"
+    },
+    {
+      "source": "f2",
+      "target": "p2",
+      "language": "typescript"
+    },
+    {
+      "source": "p2",
+      "target": "v2",
+      "language": "typescript"
+    },
+    {
+      "source": "p2",
       "target": "f1",
       "language": "typescript"
     }
@@ -43,6 +118,26 @@
     {
       "source": "m1",
       "target": "f2",
+      "language": "typescript"
+    },
+    {
+      "source": "f1",
+      "target": "p1",
+      "language": "typescript"
+    },
+    {
+      "source": "f1",
+      "target": "v1",
+      "language": "typescript"
+    },
+    {
+      "source": "f2",
+      "target": "p2",
+      "language": "typescript"
+    },
+    {
+      "source": "f2",
+      "target": "v2",
       "language": "typescript"
     }
   ]

@@ -1123,7 +1123,14 @@ mod tests {
                 .iter()
                 .map(|node| node.kind)
                 .collect::<Vec<_>>(),
-            vec![NodeKind::Module, NodeKind::Class, NodeKind::Function]
+            vec![
+                NodeKind::Module,
+                NodeKind::Class,
+                NodeKind::Function,
+                NodeKind::Variable,
+                NodeKind::Variable,
+                NodeKind::Parameter,
+            ]
         );
         assert_eq!(
             analysis
@@ -1132,7 +1139,19 @@ mod tests {
                 .iter()
                 .map(|edge| edge.kind)
                 .collect::<Vec<_>>(),
-            vec![EdgeKind::Contains, EdgeKind::Contains, EdgeKind::Call]
+            vec![
+                EdgeKind::Contains,
+                EdgeKind::Contains,
+                EdgeKind::Call,
+                EdgeKind::Contains,
+                EdgeKind::Contains,
+                EdgeKind::ControlFlow,
+                EdgeKind::Contains,
+                EdgeKind::DataFlow,
+                EdgeKind::DataFlow,
+                EdgeKind::ControlFlow,
+                EdgeKind::ControlFlow,
+            ]
         );
 
         let invocations = command_runner.invocations().unwrap();

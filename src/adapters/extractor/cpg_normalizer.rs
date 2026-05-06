@@ -31,6 +31,8 @@ pub struct CodeQlQueryOutput {
     #[serde(default)]
     pub data_flows: Vec<FixtureEdge>,
     #[serde(default)]
+    pub control_flows: Vec<FixtureEdge>,
+    #[serde(default)]
     pub contains: Vec<FixtureEdge>,
     #[serde(default)]
     pub type_references: Vec<FixtureEdge>,
@@ -50,6 +52,7 @@ impl CodeQlQueryOutput {
         self.external_symbols.extend(other.external_symbols);
         self.calls.extend(other.calls);
         self.data_flows.extend(other.data_flows);
+        self.control_flows.extend(other.control_flows);
         self.contains.extend(other.contains);
         self.type_references.extend(other.type_references);
         self.semantic_edges.extend(other.semantic_edges);
@@ -156,6 +159,7 @@ impl CpgNormalizer {
             external_symbols,
             calls,
             data_flows,
+            control_flows,
             contains,
             type_references,
             semantic_edges,
@@ -283,6 +287,13 @@ impl CpgNormalizer {
             &node_lookup,
             data_flows,
             EdgeKind::DataFlow,
+        );
+        append_edges(
+            &mut edges,
+            &mut warnings,
+            &node_lookup,
+            control_flows,
+            EdgeKind::ControlFlow,
         );
         append_edges(
             &mut edges,
@@ -462,6 +473,7 @@ fn is_known_output_field(key: &str) -> bool {
             | "external_symbols"
             | "calls"
             | "data_flows"
+            | "control_flows"
             | "contains"
             | "type_references"
             | "semantic_edges"
@@ -605,7 +617,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(analysis.source_files, source_files);
-        assert_eq!(analysis.cpg.nodes.len(), 3);
+        assert_eq!(analysis.cpg.nodes.len(), 6);
         assert_eq!(
             analysis
                 .cpg
@@ -613,7 +625,14 @@ mod tests {
                 .iter()
                 .map(|node| node.kind)
                 .collect::<Vec<_>>(),
-            vec![NodeKind::Module, NodeKind::Class, NodeKind::Function]
+            vec![
+                NodeKind::Module,
+                NodeKind::Class,
+                NodeKind::Function,
+                NodeKind::Variable,
+                NodeKind::Variable,
+                NodeKind::Parameter,
+            ]
         );
         assert_eq!(
             analysis
@@ -622,7 +641,19 @@ mod tests {
                 .iter()
                 .map(|edge| edge.kind)
                 .collect::<Vec<_>>(),
-            vec![EdgeKind::Contains, EdgeKind::Contains, EdgeKind::Call]
+            vec![
+                EdgeKind::Contains,
+                EdgeKind::Contains,
+                EdgeKind::Call,
+                EdgeKind::Contains,
+                EdgeKind::Contains,
+                EdgeKind::ControlFlow,
+                EdgeKind::Contains,
+                EdgeKind::DataFlow,
+                EdgeKind::DataFlow,
+                EdgeKind::ControlFlow,
+                EdgeKind::ControlFlow,
+            ]
         );
     }
 

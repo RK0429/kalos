@@ -32,10 +32,67 @@
       }
     }
   ],
+  "parameters": [
+    {
+      "id": "p1",
+      "name": "user_name",
+      "file": "src/app.py",
+      "start_line": 6,
+      "end_line": 6,
+      "language": "python"
+    }
+  ],
+  "variables": [
+    {
+      "id": "v1",
+      "name": "displayName",
+      "file": "src/app.py",
+      "start_line": 7,
+      "end_line": 7,
+      "language": "python"
+    },
+    {
+      "id": "v2",
+      "name": "result_name",
+      "file": "src/app.py",
+      "start_line": 8,
+      "end_line": 8,
+      "language": "python"
+    }
+  ],
   "calls": [
     {
       "source": "f1",
       "target": "c1",
+      "language": "python"
+    }
+  ],
+  "data_flows": [
+    {
+      "source": "p1",
+      "target": "v1",
+      "language": "python"
+    },
+    {
+      "source": "v1",
+      "target": "v2",
+      "language": "python"
+    }
+  ],
+  "control_flows": [
+    {
+      "source": "f1",
+      "target": "p1",
+      "language": "python"
+    },
+    {
+      "source": "p1",
+      "target": "v1",
+      "language": "python"
+    },
+    {
+      "source": "p1",
+      "target": "v2",
       "language": "python"
     }
   ],
@@ -48,6 +105,21 @@
     {
       "source": "m1",
       "target": "f1",
+      "language": "python"
+    },
+    {
+      "source": "f1",
+      "target": "p1",
+      "language": "python"
+    },
+    {
+      "source": "f1",
+      "target": "v1",
+      "language": "python"
+    },
+    {
+      "source": "f1",
+      "target": "v2",
       "language": "python"
     }
   ]
