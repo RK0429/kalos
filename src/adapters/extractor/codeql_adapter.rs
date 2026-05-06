@@ -263,6 +263,19 @@ pub enum CodeQlAdapterError {
         #[source]
         source: ProcessError,
     },
+    #[error("failed to parse CodeQL language preflight output for `{language}`: {source}")]
+    ResolveLanguagesOutput {
+        language: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "CodeQL extractor for `{language}` is not installed in the resolved bundle\n\n  cause: CodeQL cannot create a database for this language because its extractor is unavailable\n  available languages: {available_languages}\n\n  next steps:\n    - refresh the managed CodeQL bundle/cache and re-run `kalos check`\n    - if `{language}` remains unavailable, treat this language as unsupported in the current environment"
+    )]
+    ExtractorUnavailable {
+        language: String,
+        available_languages: String,
+    },
     #[error("CodeQL `{stage}` failed for `{language}` (exit code {exit_code})\n\n{guidance}")]
     CommandFailed {
         stage: &'static str,
@@ -461,6 +474,8 @@ where
                 }
             }
 
+            self.ensure_extractor_available(&codeql_program, &request.workspace_root, language)?;
+
             let database_create_started = if self.progress {
                 eprintln!(
                     "    {} ...",
@@ -611,6 +626,47 @@ where
 
         Ok(output)
     }
+
+    fn ensure_extractor_available(
+        &self,
+        program: &Path,
+        cwd: &Path,
+        language: Language,
+    ) -> Result<(), CodeQlAdapterError> {
+        let output = self.run_checked(
+            program,
+            build_resolve_languages_args(),
+            cwd,
+            "resolve languages",
+            language,
+        )?;
+        let available_languages = parse_resolved_languages(&output.stdout).map_err(|source| {
+            CodeQlAdapterError::ResolveLanguagesOutput {
+                language: language_name(language).to_owned(),
+                source,
+            }
+        })?;
+
+        if language_extractor_names(language)
+            .iter()
+            .any(|candidate| available_languages.contains(*candidate))
+        {
+            return Ok(());
+        }
+
+        Err(CodeQlAdapterError::ExtractorUnavailable {
+            language: language_name(language).to_owned(),
+            available_languages: format_available_languages(&available_languages),
+        })
+    }
+}
+
+fn build_resolve_languages_args() -> Vec<String> {
+    vec![
+        "resolve".to_owned(),
+        "languages".to_owned(),
+        "--format=json".to_owned(),
+    ]
 }
 
 fn build_database_create_args(
@@ -656,6 +712,28 @@ fn build_bqrs_decode_args(bqrs_path: &Path) -> Vec<String> {
         "--format=json".to_owned(),
         bqrs_path.to_string_lossy().into_owned(),
     ]
+}
+
+fn parse_resolved_languages(output: &[u8]) -> Result<BTreeSet<String>, serde_json::Error> {
+    let languages = serde_json::from_slice::<BTreeMap<String, serde_json::Value>>(output)?;
+    Ok(languages.into_keys().collect())
+}
+
+fn language_extractor_names(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::Python => &["python"],
+        Language::TypeScript => &["javascript-typescript", "javascript"],
+        Language::Rust => &["rust"],
+        Language::Go => &["go"],
+    }
+}
+
+fn format_available_languages(languages: &BTreeSet<String>) -> String {
+    if languages.is_empty() {
+        "(none)".to_owned()
+    } else {
+        languages.iter().cloned().collect::<Vec<_>>().join(", ")
+    }
 }
 
 fn database_create_progress_message(is_emulated: bool) -> &'static str {
@@ -800,8 +878,8 @@ mod tests {
     use super::{
         CacheMissReason, CodeQlAdapter, CodeQlAdapterError, codeql_executable_path,
         compute_source_fingerprint, database_create_progress_message, filter_incidental_languages,
-        format_command_guidance, format_elapsed, supported_extensions_display, try_load_cache,
-        write_cache_atomic,
+        format_available_languages, format_command_guidance, format_elapsed,
+        parse_resolved_languages, supported_extensions_display, try_load_cache, write_cache_atomic,
     };
     use crate::domains::FilePath;
     use crate::domains::cpg::{EdgeKind, Language, NodeKind, SourceFile};
@@ -818,6 +896,10 @@ mod tests {
             let mut file_system = InMemoryFileSystem::new();
             file_system.insert("/workspace/src/main.rs", "fn main() {}\n");
             let command_runner = MockCommandRunner::new();
+            push_language_resolution_result(
+                &command_runner,
+                &["go", "javascript", "python", "rust"],
+            );
             command_runner
                 .push_result(Ok(ProcessOutput {
                     stdout: Vec::new(),
@@ -921,6 +1003,11 @@ mod tests {
                         exit_code: 0,
                     })
                 }
+                ["resolve", "languages", "--format=json"] => Ok(ProcessOutput {
+                    stdout: br#"{"rust":["/cache/codeql/2.0.0/rust"]}"#.to_vec(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                }),
                 ["query", "run", ..] => Ok(ProcessOutput {
                     stdout: Vec::new(),
                     stderr: Vec::new(),
@@ -970,6 +1057,7 @@ mod tests {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -1037,36 +1125,40 @@ mod tests {
         );
 
         let invocations = command_runner.invocations().unwrap();
-        assert_eq!(invocations.len(), 3);
+        assert_eq!(invocations.len(), 4);
         assert_eq!(
             PathBuf::from(&invocations[0].program),
             codeql_executable_path(Path::new("/cache/codeql/2.0.0"))
         );
-        assert_eq!(invocations[0].args[0], "database");
-        assert_eq!(invocations[0].args[1], "create");
-        assert_eq!(invocations[0].args[4], "--language");
-        assert_eq!(invocations[0].args[5], "python");
-        assert_eq!(invocations[1].args[0], "query");
-        assert_eq!(invocations[1].args[1], "run");
         assert_eq!(
-            invocations[1].args[2],
+            invocations[0].args,
+            vec!["resolve", "languages", "--format=json"]
+        );
+        assert_eq!(invocations[1].args[0], "database");
+        assert_eq!(invocations[1].args[1], "create");
+        assert_eq!(invocations[1].args[4], "--language");
+        assert_eq!(invocations[1].args[5], "python");
+        assert_eq!(invocations[2].args[0], "query");
+        assert_eq!(invocations[2].args[1], "run");
+        assert_eq!(
+            invocations[2].args[2],
             "/cache/codeql/2.0.0/queries/python/extract-python.ql"
         );
-        assert!(!invocations[1].args.iter().any(|arg| arg == "--format=json"));
-        assert!(invocations[1].args.iter().any(|arg| arg == "--output"));
-        assert!(invocations[1].args.iter().any(|arg| arg == "--search-path"));
+        assert!(!invocations[2].args.iter().any(|arg| arg == "--format=json"));
+        assert!(invocations[2].args.iter().any(|arg| arg == "--output"));
+        assert!(invocations[2].args.iter().any(|arg| arg == "--search-path"));
         assert_eq!(
-            invocations[1]
+            invocations[2]
                 .args
                 .windows(2)
                 .find(|pair| pair[0] == "--search-path")
                 .map(|pair| pair[1].as_str()),
             Some("/cache/codeql/2.0.0")
         );
-        assert_eq!(invocations[2].args[0], "bqrs");
-        assert_eq!(invocations[2].args[1], "decode");
-        assert!(invocations[2].args.iter().any(|arg| arg == "--format=json"));
-        assert!(!invocations[2].args.iter().any(|arg| arg == "--output=-"));
+        assert_eq!(invocations[3].args[0], "bqrs");
+        assert_eq!(invocations[3].args[1], "decode");
+        assert!(invocations[3].args.iter().any(|arg| arg == "--format=json"));
+        assert!(!invocations[3].args.iter().any(|arg| arg == "--output=-"));
     }
 
     #[test]
@@ -1074,6 +1166,7 @@ mod tests {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -1118,8 +1211,8 @@ mod tests {
             .unwrap();
 
         let invocations = command_runner.invocations().unwrap();
-        assert_eq!(invocations.len(), 3);
-        assert!(invocations[0].args.iter().any(|arg| arg == "--overwrite"));
+        assert_eq!(invocations.len(), 4);
+        assert!(invocations[1].args.iter().any(|arg| arg == "--overwrite"));
     }
 
     #[test]
@@ -1128,6 +1221,7 @@ mod tests {
         file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
         let file_system_for_assertion = file_system.clone();
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -1184,6 +1278,7 @@ mod tests {
         file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
         let file_system_for_assertion = file_system.clone();
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -1248,6 +1343,7 @@ mod tests {
             file_path.display()
         );
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -1302,6 +1398,7 @@ mod tests {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/src/app.py", "def main():\n    return 1\n");
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -1347,12 +1444,12 @@ mod tests {
 
         let invocations = command_runner.invocations().unwrap();
         assert_eq!(
-            invocations[1].args[2],
+            invocations[2].args[2],
             "/cache/codeql/2.0.0/queries/python/extract-python.ql"
         );
-        assert!(!invocations[1].args.iter().any(|arg| arg == "--format=json"));
-        assert!(invocations[1].args.iter().any(|arg| arg == "--search-path"));
-        assert!(invocations[2].args.iter().any(|arg| arg == "--format=json"));
+        assert!(!invocations[2].args.iter().any(|arg| arg == "--format=json"));
+        assert!(invocations[2].args.iter().any(|arg| arg == "--search-path"));
+        assert!(invocations[3].args.iter().any(|arg| arg == "--format=json"));
     }
 
     #[test]
@@ -1440,7 +1537,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(command_runner.invocations().unwrap().len(), 3);
+        assert_eq!(command_runner.invocations().unwrap().len(), 4);
         let source_files = single_source_file("src/lib.rs", Language::Rust);
         let fingerprint = compute_source_fingerprint(
             &RealFileSystem,
@@ -1591,7 +1688,7 @@ mod tests {
         )
         .unwrap();
         assert_ne!(updated_fingerprint, initial_fingerprint);
-        assert_eq!(second_runner.invocations().unwrap().len(), 3);
+        assert_eq!(second_runner.invocations().unwrap().len(), 4);
         assert_eq!(
             fs::read_to_string(workspace_root.join(".kalos/codeql/rust.cache_key"))
                 .unwrap()
@@ -1758,7 +1855,7 @@ mod tests {
             assert_eq!(handle.join().unwrap(), 1);
         }
 
-        assert_eq!(command_runner.invocation_count(), 3);
+        assert_eq!(command_runner.invocation_count(), 4);
 
         let source_files = single_source_file("src/lib.rs", Language::Rust);
         let fingerprint = compute_source_fingerprint(
@@ -1806,7 +1903,7 @@ mod tests {
             .unwrap();
 
         let invocations = command_runner.invocations().unwrap();
-        assert_eq!(invocations.len(), 3);
+        assert_eq!(invocations.len(), 4);
         assert!(analysis.warnings.iter().any(|warning| {
             warning.user_facing
                 && warning
@@ -1875,7 +1972,7 @@ mod tests {
             .unwrap();
 
         let invocations = command_runner.invocations().unwrap();
-        assert_eq!(invocations.len(), 6);
+        assert_eq!(invocations.len(), 8);
     }
 
     #[test]
@@ -1917,6 +2014,7 @@ mod tests {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/web/app.tsx", "export const App = () => null;\n");
         let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
         command_runner
             .push_result(Ok(ProcessOutput {
                 stdout: Vec::new(),
@@ -2004,7 +2102,7 @@ mod tests {
                 language,
                 source: ProcessError::Io { program, cwd, .. },
             } => {
-                assert_eq!(stage, "database create");
+                assert_eq!(stage, "resolve languages");
                 assert_eq!(language, "typescript");
                 assert_eq!(PathBuf::from(program), expected_program);
                 assert_eq!(cwd, PathBuf::from("/workspace"));
@@ -2109,6 +2207,60 @@ mod tests {
         assert!(display.contains("CodeQL encountered an error during extraction"));
     }
 
+    #[test]
+    fn parse_resolved_languages_reads_codeql_json_keys() {
+        let languages =
+            parse_resolved_languages(br#"{"javascript":["/codeql/javascript"],"rust":[]}"#)
+                .unwrap();
+
+        assert_eq!(
+            languages,
+            BTreeSet::from(["javascript".to_owned(), "rust".to_owned()])
+        );
+    }
+
+    #[test]
+    fn codeql_adapter_fails_preflight_when_required_extractor_is_missing() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/lib.rs", "fn main() {}\n");
+        let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python"]);
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner,
+            MockToolCachePort {
+                bundle: mock_bundle(),
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        let error = adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap_err();
+
+        match error {
+            CodeQlAdapterError::ExtractorUnavailable {
+                language,
+                available_languages,
+            } => {
+                assert_eq!(language, "rust");
+                assert_eq!(
+                    available_languages,
+                    format_available_languages(&BTreeSet::from([
+                        "go".to_owned(),
+                        "javascript".to_owned(),
+                        "python".to_owned()
+                    ]))
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     fn load_fixture(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/codeql")
@@ -2168,6 +2320,10 @@ mod tests {
 
     fn push_successful_language_results(command_runner: &MockCommandRunner, language_count: usize) {
         for _ in 0..language_count {
+            push_language_resolution_result(
+                command_runner,
+                &["go", "javascript", "python", "rust"],
+            );
             command_runner
                 .push_result(Ok(ProcessOutput {
                     stdout: Vec::new(),
@@ -2190,6 +2346,21 @@ mod tests {
                 }))
                 .unwrap();
         }
+    }
+
+    fn push_language_resolution_result(command_runner: &MockCommandRunner, languages: &[&str]) {
+        let body = languages
+            .iter()
+            .map(|language| format!(r#""{language}":["/cache/codeql/2.0.0/{language}"]"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: format!("{{{body}}}").into_bytes(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
     }
 
     fn mock_bundle() -> ResolvedToolBundle {

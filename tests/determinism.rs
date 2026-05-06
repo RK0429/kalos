@@ -68,6 +68,13 @@ fn run_pipeline_hash(
     let command_runner = MockCommandRunner::new();
     command_runner
         .push_result(Ok(ProcessOutput {
+            stdout: br#"{"rust":["/cache/codeql/2.16.0/rust"]}"#.to_vec(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        }))
+        .unwrap();
+    command_runner
+        .push_result(Ok(ProcessOutput {
             stdout: Vec::new(),
             stderr: Vec::new(),
             exit_code: 0,

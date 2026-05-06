@@ -43,6 +43,7 @@ fn codeql_adapter_with_stub_dependency_resolver_emits_req_func_007_warning() {
         "pub fn placeholder() -> i32 { 1 }\n",
     );
     let command_runner = MockCommandRunner::new();
+    push_language_resolution_result(&command_runner);
     command_runner
         .push_result(Ok(ProcessOutput {
             stdout: Vec::new(),
@@ -155,6 +156,7 @@ fn analysis_pipeline_runs_end_to_end_with_codeql_adapter_and_stub_dependency_res
         "pub fn placeholder() -> i32 { 1 }\n",
     );
     let command_runner = MockCommandRunner::new();
+    push_language_resolution_result(&command_runner);
     command_runner
         .push_result(Ok(ProcessOutput {
             stdout: Vec::new(),
@@ -260,4 +262,14 @@ fn load_fixture(name: &str) -> String {
         .join("tests/fixtures/codeql")
         .join(name);
     fs::read_to_string(path).unwrap()
+}
+
+fn push_language_resolution_result(command_runner: &MockCommandRunner) {
+    command_runner
+        .push_result(Ok(ProcessOutput {
+            stdout: br#"{"rust":["/cache/codeql/2.16.0/rust"]}"#.to_vec(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        }))
+        .unwrap();
 }
