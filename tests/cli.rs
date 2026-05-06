@@ -823,6 +823,44 @@ fn kalos_check_emits_elapsed_time_on_database_create() {
 }
 
 #[test]
+fn kalos_check_emits_timeout_mitigation_before_codeql_phases() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+
+    let timing_index = stderr
+        .find("phase timing: long CodeQL phases for rust report elapsed time on completion")
+        .expect("phase timing context should be emitted before long CodeQL phases");
+    let mitigation_index = stderr
+        .find("timeout mitigation: if a CodeQL phase exceeds the harness timeout")
+        .expect("timeout mitigation should be emitted before long CodeQL phases");
+    let database_create_index = stderr
+        .find("database create")
+        .expect("database create progress should be emitted");
+
+    assert!(
+        timing_index < database_create_index,
+        "phase timing context should precede database create progress: {stderr}"
+    );
+    assert!(
+        mitigation_index < database_create_index,
+        "timeout mitigation should precede database create progress: {stderr}"
+    );
+    assert!(stderr.contains("--exclude"));
+    assert!(stderr.contains("--diff"));
+    assert!(stderr.contains("--cache-dir"));
+    assert!(stderr.contains("--min-language-ratio"));
+}
+
+#[test]
 fn kalos_check_human_format_emits_source_inventory_before_codeql_slow_path() {
     let temp = seeded_large_workspace(100);
     let cache_dir = seed_fake_codeql_bundle(temp.path());

@@ -477,6 +477,7 @@ where
             self.ensure_extractor_available(&codeql_program, &request.workspace_root, language)?;
 
             let database_create_started = if self.progress {
+                emit_long_running_phase_context(language);
                 eprintln!(
                     "    {} ...",
                     database_create_progress_message(self.is_emulated)
@@ -753,6 +754,16 @@ fn format_elapsed(elapsed: Duration) -> String {
         let secs = elapsed.as_secs();
         format!("{}m {}s", secs / 60, secs % 60)
     }
+}
+
+fn emit_long_running_phase_context(language: Language) {
+    eprintln!(
+        "    phase timing: long CodeQL phases for {} report elapsed time on completion",
+        language_name(language)
+    );
+    eprintln!(
+        "    timeout mitigation: if a CodeQL phase exceeds the harness timeout, retry with --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
+    );
 }
 
 fn count_source_files_by_language(
