@@ -1127,7 +1127,17 @@ fn evaluation_artifact_classification_json(diagnostic: &Diagnostic) -> Option<Va
 }
 
 fn is_untriaged_domain_debt_diagnostic(diagnostic: &Diagnostic) -> bool {
-    matches!(diagnostic.rule_id.as_str(), "KAL-M003" | "KAL-PAT003")
+    match diagnostic.rule_id.as_str() {
+        "KAL-M001" | "KAL-M003" => is_production_module_diagnostic(diagnostic),
+        "KAL-PAT003" => true,
+        _ => false,
+    }
+}
+
+fn is_production_module_diagnostic(diagnostic: &Diagnostic) -> bool {
+    diagnostic.primary_scope_id.level == AnalysisLevel::Module
+        && !is_test_file(diagnostic.primary_scope_id.file_path.as_str())
+        && !is_test_file(diagnostic.location.file_path.as_str())
 }
 
 fn metric_observation_json(metric: &crate::domains::diagnostics::MetricObservation) -> Value {
@@ -1767,7 +1777,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
         let diagnostics = parsed["diagnostics"].as_array().expect("diagnostics array");
 
-        for rule_id in ["KAL-M003", "KAL-PAT003"] {
+        for rule_id in ["KAL-M001", "KAL-M003", "KAL-PAT003"] {
             let diagnostic = diagnostics
                 .iter()
                 .find(|diagnostic| diagnostic["rule_id"] == rule_id)
@@ -1791,6 +1801,38 @@ mod tests {
             function_diagnostic["evaluation_artifact"].is_null(),
             "function metric diagnostics should not be marked as untriaged domain debt"
         );
+    }
+
+    #[test]
+    fn json_output_does_not_classify_test_scope_module_diagnostics_as_untriaged_debt() {
+        let diagnostics = vec![
+            fixture_test_module_structural_diagnostic(
+                "diag-test-module-fan-out",
+                "KAL-M001",
+                "tests/foo.rs",
+            ),
+            fixture_test_module_structural_diagnostic(
+                "diag-test-module-instability",
+                "KAL-M003",
+                "tests/bar.rs",
+            ),
+        ];
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let diagnostics = parsed["diagnostics"].as_array().expect("diagnostics array");
+
+        for rule_id in ["KAL-M001", "KAL-M003"] {
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic["rule_id"] == rule_id)
+                .unwrap_or_else(|| panic!("expected {rule_id} diagnostic"));
+            assert!(
+                diagnostic["evaluation_artifact"].is_null(),
+                "test-scope {rule_id} diagnostics should not be marked as untriaged domain debt"
+            );
+        }
     }
 
     #[test]
@@ -1863,12 +1905,9 @@ mod tests {
 
     #[test]
     fn sarif_output_contains_rules_results_and_locations() {
-        let report = project_report(
-            RequestedLevel::All,
-            None,
-            &fixture_metrics(),
-            fixture_diagnostics(),
-        );
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(fixture_kal_m003_module_diagnostic());
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
         let rendered = report.render_sarif(None).expect("sarif should render");
         let parsed: Value = serde_json::from_str(&rendered).expect("sarif should parse");
         let run = &parsed["runs"][0];
@@ -1879,7 +1918,7 @@ mod tests {
 
         assert_eq!(parsed["version"], "2.1.0");
         assert!(!rules.is_empty());
-        assert_eq!(results.len(), 4);
+        assert_eq!(results.len(), 5);
         assert!(rules.iter().any(|rule| rule["id"] == "KAL-F001"));
         assert!(results.iter().any(|result| result["ruleId"] == "KAL-F001"));
 
@@ -1892,6 +1931,25 @@ mod tests {
             3
         );
 
+        for rule_id in ["KAL-M001", "KAL-M003", "KAL-PAT003"] {
+            let result = results
+                .iter()
+                .find(|result| result["ruleId"] == rule_id)
+                .unwrap_or_else(|| panic!("expected {rule_id} result"));
+            assert_eq!(
+                result["properties"]["kalos"]["evaluation_artifact"]["classification"],
+                "target_repo_quality_finding"
+            );
+            assert_eq!(
+                result["properties"]["kalos"]["evaluation_artifact"]["triage_status"],
+                "untriaged_domain_debt"
+            );
+            assert_eq!(
+                result["properties"]["kalos"]["evaluation_artifact"]["confidence"],
+                "low"
+            );
+        }
+
         let cross_scope_result = results
             .iter()
             .find(|result| result["ruleId"] == "KAL-PAT003")
@@ -1901,18 +1959,6 @@ mod tests {
                 .is_null()
         );
         assert!(cross_scope_result["properties"]["kalos"]["template_suggestion"].is_object());
-        assert_eq!(
-            cross_scope_result["properties"]["kalos"]["evaluation_artifact"]["classification"],
-            "target_repo_quality_finding"
-        );
-        assert_eq!(
-            cross_scope_result["properties"]["kalos"]["evaluation_artifact"]["triage_status"],
-            "untriaged_domain_debt"
-        );
-        assert_eq!(
-            cross_scope_result["properties"]["kalos"]["evaluation_artifact"]["confidence"],
-            "low"
-        );
 
         let kalos_props = &run["properties"]["kalos"];
         assert!(
@@ -1931,6 +1977,40 @@ mod tests {
         assert!(kalos_props["summary"]["warning_count"].is_number());
         assert!(kalos_props["summary"]["info_count"].is_number());
         assert!(run["properties"]["analysis_warnings"].is_array());
+    }
+
+    #[test]
+    fn sarif_output_does_not_classify_test_scope_module_diagnostics_as_untriaged_debt() {
+        let diagnostics = vec![
+            fixture_test_module_structural_diagnostic(
+                "diag-test-module-fan-out",
+                "KAL-M001",
+                "tests/foo.rs",
+            ),
+            fixture_test_module_structural_diagnostic(
+                "diag-test-module-instability",
+                "KAL-M003",
+                "tests/bar.rs",
+            ),
+        ];
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
+
+        let rendered = report.render_sarif(None).expect("sarif should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif should parse");
+        let results = parsed["runs"][0]["results"]
+            .as_array()
+            .expect("results array");
+
+        for rule_id in ["KAL-M001", "KAL-M003"] {
+            let result = results
+                .iter()
+                .find(|result| result["ruleId"] == rule_id)
+                .unwrap_or_else(|| panic!("expected {rule_id} result"));
+            assert!(
+                result["properties"]["kalos"]["evaluation_artifact"].is_null(),
+                "test-scope {rule_id} results should not be marked as untriaged domain debt"
+            );
+        }
     }
 
     #[test]
