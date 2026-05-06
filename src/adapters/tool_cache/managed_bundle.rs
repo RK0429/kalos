@@ -44,6 +44,28 @@ private string classId(Class c) {
       c.getLocation().getStartLine().toString() + ":" + c.getQualifiedName()
 }
 
+private string parameterId(Parameter p) {
+  result =
+    "param_" + p.getLocation().getFile().getRelativePath() + ":" +
+      p.getLocation().getStartLine().toString() + ":" + p.asName().getId()
+}
+
+private string variableId(LocalVariable v) {
+  result =
+    "var_" + v.getAnAccess().getLocation().getFile().getRelativePath() + ":" +
+      v.getAnAccess().getLocation().getStartLine().toString() + ":" + v.getId()
+}
+
+private predicate functionParameter(Function f, Parameter p) {
+  f.getAnArg() = p
+  or
+  f.getAKeywordOnlyArg() = p
+  or
+  f.getVararg() = p
+  or
+  f.getKwarg() = p
+}
+
 query predicate modules(string id, string name, string file, int start_line, int end_line) {
   exists(Module m |
     id = moduleId(m) and
@@ -76,6 +98,30 @@ query predicate functions(string id, string name, string file, int start_line, i
   )
 }
 
+query predicate parameters(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f, Parameter p |
+    functionParameter(f, p) and
+    exists(p.asName()) and
+    id = parameterId(p) and
+    name = p.asName().getId() and
+    file = p.getLocation().getFile().getRelativePath() and
+    start_line = p.getLocation().getStartLine() and
+    end_line = p.getLocation().getEndLine()
+  )
+}
+
+query predicate variables(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f, LocalVariable v |
+    v.getScope() = f and
+    not v.isParameter() and
+    id = variableId(v) and
+    name = v.getId() and
+    file = v.getAnAccess().getLocation().getFile().getRelativePath() and
+    start_line = v.getAnAccess().getLocation().getStartLine() and
+    end_line = v.getAnAccess().getLocation().getEndLine()
+  )
+}
+
 query predicate contains(string source, string target) {
   exists(Module m, Function f |
     f.getScope() = m and
@@ -88,6 +134,20 @@ query predicate contains(string source, string target) {
     source = moduleId(m) and
     target = classId(c)
   )
+  or
+  exists(Function f, Parameter p |
+    functionParameter(f, p) and
+    exists(p.asName()) and
+    source = functionId(f) and
+    target = parameterId(p)
+  )
+  or
+  exists(Function f, LocalVariable v |
+    v.getScope() = f and
+    not v.isParameter() and
+    source = functionId(f) and
+    target = variableId(v)
+  )
 }
 
 query predicate calls(string source, string target) {
@@ -97,6 +157,40 @@ query predicate calls(string source, string target) {
     callee_value.getScope() = callee and
     source = functionId(caller) and
     target = functionId(callee)
+  )
+}
+
+query predicate control_flows(string source, string target) {
+  exists(Function f, Parameter p |
+    functionParameter(f, p) and
+    exists(p.asName()) and
+    source = functionId(f) and
+    target = parameterId(p)
+  )
+  or
+  exists(Function f, LocalVariable v |
+    v.getScope() = f and
+    not v.isParameter() and
+    source = functionId(f) and
+    target = variableId(v)
+  )
+}
+
+query predicate data_flows(string source, string target) {
+  exists(Function f, LocalVariable src, LocalVariable dst |
+    src.getScope() = f and
+    dst.getScope() = f and
+    src != dst and
+    source = variableId(src) and
+    target = variableId(dst)
+  )
+  or
+  exists(Function f, Parameter src, LocalVariable dst |
+    functionParameter(f, src) and
+    dst.getScope() = f and
+    exists(src.asName()) and
+    source = parameterId(src) and
+    target = variableId(dst)
   )
 }
 "#,
@@ -117,6 +211,18 @@ private string classId(ClassDefinition c) {
   result =
     "cls_" + c.getLocation().getFile().getRelativePath() + ":" +
       c.getLocation().getStartLine().toString() + ":" + c.getName()
+}
+
+private string parameterId(Parameter p) {
+  result =
+    "param_" + p.getLocation().getFile().getRelativePath() + ":" +
+      p.getLocation().getStartLine().toString() + ":" + p.getName()
+}
+
+private string variableId(LocalVariable v) {
+  result =
+    "var_" + v.getLocation().getFile().getRelativePath() + ":" +
+      v.getLocation().getStartLine().toString() + ":" + v.getName()
 }
 
 query predicate modules(string id, string name, string file, int start_line, int end_line) {
@@ -151,6 +257,29 @@ query predicate functions(string id, string name, string file, int start_line, i
   )
 }
 
+query predicate parameters(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f, Parameter p |
+    p = f.getAParameter() and
+    id = parameterId(p) and
+    name = p.getName() and
+    file = p.getLocation().getFile().getRelativePath() and
+    start_line = p.getLocation().getStartLine() and
+    end_line = p.getLocation().getEndLine()
+  )
+}
+
+query predicate variables(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f, LocalVariable v |
+    v.getDeclaringContainer() = f and
+    not v.isParameter() and
+    id = variableId(v) and
+    name = v.getName() and
+    file = v.getLocation().getFile().getRelativePath() and
+    start_line = v.getLocation().getStartLine() and
+    end_line = v.getLocation().getEndLine()
+  )
+}
+
 query predicate contains(string source, string target) {
   exists(TopLevel tl, Function f |
     f.getTopLevel() = tl and
@@ -165,6 +294,19 @@ query predicate contains(string source, string target) {
     source = moduleId(tl) and
     target = classId(c)
   )
+  or
+  exists(Function f, Parameter p |
+    p = f.getAParameter() and
+    source = functionId(f) and
+    target = parameterId(p)
+  )
+  or
+  exists(Function f, LocalVariable v |
+    v.getDeclaringContainer() = f and
+    not v.isParameter() and
+    source = functionId(f) and
+    target = variableId(v)
+  )
 }
 
 query predicate calls(string source, string target) {
@@ -175,6 +317,41 @@ query predicate calls(string source, string target) {
     exists(callee.getName()) and
     source = functionId(caller) and
     target = functionId(callee)
+  )
+}
+
+query predicate control_flows(string source, string target) {
+  exists(Function f, Parameter p |
+    p = f.getAParameter() and
+    source = functionId(f) and
+    target = parameterId(p)
+  )
+  or
+  exists(Function f, LocalVariable v |
+    v.getDeclaringContainer() = f and
+    not v.isParameter() and
+    source = functionId(f) and
+    target = variableId(v)
+  )
+}
+
+query predicate data_flows(string source, string target) {
+  exists(Function f, Parameter src, LocalVariable dst |
+    src = f.getAParameter() and
+    dst.getDeclaringContainer() = f and
+    not dst.isParameter() and
+    source = parameterId(src) and
+    target = variableId(dst)
+  )
+  or
+  exists(Function f, LocalVariable src, LocalVariable dst |
+    src.getDeclaringContainer() = f and
+    dst.getDeclaringContainer() = f and
+    not src.isParameter() and
+    not dst.isParameter() and
+    src != dst and
+    source = variableId(src) and
+    target = variableId(dst)
   )
 }
 "#,
@@ -208,6 +385,18 @@ private string traitId(Trait t) {
   result =
     "cls_" + t.getFile().getRelativePath() + ":" + t.getLocation().getStartLine().toString() +
       ":" + t.getName().getText()
+}
+
+private string parameterId(Param p) {
+  result =
+    "param_" + p.getFile().getRelativePath() + ":" + p.getLocation().getStartLine().toString() +
+      ":" + p.getPat().toString()
+}
+
+private string variableId(LetStmt l) {
+  result =
+    "var_" + l.getFile().getRelativePath() + ":" + l.getLocation().getStartLine().toString() +
+      ":" + l.getPat().toString()
 }
 
 query predicate modules(string id, string name, string file, int start_line, int end_line) {
@@ -269,6 +458,30 @@ query predicate functions(string id, string name, string file, int start_line, i
   )
 }
 
+query predicate parameters(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f, Param p |
+    p.getEnclosingCallable() = f and
+    f.fromSource() and
+    id = parameterId(p) and
+    name = p.getPat().toString() and
+    file = p.getFile().getRelativePath() and
+    start_line = p.getLocation().getStartLine() and
+    end_line = p.getLocation().getEndLine()
+  )
+}
+
+query predicate variables(string id, string name, string file, int start_line, int end_line) {
+  exists(Function f, LetStmt l |
+    l.getEnclosingCallable() = f and
+    f.fromSource() and
+    id = variableId(l) and
+    name = l.getPat().toString() and
+    file = l.getFile().getRelativePath() and
+    start_line = l.getLocation().getStartLine() and
+    end_line = l.getLocation().getEndLine()
+  )
+}
+
 query predicate contains(string source, string target) {
   exists(Function f |
     f.fromSource() and
@@ -293,6 +506,20 @@ query predicate contains(string source, string target) {
     source = moduleId(t.getFile()) and
     target = traitId(t)
   )
+  or
+  exists(Function f, Param p |
+    p.getEnclosingCallable() = f and
+    f.fromSource() and
+    source = functionId(f) and
+    target = parameterId(p)
+  )
+  or
+  exists(Function f, LetStmt l |
+    l.getEnclosingCallable() = f and
+    f.fromSource() and
+    source = functionId(f) and
+    target = variableId(l)
+  )
 }
 
 query predicate calls(string source, string target) {
@@ -303,6 +530,41 @@ query predicate calls(string source, string target) {
     callee.fromSource() and
     source = functionId(caller) and
     target = functionId(callee)
+  )
+}
+
+query predicate control_flows(string source, string target) {
+  exists(Function f, Param p |
+    p.getEnclosingCallable() = f and
+    f.fromSource() and
+    source = functionId(f) and
+    target = parameterId(p)
+  )
+  or
+  exists(Function f, LetStmt l |
+    l.getEnclosingCallable() = f and
+    f.fromSource() and
+    source = functionId(f) and
+    target = variableId(l)
+  )
+}
+
+query predicate data_flows(string source, string target) {
+  exists(Function f, Param src, LetStmt dst |
+    src.getEnclosingCallable() = f and
+    dst.getEnclosingCallable() = f and
+    f.fromSource() and
+    source = parameterId(src) and
+    target = variableId(dst)
+  )
+  or
+  exists(Function f, LetStmt src, LetStmt dst |
+    src.getEnclosingCallable() = f and
+    dst.getEnclosingCallable() = f and
+    src != dst and
+    f.fromSource() and
+    source = variableId(src) and
+    target = variableId(dst)
   )
 }
 "#,
@@ -321,6 +583,18 @@ private string classId(TypeSpec t) {
   result =
     "cls_" + t.getFile().getRelativePath() + ":" +
       t.getLocation().getStartLine().toString() + ":" + t.getName()
+}
+
+private string parameterId(Parameter p) {
+  result =
+    "param_" + p.getLocation().getFile().getRelativePath() + ":" +
+      p.getLocation().getStartLine().toString() + ":" + p.getName()
+}
+
+private string variableId(LocalVariable v) {
+  result =
+    "var_" + v.getLocation().getFile().getRelativePath() + ":" +
+      v.getLocation().getStartLine().toString() + ":" + v.getName()
 }
 
 query predicate modules(string id, string name, string file, int start_line, int end_line) {
@@ -361,6 +635,28 @@ query predicate functions(string id, string name, string file, int start_line, i
   )
 }
 
+query predicate parameters(string id, string name, string file, int start_line, int end_line) {
+  exists(FuncDecl fd, Parameter p |
+    p = fd.getAParameter() and
+    id = parameterId(p) and
+    name = p.getName() and
+    file = p.getLocation().getFile().getRelativePath() and
+    start_line = p.getLocation().getStartLine() and
+    end_line = p.getLocation().getEndLine()
+  )
+}
+
+query predicate variables(string id, string name, string file, int start_line, int end_line) {
+  exists(FuncDecl fd, LocalVariable v |
+    v.getDeclaringFunction() = fd and
+    id = variableId(v) and
+    name = v.getName() and
+    file = v.getLocation().getFile().getRelativePath() and
+    start_line = v.getLocation().getStartLine() and
+    end_line = v.getLocation().getEndLine()
+  )
+}
+
 query predicate contains(string source, string target) {
   exists(FuncDecl fd |
     source = "mod_" + fd.getFile().getRelativePath() and
@@ -371,6 +667,18 @@ query predicate contains(string source, string target) {
     source = "mod_" + t.getFile().getRelativePath() and
     target = classId(t)
   )
+  or
+  exists(FuncDecl fd, Parameter p |
+    p = fd.getAParameter() and
+    source = functionId(fd) and
+    target = parameterId(p)
+  )
+  or
+  exists(FuncDecl fd, LocalVariable v |
+    v.getDeclaringFunction() = fd and
+    source = functionId(fd) and
+    target = variableId(v)
+  )
 }
 
 query predicate calls(string source, string target) {
@@ -379,6 +687,37 @@ query predicate calls(string source, string target) {
     callee.getFunction() = call.getTarget() and
     source = functionId(caller) and
     target = functionId(callee)
+  )
+}
+
+query predicate control_flows(string source, string target) {
+  exists(FuncDecl fd, Parameter p |
+    p = fd.getAParameter() and
+    source = functionId(fd) and
+    target = parameterId(p)
+  )
+  or
+  exists(FuncDecl fd, LocalVariable v |
+    v.getDeclaringFunction() = fd and
+    source = functionId(fd) and
+    target = variableId(v)
+  )
+}
+
+query predicate data_flows(string source, string target) {
+  exists(FuncDecl fd, Parameter src, LocalVariable dst |
+    src = fd.getAParameter() and
+    dst.getDeclaringFunction() = fd and
+    source = parameterId(src) and
+    target = variableId(dst)
+  )
+  or
+  exists(FuncDecl fd, LocalVariable src, LocalVariable dst |
+    src.getDeclaringFunction() = fd and
+    dst.getDeclaringFunction() = fd and
+    src != dst and
+    source = variableId(src) and
+    target = variableId(dst)
   )
 }
 "#,
@@ -2141,10 +2480,43 @@ mod tests {
                 !query.contains("select 1"),
                 "{filename} should not contain a select stub"
             );
-            for predicate in ["modules", "functions", "classes", "contains", "calls"] {
+            for predicate in [
+                "modules",
+                "functions",
+                "classes",
+                "parameters",
+                "variables",
+                "contains",
+                "calls",
+                "control_flows",
+                "data_flows",
+            ] {
                 assert!(
                     query.contains(&format!("query predicate {predicate}")),
                     "{filename} should define `{predicate}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_queries_emit_function_metric_support_data() {
+        for (filename, query) in BUNDLED_QUERIES {
+            for helper in ["parameterId", "variableId"] {
+                assert!(
+                    query.contains(&format!("private string {helper}")),
+                    "{filename} should define `{helper}` so support nodes have stable ids"
+                );
+            }
+            for edge in [
+                "target = parameterId",
+                "target = variableId",
+                "source = parameterId",
+                "source = variableId",
+            ] {
+                assert!(
+                    query.contains(edge),
+                    "{filename} should wire function metric support data through `{edge}`"
                 );
             }
         }
