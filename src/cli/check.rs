@@ -143,6 +143,13 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     pub min_language_ratio: Option<f64>,
     #[arg(
         long,
+        value_name = "MiB",
+        value_parser = parse_codeql_ram_mib,
+        help = "maximum RAM in MiB passed to CodeQL database/query phases via --ram"
+    )]
+    pub codeql_ram: Option<u32>,
+    #[arg(
+        long,
         help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)",
         long_help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)
 
@@ -315,6 +322,9 @@ impl CheckCommand {
         }
         if let Some(ratio) = self.min_language_ratio {
             extractor = extractor.with_min_language_ratio(ratio);
+        }
+        if let Some(ram_mib) = self.codeql_ram {
+            extractor = extractor.with_codeql_ram_mib(ram_mib);
         }
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
@@ -639,6 +649,16 @@ fn parse_min_language_ratio(value: &str) -> Result<f64, String> {
     } else {
         Err(format!("ratio must be between 0.0 and 1.0, got {value}"))
     }
+}
+
+fn parse_codeql_ram_mib(value: &str) -> Result<u32, String> {
+    let ram_mib = value
+        .parse::<u32>()
+        .map_err(|error| format!("invalid CodeQL RAM value `{value}`: {error}"))?;
+    if ram_mib == 0 {
+        return Err("CodeQL RAM must be greater than 0 MiB".to_owned());
+    }
+    Ok(ram_mib)
 }
 
 fn resolve_head_tree_hash(workspace_root: &std::path::Path) -> Option<String> {
