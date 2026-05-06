@@ -294,7 +294,7 @@ impl ProjectConfig {
             });
         }
 
-        if let Some(config_path) = &options.config_path {
+        let explicit_config_path = if let Some(config_path) = &options.config_path {
             let config_path = absolute_from_base(&options.cwd, config_path);
             if let Err(source) = fs::metadata(&config_path) {
                 return Err(ConfigError::ReadConfig {
@@ -302,17 +302,32 @@ impl ProjectConfig {
                     source,
                 });
             }
-            let parent = config_path
-                .parent()
-                .ok_or_else(|| ConfigError::MissingConfigParent {
-                    path: config_path.clone(),
-                })?;
-            let config_path = canonicalize_if_exists(&config_path)?;
+            Some(canonicalize_if_exists(&config_path)?)
+        } else {
+            None
+        };
 
+        if let Some(config_path) = explicit_config_path {
+            if !options.targets_explicitly_specified {
+                let parent =
+                    config_path
+                        .parent()
+                        .ok_or_else(|| ConfigError::MissingConfigParent {
+                            path: config_path.clone(),
+                        })?;
+
+                return Ok(DiscoveredWorkspace {
+                    workspace_root: WorkspaceRoot {
+                        abs_path: canonicalize_workspace_root(parent)?,
+                    },
+                    config_path: Some(config_path),
+                });
+            }
+
+            let search_start = common_target_ancestor(&options.cwd, &options.analysis_targets)
+                .unwrap_or_else(|| options.cwd.clone());
             return Ok(DiscoveredWorkspace {
-                workspace_root: WorkspaceRoot {
-                    abs_path: canonicalize_workspace_root(parent)?,
-                },
+                workspace_root: discover_workspace_root_from(&search_start, true)?,
                 config_path: Some(config_path),
             });
         }
@@ -340,22 +355,11 @@ impl ProjectConfig {
             });
         }
 
-        if options.targets_explicitly_specified {
-            if let Some(git_path) = find_upward(&search_start, ".git") {
-                let parent = git_path.parent().unwrap_or_else(|| Path::new("/"));
-                return Ok(DiscoveredWorkspace {
-                    workspace_root: WorkspaceRoot {
-                        abs_path: canonicalize_workspace_root(parent)?,
-                    },
-                    config_path: None,
-                });
-            }
-        }
-
         Ok(DiscoveredWorkspace {
-            workspace_root: WorkspaceRoot {
-                abs_path: canonicalize_workspace_root(&search_start)?,
-            },
+            workspace_root: discover_workspace_root_from(
+                &search_start,
+                options.targets_explicitly_specified,
+            )?,
             config_path: None,
         })
     }
@@ -372,7 +376,8 @@ impl ProjectConfig {
                     workspace_root,
                 ))?,
             }
-        } else if let Some(config_file) = config_file {
+        } else if config_file.is_some() && !options.targets_explicitly_specified {
+            let config_file = config_file.expect("config_file checked");
             let config_path = options
                 .config_path
                 .as_ref()
@@ -675,6 +680,35 @@ fn common_target_ancestor(cwd: &Path, targets: &[PathBuf]) -> Option<PathBuf> {
     }
 
     Some(common)
+}
+
+fn discover_workspace_root_from(
+    search_start: &Path,
+    allow_git_fallback: bool,
+) -> Result<WorkspaceRoot, ConfigError> {
+    if let Some(config_path) = find_upward(search_start, CONFIG_FILE_NAME) {
+        let parent = config_path
+            .parent()
+            .ok_or_else(|| ConfigError::MissingConfigParent {
+                path: config_path.clone(),
+            })?;
+        return Ok(WorkspaceRoot {
+            abs_path: canonicalize_workspace_root(parent)?,
+        });
+    }
+
+    if allow_git_fallback {
+        if let Some(git_path) = find_upward(search_start, ".git") {
+            let parent = git_path.parent().unwrap_or_else(|| Path::new("/"));
+            return Ok(WorkspaceRoot {
+                abs_path: canonicalize_workspace_root(parent)?,
+            });
+        }
+    }
+
+    Ok(WorkspaceRoot {
+        abs_path: canonicalize_workspace_root(search_start)?,
+    })
 }
 
 fn target_search_start(cwd: &Path, target: &Path) -> PathBuf {
@@ -1106,6 +1140,66 @@ mod tests {
         assert_eq!(
             discovery.config_path,
             Some(fs::canonicalize(&config_path).unwrap())
+        );
+    }
+
+    #[test]
+    fn explicit_config_with_explicit_target_resolves_workspace_from_target() {
+        let cwd_temp = TempDir::new().unwrap();
+        let config_temp = TempDir::new().unwrap();
+        let target_temp = TempDir::new().unwrap();
+        let cwd_dir = cwd_temp.path().join("external-cwd");
+        let config_path = config_temp.path().join(".kalos.toml");
+        let target_dir = target_temp.path().join("target-repo");
+        fs::create_dir_all(&cwd_dir).unwrap();
+        fs::create_dir_all(target_dir.join("src")).unwrap();
+        fs::write(
+            &config_path,
+            "[general]\nexclude = [\"generated/**\"]\n\n[rules.KAL-F001]\nthreshold = 0.80\nseverity = \"info\"\n",
+        )
+        .unwrap();
+
+        let config_file = ConfigFile::load(&config_path).unwrap();
+        let target_dir = fs::canonicalize(target_dir).unwrap();
+        let options = ResolveOptions {
+            cwd: cwd_dir,
+            workspace_root: None,
+            config_path: Some(config_path.clone()),
+            analysis_targets: vec![target_dir.clone()],
+            targets_explicitly_specified: true,
+            exclude_patterns: Vec::new(),
+        };
+
+        let discovery = ProjectConfig::discover_workspace(&options).unwrap();
+        assert_eq!(
+            discovery.workspace_root.abs_path,
+            fs::canonicalize(&target_dir).unwrap()
+        );
+        assert_eq!(
+            discovery.config_path,
+            Some(fs::canonicalize(&config_path).unwrap())
+        );
+
+        let project =
+            ProjectConfig::resolve(&options, Some(&config_file), &Defaults::default()).unwrap();
+        assert_eq!(
+            project.workspace_root.abs_path,
+            fs::canonicalize(&target_dir).unwrap()
+        );
+        assert_eq!(project.analysis_targets, vec![FilePath::from(".")]);
+        assert_eq!(
+            project.exclude_patterns,
+            vec![GlobPattern {
+                pattern: "generated/**".to_owned()
+            }]
+        );
+        assert_eq!(
+            project.rules.get(&RuleId::from("KAL-F001")).unwrap(),
+            &RuleConfig {
+                enabled: Some(true),
+                threshold: Some(0.80),
+                severity: Some(Severity::Info),
+            }
         );
     }
 
