@@ -504,6 +504,9 @@ impl AnalysisReport {
                     "kind": diagnostic_kind_str(diagnostic.kind),
                     "template_suggestion": template_suggestion_json(&diagnostic.template_suggestion),
                 });
+                if let Some(classification) = evaluation_artifact_classification_json(diagnostic) {
+                    kalos_properties["evaluation_artifact"] = classification;
+                }
                 if let Some(metric) = &diagnostic.metric {
                     kalos_properties["metric"] = metric_observation_json(metric);
                 }
@@ -1104,8 +1107,27 @@ fn diagnostic_json(
     if let Some(llm) = llm_suggestions.and_then(|bundle| bundle.enrichments.get(&diagnostic.id)) {
         object["llm_suggestion"] = llm_suggestion_json(llm);
     }
+    if let Some(classification) = evaluation_artifact_classification_json(diagnostic) {
+        object["evaluation_artifact"] = classification;
+    }
 
     object
+}
+
+fn evaluation_artifact_classification_json(diagnostic: &Diagnostic) -> Option<Value> {
+    if !is_untriaged_domain_debt_diagnostic(diagnostic) {
+        return None;
+    }
+
+    Some(json!({
+        "classification": "target_repo_quality_finding",
+        "triage_status": "untriaged_domain_debt",
+        "confidence": "low",
+    }))
+}
+
+fn is_untriaged_domain_debt_diagnostic(diagnostic: &Diagnostic) -> bool {
+    matches!(diagnostic.rule_id.as_str(), "KAL-M003" | "KAL-PAT003")
 }
 
 fn metric_observation_json(metric: &crate::domains::diagnostics::MetricObservation) -> Value {
@@ -1736,6 +1758,42 @@ mod tests {
     }
 
     #[test]
+    fn json_output_classifies_domain_architecture_diagnostics_as_untriaged_debt() {
+        let mut diagnostics = fixture_diagnostics();
+        diagnostics.push(fixture_kal_m003_module_diagnostic());
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let diagnostics = parsed["diagnostics"].as_array().expect("diagnostics array");
+
+        for rule_id in ["KAL-M003", "KAL-PAT003"] {
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic["rule_id"] == rule_id)
+                .unwrap_or_else(|| panic!("expected {rule_id} diagnostic"));
+            assert_eq!(
+                diagnostic["evaluation_artifact"]["classification"],
+                "target_repo_quality_finding"
+            );
+            assert_eq!(
+                diagnostic["evaluation_artifact"]["triage_status"],
+                "untriaged_domain_debt"
+            );
+            assert_eq!(diagnostic["evaluation_artifact"]["confidence"], "low");
+        }
+
+        let function_diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "KAL-F001")
+            .expect("function diagnostic");
+        assert!(
+            function_diagnostic["evaluation_artifact"].is_null(),
+            "function metric diagnostics should not be marked as untriaged domain debt"
+        );
+    }
+
+    #[test]
     fn sarif_error_document_reports_tool_failure_with_invocation() {
         let rendered = render_sarif_error_document(
             "failed to load config file",
@@ -1780,6 +1838,10 @@ mod tests {
         let kalos_props = &run["properties"]["kalos"];
         assert_eq!(kalos_props["error"], Value::Bool(true));
         assert_eq!(kalos_props["message"], "failed to load config file");
+        assert!(
+            kalos_props["evaluation_artifact"].is_null(),
+            "tool error documents must not be classified as target repo findings"
+        );
         assert_eq!(
             kalos_props["cause"],
             "No such file or directory (os error 2)"
@@ -1839,6 +1901,18 @@ mod tests {
                 .is_null()
         );
         assert!(cross_scope_result["properties"]["kalos"]["template_suggestion"].is_object());
+        assert_eq!(
+            cross_scope_result["properties"]["kalos"]["evaluation_artifact"]["classification"],
+            "target_repo_quality_finding"
+        );
+        assert_eq!(
+            cross_scope_result["properties"]["kalos"]["evaluation_artifact"]["triage_status"],
+            "untriaged_domain_debt"
+        );
+        assert_eq!(
+            cross_scope_result["properties"]["kalos"]["evaluation_artifact"]["confidence"],
+            "low"
+        );
 
         let kalos_props = &run["properties"]["kalos"];
         assert!(
