@@ -693,6 +693,34 @@ fn kalos_check_with_external_target_path_succeeds() {
 }
 
 #[test]
+fn kalos_check_with_external_config_and_explicit_target_path_succeeds() {
+    let target_workspace = seeded_workspace();
+    let external_config_dir = TempDir::new().unwrap();
+    let external_cwd = TempDir::new().unwrap();
+    let config_path = external_config_dir.path().join(".kalos.toml");
+    fs::write(
+        &config_path,
+        "[rules.KAL-F001]\nthreshold = 0.0\nseverity = \"warning\"\n",
+    )
+    .unwrap();
+    let cache_dir = seed_fake_codeql_bundle(target_workspace.path());
+    let target_workspace_path = fs::canonicalize(target_workspace.path()).unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(external_cwd.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .arg("--config")
+        .arg(&config_path)
+        .arg(&target_workspace_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not())
+        .stderr(predicate::str::contains("is outside workspace root").not());
+}
+
+#[test]
 fn kalos_check_workspace_root_rejects_external_target_path() {
     let workspace = seeded_workspace();
     let external = seeded_workspace();
