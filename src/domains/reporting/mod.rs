@@ -315,6 +315,7 @@ impl AnalysisReport {
                     }
                 }
             }
+            write_human_edge_provenance(&mut output, diagnostic);
 
             let _ = writeln!(
                 output,
@@ -512,6 +513,14 @@ impl AnalysisReport {
                 }
                 if let Some(pattern) = &diagnostic.pattern {
                     kalos_properties["pattern"] = pattern_evidence_json(pattern);
+                }
+                if !diagnostic.edge_provenance.is_empty() {
+                    kalos_properties["edge_provenance"] = diagnostic
+                        .edge_provenance
+                        .iter()
+                        .map(edge_provenance_json)
+                        .collect::<Vec<_>>()
+                        .into();
                 }
                 if let Some(llm) =
                     llm_suggestions.and_then(|bundle| bundle.enrichments.get(&diagnostic.id))
@@ -1104,6 +1113,14 @@ fn diagnostic_json(
     if let Some(pattern) = &diagnostic.pattern {
         object["pattern"] = pattern_evidence_json(pattern);
     }
+    if !diagnostic.edge_provenance.is_empty() {
+        object["edge_provenance"] = diagnostic
+            .edge_provenance
+            .iter()
+            .map(edge_provenance_json)
+            .collect::<Vec<_>>()
+            .into();
+    }
     if let Some(llm) = llm_suggestions.and_then(|bundle| bundle.enrichments.get(&diagnostic.id)) {
         object["llm_suggestion"] = llm_suggestion_json(llm);
     }
@@ -1173,9 +1190,30 @@ fn edge_provenance_json(edge: &PatternEdgeProvenance) -> Value {
         "target_scope": scope_json(&edge.target_scope),
         "source_file_path": edge.source_file_path.as_str(),
         "target_file_path": edge.target_file_path.as_str(),
+        "source_start_line": edge.source_start_line,
+        "source_end_line": edge.source_end_line,
+        "target_start_line": edge.target_start_line,
+        "target_end_line": edge.target_end_line,
         "source_is_test": edge.source_is_test,
         "target_is_test": edge.target_is_test,
     })
+}
+
+fn write_human_edge_provenance(output: &mut String, diagnostic: &Diagnostic) {
+    for edge in &diagnostic.edge_provenance {
+        let _ = writeln!(
+            output,
+            "  edge {} -> {} ({}:{}-{} -> {}:{}-{})",
+            edge.source_scope.qualified_name,
+            edge.target_scope.qualified_name,
+            edge.source_file_path.as_str(),
+            edge.source_start_line,
+            edge.source_end_line,
+            edge.target_file_path.as_str(),
+            edge.target_start_line,
+            edge.target_end_line
+        );
+    }
 }
 
 fn template_suggestion_json(suggestion: &crate::domains::diagnostics::TemplateSuggestion) -> Value {
@@ -1561,6 +1599,7 @@ mod tests {
                 overflow_ratio: 0.90,
             }),
             pattern: None,
+            edge_provenance: Vec::new(),
             template_suggestion: TemplateSuggestion {
                 explanation: "split function".to_owned(),
                 code_example: None,
@@ -1765,6 +1804,49 @@ mod tests {
         assert_eq!(edge_provenance[0]["target_file_path"], "src/lexer.rs");
         assert_eq!(edge_provenance[0]["source_is_test"], false);
         assert_eq!(edge_provenance[0]["target_is_test"], false);
+    }
+
+    #[test]
+    fn json_output_includes_module_metric_edge_provenance() {
+        let report = project_report(
+            RequestedLevel::All,
+            None,
+            &fixture_metrics(),
+            fixture_diagnostics(),
+        );
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let module_diagnostic = parsed["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "KAL-M001")
+            .expect("module diagnostic");
+        let edge = &module_diagnostic["edge_provenance"][0];
+
+        assert_eq!(edge["source_scope"]["qualified_name"], "crate");
+        assert_eq!(edge["target_scope"]["qualified_name"], "crate::storage");
+        assert_eq!(edge["source_file_path"], "src/lib.rs");
+        assert_eq!(edge["target_file_path"], "src/storage.rs");
+        assert_eq!(edge["source_start_line"], 14);
+        assert_eq!(edge["target_start_line"], 6);
+        assert!(module_diagnostic["template_suggestion"]["code_example"].is_null());
+    }
+
+    #[test]
+    fn human_output_includes_module_metric_edge_provenance() {
+        let report = project_report(
+            RequestedLevel::All,
+            None,
+            &fixture_metrics(),
+            fixture_diagnostics(),
+        );
+        let rendered = report.render_human(None, false);
+
+        assert!(
+            rendered
+                .contains("edge crate -> crate::storage (src/lib.rs:14-14 -> src/storage.rs:6-6)")
+        );
     }
 
     #[test]
@@ -2803,6 +2885,7 @@ mod tests {
                     overflow_ratio: 0.025,
                 }),
                 pattern: None,
+                edge_provenance: Vec::new(),
                 template_suggestion: TemplateSuggestion {
                     explanation: "split branches".to_owned(),
                     code_example: None,
@@ -2829,6 +2912,22 @@ mod tests {
                     overflow_ratio: 0.60,
                 }),
                 pattern: None,
+                edge_provenance: vec![PatternEdgeProvenance {
+                    source_scope: ScopeId::new(AnalysisLevel::Module, "crate", "src/lib.rs"),
+                    target_scope: ScopeId::new(
+                        AnalysisLevel::Module,
+                        "crate::storage",
+                        "src/storage.rs",
+                    ),
+                    source_file_path: FilePath::from("src/lib.rs"),
+                    target_file_path: FilePath::from("src/storage.rs"),
+                    source_start_line: 14,
+                    source_end_line: 14,
+                    target_start_line: 6,
+                    target_end_line: 6,
+                    source_is_test: false,
+                    target_is_test: false,
+                }],
                 template_suggestion: TemplateSuggestion {
                     explanation: "reduce fan-out".to_owned(),
                     code_example: None,
@@ -2869,6 +2968,10 @@ mod tests {
                             ),
                             source_file_path: FilePath::from("src/parser.rs"),
                             target_file_path: FilePath::from("src/lexer.rs"),
+                            source_start_line: 12,
+                            source_end_line: 12,
+                            target_start_line: 8,
+                            target_end_line: 8,
                             source_is_test: false,
                             target_is_test: false,
                         },
@@ -2885,11 +2988,16 @@ mod tests {
                             ),
                             source_file_path: FilePath::from("src/lexer.rs"),
                             target_file_path: FilePath::from("src/parser.rs"),
+                            source_start_line: 8,
+                            source_end_line: 8,
+                            target_start_line: 12,
+                            target_end_line: 12,
                             source_is_test: false,
                             target_is_test: false,
                         },
                     ],
                 }),
+                edge_provenance: Vec::new(),
                 template_suggestion: TemplateSuggestion {
                     explanation: "break the cycle".to_owned(),
                     code_example: None,
@@ -2920,6 +3028,7 @@ mod tests {
                 overflow_ratio: 0.25,
             }),
             pattern: None,
+            edge_provenance: Vec::new(),
             template_suggestion: TemplateSuggestion {
                 explanation: "extract helper".to_owned(),
                 code_example: None,
@@ -2958,6 +3067,7 @@ mod tests {
                 overflow_ratio: 0.60,
             }),
             pattern: None,
+            edge_provenance: Vec::new(),
             template_suggestion: TemplateSuggestion {
                 explanation: "reduce test fan-out".to_owned(),
                 code_example: None,
@@ -2991,6 +3101,7 @@ mod tests {
                 overflow_ratio: 0.6,
             }),
             pattern: None,
+            edge_provenance: Vec::new(),
             template_suggestion: TemplateSuggestion {
                 explanation: "review dependency direction".to_owned(),
                 code_example: None,
