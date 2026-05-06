@@ -1688,14 +1688,17 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::{BTreeMap, BTreeSet};
     use std::convert::Infallible;
+    use std::fs;
+    use std::path::Path;
 
     use super::{
         AnalysisPipeline, DiffConfig, FULL_ANALYSIS_AGGREGATE_FUEL_BUDGET,
-        apply_dependency_resolution, assemble_report, build_baseline_fingerprint,
-        build_llm_requests, compute_metrics_with_plugins, finalize_result, generate_diagnostics,
-        is_test_file, merge_metrics, metrics_from_scope_map, narrow_to_diff_scope,
-        project_scope_id,
+        analysis_warning_messages, apply_dependency_resolution, assemble_report,
+        build_baseline_fingerprint, build_llm_requests, compute_metrics_with_plugins,
+        finalize_result, generate_diagnostics, is_test_file, merge_metrics, metrics_from_scope_map,
+        narrow_to_diff_scope, project_scope_id,
     };
+    use crate::adapters::extractor::cpg_normalizer::CpgNormalizer;
     use crate::adapters::plugin::PluginHostError;
     use crate::domains::config::{Defaults, ProjectConfig, WorkspaceRoot};
     use crate::domains::cpg::{
@@ -2530,8 +2533,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_emits_user_facing_warning_when_function_metrics_have_no_data() {
-        let warning = "Function-level metrics M-F001 (CFG Branch Entropy), M-F002 (Cyclomatic Complexity), M-F003 (Data Flow Density), and M-F004 (Identifier Repetition) require Variable/Parameter and ControlFlow/DataFlow extraction that the bundled CodeQL queries do not yet emit. These metrics are reported as unsupported for this analysis.";
+    fn pipeline_emits_function_metrics_without_unsupported_warning_for_minimal_function_data() {
         let pipeline = AnalysisPipeline::new(
             MockExtractor {
                 source_analysis: SourceAnalysis {
@@ -2580,8 +2582,81 @@ mod tests {
             )
             .expect("pipeline should succeed");
 
-        assert_eq!(result.report.analysis_warnings, vec![warning.to_owned()]);
-        assert_eq!(result.analysis_warnings, vec![warning.to_owned()]);
+        assert!(result.report.analysis_warnings.is_empty());
+        assert!(result.analysis_warnings.is_empty());
+        let function_metrics = result
+            .report
+            .metrics
+            .iter()
+            .find(|scope_metrics| scope_metrics.scope_id.level == AnalysisLevel::Function)
+            .expect("function scope metrics should be reported");
+        let metric_ids = function_metrics
+            .values
+            .iter()
+            .map(|value| value.metric_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            metric_ids,
+            BTreeSet::from(["M-F001", "M-F002", "M-F003", "M-F004"])
+        );
+    }
+
+    #[test]
+    fn codeql_language_fixtures_emit_all_function_level_metric_values() {
+        let workspace_root = Path::new("/workspace");
+        let cases = [
+            ("python.json", "src/app.py", Language::Python),
+            ("typescript.json", "web/app.ts", Language::TypeScript),
+            ("rust.json", "src/lib.rs", Language::Rust),
+        ];
+
+        for (fixture_name, path, language) in cases {
+            let source_analysis = CpgNormalizer
+                .normalize_fixture_bytes(
+                    workspace_root,
+                    BTreeMap::from([(
+                        FilePath::from(path),
+                        SourceFile {
+                            path: FilePath::from(path),
+                            language,
+                        },
+                    )]),
+                    load_codeql_fixture(fixture_name).as_bytes(),
+                )
+                .expect("fixture should normalize");
+            let (metrics, _) = compute_metrics_with_plugins(
+                &source_analysis.cpg,
+                &fixture_config(),
+                None,
+                &[],
+                None,
+            )
+            .expect("metrics should compute");
+
+            assert!(
+                !metrics.function_metrics.is_empty(),
+                "{fixture_name} should emit function scopes"
+            );
+            for scope_metrics in &metrics.function_metrics {
+                let metric_ids = scope_metrics
+                    .values
+                    .iter()
+                    .map(|value| value.metric_id.as_str())
+                    .collect::<BTreeSet<_>>();
+                for metric_id in ["M-F001", "M-F002", "M-F003", "M-F004"] {
+                    assert!(
+                        metric_ids.contains(metric_id),
+                        "{fixture_name} scope {:?} should include {metric_id}",
+                        scope_metrics.scope_id
+                    );
+                }
+            }
+
+            assert!(
+                analysis_warning_messages(&source_analysis, &metrics).is_empty(),
+                "{fixture_name} should not emit unsupported function metric warning"
+            );
+        }
     }
 
     // Regression for kalos #59: a freshly scaffolded two-module Python
@@ -3495,6 +3570,13 @@ mod tests {
             include_tests: false,
             targets_explicitly_specified: false,
         }
+    }
+
+    fn load_codeql_fixture(name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codeql")
+            .join(name);
+        fs::read_to_string(path).unwrap()
     }
 
     fn diagnostics_test_source_analysis() -> SourceAnalysis {

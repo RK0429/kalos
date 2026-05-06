@@ -247,14 +247,6 @@ fn compute_cfg_branch_entropy_risk(
     subgraph: &CpgSubgraph,
     metric_id: &MetricId,
 ) -> Option<MetricValue> {
-    if !subgraph
-        .edges
-        .iter()
-        .any(|edge| edge.kind == EdgeKind::ControlFlow)
-    {
-        return None;
-    }
-
     let control_flow_edges = subgraph
         .edges
         .iter()
@@ -279,14 +271,6 @@ fn compute_cyclomatic_complexity_risk(
     subgraph: &CpgSubgraph,
     metric_id: &MetricId,
 ) -> Option<MetricValue> {
-    if !subgraph
-        .edges
-        .iter()
-        .any(|edge| edge.kind == EdgeKind::ControlFlow)
-    {
-        return None;
-    }
-
     let control_flow_edges = subgraph
         .edges
         .iter()
@@ -304,7 +288,9 @@ fn compute_cyclomatic_complexity_risk(
         cfg_nodes.insert(edge.target);
     }
 
-    let raw_value = if cfg_nodes.is_empty() {
+    let raw_value = if control_flow_edges.is_empty() {
+        1.0
+    } else if cfg_nodes.is_empty() {
         0.0
     } else {
         control_flow_edges.len() as f64 - cfg_nodes.len() as f64 + 2.0
@@ -324,10 +310,6 @@ fn compute_data_flow_density_risk(
         .filter(|node| matches!(node.kind, NodeKind::Variable | NodeKind::Parameter))
         .map(|node| node.id)
         .collect::<BTreeSet<_>>();
-
-    if variable_nodes.is_empty() {
-        return None;
-    }
 
     let raw_value = if variable_nodes.len() < 2 {
         0.0
@@ -359,10 +341,6 @@ fn compute_identifier_repetition_risk(
         .iter()
         .filter(|node| matches!(node.kind, NodeKind::Variable | NodeKind::Parameter))
         .collect::<Vec<_>>();
-    if identifiers.is_empty() {
-        return None;
-    }
-
     let tokens = identifiers
         .into_iter()
         .flat_map(|node| split_identifier_tokens(&node.name))
@@ -879,11 +857,12 @@ mod tests {
             ));
 
         let complex = metric.compute(&branching, &config()).unwrap();
-        let simple = metric.compute(&empty, &config());
+        let simple = metric.compute(&empty, &config()).unwrap();
 
         assert_eq!(complex.raw_value, 2.0);
         assert_eq!(complex.normalized_risk, 0.066667);
-        assert!(simple.is_none());
+        assert_eq!(simple.raw_value, 1.0);
+        assert_eq!(simple.normalized_risk, 0.0);
     }
 
     #[test]
@@ -1107,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn function_metrics_return_none_when_subgraph_lacks_supporting_data() {
+    fn function_metrics_return_zero_risk_when_subgraph_lacks_supporting_data() {
         let cfg_entropy = CfgBranchEntropyRisk::new();
         let complexity = CyclomaticComplexityRisk::new();
         let data_flow_density = DataFlowDensityRisk::new();
@@ -1151,14 +1130,20 @@ mod tests {
 
         assert_eq!(subgraph.nodes.len(), 1);
         assert_eq!(subgraph.edges.len(), 0);
-        assert!(cfg_entropy.compute(&subgraph, &config()).is_none());
-        assert!(complexity.compute(&subgraph, &config()).is_none());
-        assert!(data_flow_density.compute(&subgraph, &config()).is_none());
-        assert!(
-            identifier_repetition
-                .compute(&subgraph, &config())
-                .is_none()
-        );
+        let cfg_entropy_value = cfg_entropy.compute(&subgraph, &config()).unwrap();
+        let complexity_value = complexity.compute(&subgraph, &config()).unwrap();
+        let data_flow_density_value = data_flow_density.compute(&subgraph, &config()).unwrap();
+        let identifier_repetition_value =
+            identifier_repetition.compute(&subgraph, &config()).unwrap();
+
+        assert_eq!(cfg_entropy_value.raw_value, 0.0);
+        assert_eq!(cfg_entropy_value.normalized_risk, 0.0);
+        assert_eq!(complexity_value.raw_value, 1.0);
+        assert_eq!(complexity_value.normalized_risk, 0.0);
+        assert_eq!(data_flow_density_value.raw_value, 0.0);
+        assert_eq!(data_flow_density_value.normalized_risk, 0.0);
+        assert_eq!(identifier_repetition_value.raw_value, 0.0);
+        assert_eq!(identifier_repetition_value.normalized_risk, 0.0);
     }
 
     #[test]

@@ -27,6 +27,42 @@
       "language": "rust"
     }
   ],
+  "parameters": [
+    {
+      "id": "p1",
+      "name": "input_value",
+      "file": "src/lib.rs",
+      "start_line": 1,
+      "end_line": 1,
+      "language": "rust"
+    },
+    {
+      "id": "p2",
+      "name": "helper_input",
+      "file": "src/lib.rs",
+      "start_line": 5,
+      "end_line": 5,
+      "language": "rust"
+    }
+  ],
+  "variables": [
+    {
+      "id": "v1",
+      "name": "entry_result",
+      "file": "src/lib.rs",
+      "start_line": 2,
+      "end_line": 2,
+      "language": "rust"
+    },
+    {
+      "id": "v2",
+      "name": "helper_result",
+      "file": "src/lib.rs",
+      "start_line": 6,
+      "end_line": 6,
+      "language": "rust"
+    }
+  ],
   "calls": [
     {
       "source": "f1",
@@ -36,8 +72,40 @@
   ],
   "data_flows": [
     {
+      "source": "p1",
+      "target": "v1",
+      "language": "rust"
+    },
+    {
+      "source": "p2",
+      "target": "v2",
+      "language": "rust"
+    }
+  ],
+  "control_flows": [
+    {
+      "source": "f1",
+      "target": "p1",
+      "language": "rust"
+    },
+    {
+      "source": "p1",
+      "target": "v1",
+      "language": "rust"
+    },
+    {
+      "source": "p1",
+      "target": "f2",
+      "language": "rust"
+    },
+    {
       "source": "f2",
-      "target": "f1",
+      "target": "p2",
+      "language": "rust"
+    },
+    {
+      "source": "p2",
+      "target": "v2",
       "language": "rust"
     }
   ],
@@ -50,6 +118,26 @@
     {
       "source": "m1",
       "target": "f2",
+      "language": "rust"
+    },
+    {
+      "source": "f1",
+      "target": "p1",
+      "language": "rust"
+    },
+    {
+      "source": "f1",
+      "target": "v1",
+      "language": "rust"
+    },
+    {
+      "source": "f2",
+      "target": "p2",
+      "language": "rust"
+    },
+    {
+      "source": "f2",
+      "target": "v2",
       "language": "rust"
     }
   ]
