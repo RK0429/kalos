@@ -699,7 +699,14 @@ fn emit_error(
             if let Some(source) = source {
                 payload["cause"] = json!(source.to_string());
             }
-            println!("{payload}");
+            let document = payload.to_string();
+            if let Some(path) = output {
+                if write_error_output_file(path, &document) {
+                    return;
+                }
+            }
+
+            println!("{document}");
         }
         OutputFormat::Sarif => {
             let cause = source.map(|source| source.to_string());
@@ -710,17 +717,7 @@ fn emit_error(
                 SARIF_TOOL_ERROR_EXIT_CODE,
             );
             if let Some(path) = output {
-                if let Some(parent) = path
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                {
-                    if fs::create_dir_all(parent).is_err() {
-                        println!("{document}");
-                        return;
-                    }
-                }
-
-                if fs::write(path, format!("{document}\n")).is_ok() {
+                if write_error_output_file(path, &document) {
                     return;
                 }
             }
@@ -728,6 +725,19 @@ fn emit_error(
             println!("{document}");
         }
     }
+}
+
+fn write_error_output_file(path: &std::path::Path, document: &str) -> bool {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if fs::create_dir_all(parent).is_err() {
+            return false;
+        }
+    }
+
+    fs::write(path, format!("{document}\n")).is_ok()
 }
 
 fn emit_module_load_warnings(warnings: &[ModuleLoadWarning]) {
