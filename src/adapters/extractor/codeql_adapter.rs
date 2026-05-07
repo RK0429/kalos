@@ -18,6 +18,7 @@ use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
 const DEFAULT_EXTENSIONS: [&str; 5] = [".py", ".ts", ".tsx", ".rs", ".go"];
 const DEFAULT_MIN_LANGUAGE_RATIO: f64 = 0.05;
+const DEFAULT_CODEQL_TIMEOUT: Duration = Duration::from_secs(240);
 const SLOW_PATH_SOURCE_FILE_THRESHOLD: usize = 100;
 
 fn supported_extensions_display() -> String {
@@ -178,6 +179,7 @@ pub struct CodeQlAdapter<F, R, T> {
     min_language_ratio: f64,
     database_root: Option<PathBuf>,
     codeql_ram_mib: Option<u32>,
+    codeql_timeout: Option<Duration>,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -200,6 +202,7 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             min_language_ratio: DEFAULT_MIN_LANGUAGE_RATIO,
             database_root: None,
             codeql_ram_mib: None,
+            codeql_timeout: Some(DEFAULT_CODEQL_TIMEOUT),
         }
     }
 
@@ -225,6 +228,11 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
 
     pub fn with_codeql_ram_mib(mut self, ram_mib: u32) -> Self {
         self.codeql_ram_mib = Some(ram_mib);
+        self
+    }
+
+    pub fn with_codeql_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.codeql_timeout = timeout;
         self
     }
 
@@ -625,8 +633,7 @@ where
         let program = program.to_string_lossy().into_owned();
         let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         let output = self
-            .command_runner
-            .run(program.as_str(), &arg_refs, cwd)
+            .run_codeql(program.as_str(), &arg_refs, cwd)
             .map_err(|source| CodeQlAdapterError::Process {
                 stage,
                 language: language_name(language).to_owned(),
@@ -644,6 +651,20 @@ where
         }
 
         Ok(output)
+    }
+
+    fn run_codeql(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: &Path,
+    ) -> Result<ProcessOutput, ProcessError> {
+        match self.codeql_timeout {
+            Some(timeout) => self
+                .command_runner
+                .run_with_timeout(program, args, cwd, timeout),
+            None => self.command_runner.run(program, args, cwd),
+        }
     }
 
     fn ensure_extractor_available(
@@ -1357,6 +1378,125 @@ mod tests {
             Some("4096")
         );
         assert!(!invocations[3].args.iter().any(|arg| arg == "--ram"));
+    }
+
+    #[test]
+    fn codeql_adapter_bounds_codeql_subprocess_phases_by_default() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.rs", "fn main() {}\n");
+        let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: b"{}".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        );
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(invocations.len(), 4);
+        assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.timeout == Some(Duration::from_secs(240))),
+            "all CodeQL phases should have the bounded default timeout: {invocations:?}"
+        );
+    }
+
+    #[test]
+    fn codeql_adapter_can_disable_codeql_subprocess_timeout() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.rs", "fn main() {}\n");
+        let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: b"{}".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_codeql_timeout(None);
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(invocations.len(), 4);
+        assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.timeout.is_none()),
+            "disabled timeout should use unbounded command runner calls: {invocations:?}"
+        );
     }
 
     #[test]
