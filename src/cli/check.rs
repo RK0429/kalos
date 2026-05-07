@@ -150,6 +150,14 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     pub codeql_ram: Option<u32>,
     #[arg(
         long,
+        value_name = "seconds",
+        value_parser = parse_codeql_timeout_secs,
+        default_value_t = 240,
+        help = "maximum seconds allowed for each CodeQL subprocess phase (0 disables the internal timeout)"
+    )]
+    pub codeql_timeout: u64,
+    #[arg(
+        long,
         help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)",
         long_help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)
 
@@ -328,6 +336,9 @@ impl CheckCommand {
         if let Some(ram_mib) = self.codeql_ram {
             extractor = extractor.with_codeql_ram_mib(ram_mib);
         }
+        extractor = extractor.with_codeql_timeout(
+            (self.codeql_timeout > 0).then(|| Duration::from_secs(self.codeql_timeout)),
+        );
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
         let mut plugin_host = Some(WasmPluginHost::load(
@@ -661,6 +672,12 @@ fn parse_codeql_ram_mib(value: &str) -> Result<u32, String> {
         return Err("CodeQL RAM must be greater than 0 MiB".to_owned());
     }
     Ok(ram_mib)
+}
+
+fn parse_codeql_timeout_secs(value: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|error| format!("invalid CodeQL timeout value `{value}`: {error}"))
 }
 
 fn resolve_head_tree_hash(workspace_root: &std::path::Path) -> Option<String> {

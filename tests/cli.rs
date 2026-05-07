@@ -620,6 +620,41 @@ fn kalos_check_help_documents_filesystem_side_effects() {
 }
 
 #[test]
+fn kalos_check_help_documents_codeql_timeout_option() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--codeql-timeout <seconds>"))
+        .stdout(predicate::str::contains("0 disables the internal timeout"));
+}
+
+#[test]
+fn kalos_check_rejects_invalid_codeql_timeout_value() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--codeql-timeout", "not-a-number"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("invalid CodeQL timeout value"));
+}
+
+#[test]
+fn kalos_check_accepts_zero_codeql_timeout() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--codeql-timeout", "0"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn kalos_check_succeeds_with_non_empty_output_in_temp_workspace() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
