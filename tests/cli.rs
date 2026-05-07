@@ -1165,6 +1165,10 @@ fn kalos_check_json_output_file_receives_late_codeql_failure() {
     let parsed: Value =
         serde_json::from_str(&rendered).expect("JSON failure output file should parse as JSON");
     assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(
+        parsed["error_class"],
+        Value::String("codeql_extraction".to_owned())
+    );
     assert!(
         parsed["message"]
             .as_str()

@@ -754,17 +754,20 @@ pub fn render_sarif_error_document(
     cause: Option<&str>,
     tool_version: &str,
     exit_code: i64,
+    error_class: &str,
 ) -> String {
     let mut notification = json!({
         "level": "error",
         "message": { "text": message },
+        "properties": { "error_class": error_class },
     });
     if let Some(cause) = cause {
-        notification["properties"] = json!({ "cause": cause });
+        notification["properties"]["cause"] = json!(cause);
     }
 
     let mut kalos_properties = json!({
         "error": true,
+        "error_class": error_class,
         "message": message,
     });
     if let Some(cause) = cause {
@@ -785,7 +788,7 @@ pub fn render_sarif_error_document(
             "invocations": [{
                 "executionSuccessful": false,
                 "exitCode": exit_code,
-                "exitCodeDescription": "tool error",
+                "exitCodeDescription": error_class_description(error_class),
                 "toolExecutionNotifications": [notification],
             }],
             "results": [],
@@ -796,6 +799,14 @@ pub fn render_sarif_error_document(
     });
 
     serde_json::to_string_pretty(&document).expect("SARIF error document should serialize")
+}
+
+fn error_class_description(error_class: &str) -> &'static str {
+    match error_class {
+        "codeql_infrastructure" => "CodeQL infrastructure error",
+        "codeql_extraction" => "CodeQL extraction error",
+        _ => "tool error",
+    }
 }
 
 pub fn project_metrics(
@@ -2176,6 +2187,7 @@ mod tests {
             Some("No such file or directory (os error 2)"),
             "9.9.9",
             2,
+            "tool_error",
         );
         let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
 
@@ -2210,9 +2222,11 @@ mod tests {
             notification["properties"]["cause"],
             "No such file or directory (os error 2)"
         );
+        assert_eq!(notification["properties"]["error_class"], "tool_error");
 
         let kalos_props = &run["properties"]["kalos"];
         assert_eq!(kalos_props["error"], Value::Bool(true));
+        assert_eq!(kalos_props["error_class"], "tool_error");
         assert_eq!(kalos_props["message"], "failed to load config file");
         assert!(
             kalos_props["evaluation_artifact"].is_null(),
@@ -2226,15 +2240,41 @@ mod tests {
 
     #[test]
     fn sarif_error_document_omits_cause_when_source_missing() {
-        let rendered = render_sarif_error_document("boom", None, "9.9.9", 2);
+        let rendered = render_sarif_error_document("boom", None, "9.9.9", 2, "tool_error");
         let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
 
         let notification = &parsed["runs"][0]["invocations"][0]["toolExecutionNotifications"][0];
-        assert!(
-            notification["properties"].is_null() || notification["properties"]["cause"].is_null()
-        );
+        assert!(notification["properties"]["cause"].is_null());
+        assert_eq!(notification["properties"]["error_class"], "tool_error");
         let kalos_props = &parsed["runs"][0]["properties"]["kalos"];
         assert!(kalos_props.get("cause").is_none() || kalos_props["cause"].is_null());
+        assert_eq!(kalos_props["error_class"], "tool_error");
+    }
+
+    #[test]
+    fn sarif_error_document_describes_codeql_infrastructure_error_class() {
+        let rendered = render_sarif_error_document(
+            "failed to resolve CodeQL bundle",
+            Some("CodeQL bundle bootstrap lock showed no progress"),
+            "9.9.9",
+            2,
+            "codeql_infrastructure",
+        );
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
+
+        let invocation = &parsed["runs"][0]["invocations"][0];
+        assert_eq!(
+            invocation["exitCodeDescription"],
+            "CodeQL infrastructure error"
+        );
+        assert_eq!(
+            invocation["toolExecutionNotifications"][0]["properties"]["error_class"],
+            "codeql_infrastructure"
+        );
+        assert_eq!(
+            parsed["runs"][0]["properties"]["kalos"]["error_class"],
+            "codeql_infrastructure"
+        );
     }
 
     #[test]
