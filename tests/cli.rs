@@ -1300,6 +1300,86 @@ fn kalos_check_quiet_human_output_file_receives_late_codeql_failure() {
 }
 
 #[test]
+fn kalos_check_json_output_file_receives_codeql_timeout_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_timeout_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("timeout.json");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args([
+            "check",
+            "--codeql-timeout",
+            "1",
+            "--format",
+            "json",
+            "--output",
+        ])
+        .arg(&output_path)
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(rendered.ends_with('\n'), "expected trailing newline");
+    let parsed: Value =
+        serde_json::from_str(&rendered).expect("JSON timeout output file should parse as JSON");
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(
+        parsed["error_class"],
+        Value::String("codeql_extraction".to_owned())
+    );
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("failed to execute `")
+    );
+    assert!(
+        parsed["cause"]
+            .as_str()
+            .unwrap()
+            .contains("timed out after 1s")
+    );
+}
+
+#[test]
+fn kalos_check_quiet_human_output_file_receives_codeql_timeout_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_timeout_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("timeout.txt");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--codeql-timeout", "1", "--quiet", "--output"])
+        .arg(&output_path)
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(rendered.ends_with('\n'), "expected trailing newline");
+    assert!(
+        rendered.contains("failed to execute `"),
+        "expected human timeout message in output file: {rendered}"
+    );
+    assert!(
+        rendered.contains("timed out after 1s"),
+        "expected timeout cause in output file: {rendered}"
+    );
+    assert!(
+        !rendered.contains("error class: codeql_extraction"),
+        "human extraction failures should not add an error class line: {rendered}"
+    );
+}
+
+#[test]
 fn kalos_check_output_directory_fails_before_codeql_setup() {
     let temp = seeded_workspace();
     let output_dir = temp.path().join("report-dir");
@@ -2255,6 +2335,26 @@ fn seed_failing_codeql_bundle(workspace_root: &Path) -> PathBuf {
     cache_dir
 }
 
+fn seed_timeout_codeql_bundle(workspace_root: &Path) -> PathBuf {
+    let manifest = codeql_bundle_manifest().unwrap();
+    let cache_dir = workspace_root.join(".kalos-test-cache");
+    let bundle_dir = cache_dir.join("codeql").join(&manifest.version);
+    let queries_dir = bundle_dir.join("queries");
+    fs::create_dir_all(&queries_dir).unwrap();
+    fs::write(bundle_dir.join("bundle.marker"), manifest.sha256.as_bytes()).unwrap();
+    for language in ["python", "javascript-typescript", "rust", "go"] {
+        let language_dir = queries_dir.join(language);
+        fs::create_dir_all(&language_dir).unwrap();
+        fs::write(
+            language_dir.join(format!("extract-{language}.ql")),
+            "// fixture query\n",
+        )
+        .unwrap();
+    }
+    write_timeout_codeql_executable(&codeql_executable_path(&bundle_dir));
+    cache_dir
+}
+
 fn seed_invalid_managed_bundle(workspace_root: &Path) -> PathBuf {
     let manifest = codeql_bundle_manifest().unwrap();
     let cache_dir = workspace_root.join(".kalos-test-cache");
@@ -2356,6 +2456,36 @@ fn write_failing_codeql_executable(path: &Path) {
     assert!(
         status.success(),
         "failing fake CodeQL fixture compilation should succeed"
+    );
+    fs::remove_file(source_path).unwrap();
+}
+
+#[cfg(unix)]
+fn write_timeout_codeql_executable(path: &Path) {
+    let script = "#!/bin/sh\nif [ \"$1\" = \"resolve\" ] && [ \"$2\" = \"languages\" ]; then\n  cat <<'EOF'\n{\"go\":[],\"javascript\":[],\"python\":[],\"rust\":[]}\nEOF\n  exit 0\nfi\nif [ \"$1\" = \"database\" ] && [ \"$2\" = \"create\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"query\" ] && [ \"$2\" = \"run\" ]; then\n  sleep 30\n  exit 0\nfi\necho \"unexpected invocation: $@\" >&2\nexit 1\n";
+    fs::write(path, script).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+#[cfg(not(unix))]
+fn write_timeout_codeql_executable(path: &Path) {
+    let source_path = path.with_file_name("codeql_timeout_fixture.rs");
+    let source = "use std::env;\nuse std::io::Write;\nuse std::time::Duration;\n\nfn main() {\n    let args = env::args().skip(1).collect::<Vec<_>>();\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"resolve\" && action == \"languages\") {\n        print!(\"{\\\"go\\\":[],\\\"javascript\\\":[],\\\"python\\\":[],\\\"rust\\\":[]}\");\n        return;\n    }\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"database\" && action == \"create\") {\n        return;\n    }\n    if matches!(args.as_slice(), [stage, action, ..] if stage == \"query\" && action == \"run\") {\n        std::thread::sleep(Duration::from_secs(30));\n        return;\n    }\n    let _ = writeln!(std::io::stderr(), \"unexpected invocation: {}\", args.join(\" \"));\n    std::process::exit(1);\n}\n";
+    fs::write(&source_path, source).unwrap();
+    let status = StdCommand::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+        .arg("--edition=2024")
+        .arg("--crate-name")
+        .arg("kalos_timeout_codeql")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "timeout fake CodeQL fixture compilation should succeed"
     );
     fs::remove_file(source_path).unwrap();
 }
