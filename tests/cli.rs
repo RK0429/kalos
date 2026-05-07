@@ -1232,6 +1232,39 @@ fn kalos_check_json_output_file_receives_late_codeql_failure() {
 }
 
 #[test]
+fn kalos_check_quiet_human_output_file_receives_late_codeql_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_failing_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("failure.txt");
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--quiet", "--output"])
+        .arg(&output_path)
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(rendered.ends_with('\n'), "expected trailing newline");
+    assert!(
+        rendered.contains("CodeQL `query run` failed for `rust`"),
+        "expected human failure message in output file: {rendered}"
+    );
+    assert!(
+        rendered.contains("kalos test forced query failure"),
+        "expected CodeQL failure cause in output file: {rendered}"
+    );
+    assert!(
+        !rendered.contains("error class: codeql_extraction"),
+        "human extraction failures should not add an error class line: {rendered}"
+    );
+}
+
+#[test]
 fn kalos_check_output_directory_fails_before_codeql_setup() {
     let temp = seeded_workspace();
     let output_dir = temp.path().join("report-dir");

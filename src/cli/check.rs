@@ -287,7 +287,7 @@ impl CheckCommand {
             }
         };
         let platform = Platform::detect();
-        if self.format == OutputFormat::Human {
+        if self.format == OutputFormat::Human && !self.quiet {
             if let Some(notice) = platform.and_then(|platform| platform.emulation_notice()) {
                 eprintln!("{notice}");
             }
@@ -297,8 +297,10 @@ impl CheckCommand {
             Some(cache_dir) => ManagedToolCacheAdapter::with_cache_dir(manifest, cache_dir.clone()),
             None => ManagedToolCacheAdapter::new(manifest),
         };
-        let tool_cache =
-            ProgressToolCacheAdapter::new(tool_cache, self.format == OutputFormat::Human);
+        let tool_cache = ProgressToolCacheAdapter::new(
+            tool_cache,
+            self.format == OutputFormat::Human && !self.quiet,
+        );
         let exclude_patterns = config
             .exclude_patterns
             .iter()
@@ -314,7 +316,7 @@ impl CheckCommand {
         if let Some(cache_dir) = &self.cache_dir {
             extractor = extractor.with_database_root(cache_dir.join("codeql").join("databases"));
         }
-        if self.format == OutputFormat::Human {
+        if self.format == OutputFormat::Human && !self.quiet {
             extractor = extractor.with_progress();
         }
         if platform.map_or(false, |platform| platform.is_emulated()) {
@@ -691,8 +693,18 @@ fn emit_error(
 ) {
     match format {
         OutputFormat::Human => {
-            eprintln!("{message}");
             let error_class = classify_error(message, source);
+            let mut document = message.to_owned();
+            if error_class == "codeql_infrastructure" {
+                document.push_str(&format!("\nerror class: {error_class}"));
+            }
+            if let Some(path) = output {
+                if write_error_output_file(path, &document) {
+                    return;
+                }
+            }
+
+            eprintln!("{message}");
             if error_class == "codeql_infrastructure" {
                 eprintln!("error class: {error_class}");
             }
