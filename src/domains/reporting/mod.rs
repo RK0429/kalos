@@ -1699,6 +1699,67 @@ mod tests {
     }
 
     #[test]
+    fn json_output_keeps_all_level_function_metric_flood_bounded() {
+        let diagnostics = (0..30)
+            .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
+            .collect::<Vec<_>>();
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
+
+        let rendered = report.render_json(None).expect("json should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("json should parse");
+        let diagnostics = parsed["diagnostics"].as_array().expect("diagnostics array");
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic["rule_id"] == "KAL-F001")
+                .count(),
+            super::MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert!(
+            parsed["analysis_warnings"]
+                .as_array()
+                .expect("analysis warnings")
+                .iter()
+                .any(|warning| warning.as_str().is_some_and(|warning| {
+                    warning.contains("function metric flood control")
+                        && warning.contains("Use --level function")
+                }))
+        );
+    }
+
+    #[test]
+    fn sarif_output_keeps_all_level_function_metric_flood_bounded() {
+        let diagnostics = (0..30)
+            .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
+            .collect::<Vec<_>>();
+        let report = project_report(RequestedLevel::All, None, &fixture_metrics(), diagnostics);
+
+        let rendered = report.render_sarif(None).expect("sarif should render");
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif should parse");
+        let run = &parsed["runs"][0];
+        let results = run["results"].as_array().expect("results array");
+
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result["ruleId"] == "KAL-F001")
+                .count(),
+            super::MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert!(
+            run["properties"]["analysis_warnings"]
+                .as_array()
+                .expect("analysis warnings")
+                .iter()
+                .any(|warning| warning.as_str().is_some_and(|warning| {
+                    warning.contains("function metric flood control")
+                        && warning.contains("Use --level function")
+                }))
+        );
+    }
+
+    #[test]
     fn function_level_keeps_full_function_metric_inventory() {
         let diagnostics = (0..30)
             .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
