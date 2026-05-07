@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use serde_json::Value;
 use tempfile::TempDir;
 
 use kalos::adapters::dependency_resolver::StubDependencyResolver;
@@ -145,6 +146,35 @@ fn managed_tool_cache_checksum_mismatch_exits_with_code_2_and_clear_error() {
     assert_eq!(
         fs::read_to_string(gitignore_path).unwrap(),
         original_contents
+    );
+}
+
+#[test]
+fn managed_tool_cache_checksum_mismatch_json_reports_infrastructure_error_class() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_invalid_managed_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(
+        parsed["error_class"],
+        Value::String("codeql_infrastructure".to_owned())
+    );
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("failed to resolve CodeQL bundle")
     );
 }
 

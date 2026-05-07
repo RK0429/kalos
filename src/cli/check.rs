@@ -692,8 +692,10 @@ fn emit_error(
     match format {
         OutputFormat::Human => eprintln!("{message}"),
         OutputFormat::Json => {
+            let error_class = classify_error(message, source);
             let mut payload = json!({
                 "error": true,
+                "error_class": error_class,
                 "message": message,
             });
             if let Some(source) = source {
@@ -710,11 +712,13 @@ fn emit_error(
         }
         OutputFormat::Sarif => {
             let cause = source.map(|source| source.to_string());
+            let error_class = classify_error(message, source);
             let document = render_sarif_error_document(
                 message,
                 cause.as_deref(),
                 env!("CARGO_PKG_VERSION"),
                 SARIF_TOOL_ERROR_EXIT_CODE,
+                error_class,
             );
             if let Some(path) = output {
                 if write_error_output_file(path, &document) {
@@ -724,6 +728,26 @@ fn emit_error(
 
             println!("{document}");
         }
+    }
+}
+
+fn classify_error(
+    message: &str,
+    source: Option<&(dyn std::error::Error + 'static)>,
+) -> &'static str {
+    let cause = source.map(|source| source.to_string()).unwrap_or_default();
+    let text = format!("{message}\n{cause}");
+
+    if text.contains("failed to resolve CodeQL bundle")
+        || text.contains("CodeQL bundle bootstrap lock")
+        || text.contains("managed CodeQL cache")
+        || text.contains("failed to extract CodeQL bundle")
+    {
+        "codeql_infrastructure"
+    } else if text.contains("CodeQL `") || text.contains("failed to execute `") {
+        "codeql_extraction"
+    } else {
+        "tool_error"
     }
 }
 
@@ -849,5 +873,31 @@ impl From<MinimumSeverity> for Severity {
             MinimumSeverity::Warning => Severity::Warning,
             MinimumSeverity::Info => Severity::Info,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_error;
+
+    #[test]
+    fn classify_error_marks_codeql_bundle_cache_lock_as_infrastructure() {
+        let message = "failed to resolve CodeQL bundle: failed to extract CodeQL bundle v2.25.1";
+        let source = std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "CodeQL bundle bootstrap lock `/cache/codeql/.codeql-bundle-2.25.1.lock.d` showed no progress for 30000ms; remove the stale lock directory and retry",
+        );
+
+        assert_eq!(
+            classify_error(message, Some(&source)),
+            "codeql_infrastructure"
+        );
+    }
+
+    #[test]
+    fn classify_error_marks_codeql_command_failures_as_extraction() {
+        let message = "CodeQL `query run` failed for `rust` (exit code 2)";
+
+        assert_eq!(classify_error(message, None), "codeql_extraction");
     }
 }
