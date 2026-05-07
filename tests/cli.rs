@@ -1763,6 +1763,7 @@ fn kalos_check_diff_falls_back_to_full_analysis_when_baseline_is_missing() {
 fn kalos_check_diff_explicit_target_reports_full_fallback_context() {
     let temp = seeded_git_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let explicit_target_fallback_reason = "diff mode is not available for explicitly specified targets; falling back to full analysis";
 
     let human = Command::cargo_bin("kalos")
         .unwrap()
@@ -1771,9 +1772,7 @@ fn kalos_check_diff_explicit_target_reports_full_fallback_context() {
         .args(["check", "--diff", "HEAD~1", "src/lib.rs"])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "diff mode is not available for explicitly specified targets; falling back to full analysis",
-        ));
+        .stderr(predicate::str::contains(explicit_target_fallback_reason));
     let human_stdout = String::from_utf8(human.get_output().stdout.clone()).unwrap();
     assert!(
         human_stdout.starts_with("Full analysis fallback completed; analyzed "),
@@ -1790,12 +1789,17 @@ fn kalos_check_diff_explicit_target_reports_full_fallback_context() {
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_CACHE_DIR", &cache_dir)
-        .args(["check", "--diff", "HEAD~1", "src/lib.rs", "--format", "json"])
+        .args([
+            "check",
+            "--diff",
+            "HEAD~1",
+            "src/lib.rs",
+            "--format",
+            "json",
+        ])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "diff mode is not available for explicitly specified targets; falling back to full analysis",
-        ));
+        .stderr(predicate::str::contains(explicit_target_fallback_reason));
     let json_stdout = String::from_utf8(json.get_output().stdout.clone()).unwrap();
     let parsed: Value = serde_json::from_str(&json_stdout).unwrap();
 
@@ -1805,9 +1809,20 @@ fn kalos_check_diff_explicit_target_reports_full_fallback_context() {
     assert_eq!(parsed["diff_execution"]["effective_mode"], "full");
     assert_eq!(
         parsed["diff_execution"]["fallback_reason"],
-        "diff mode is not available for explicitly specified targets; falling back to full analysis"
+        explicit_target_fallback_reason
     );
     assert!(parsed["diff_execution"]["changed_file_count"].is_null());
+    assert_eq!(
+        parsed["analysis_targets"],
+        serde_json::json!(["src/lib.rs"])
+    );
+    let warnings = parsed["analysis_warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning == explicit_target_fallback_reason),
+        "JSON analysis_warnings should include the explicit-target fallback reason, got {warnings:?}"
+    );
     assert_eq!(baseline_entry_count(&cache_dir), 0);
 }
 
