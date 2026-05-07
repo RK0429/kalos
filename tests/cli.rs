@@ -721,6 +721,54 @@ fn kalos_check_with_external_config_and_explicit_target_path_succeeds() {
 }
 
 #[test]
+fn kalos_check_external_config_with_current_infrastructure_failure_reports_error_class() {
+    let target_workspace = seeded_workspace();
+    let external_config_dir = TempDir::new().unwrap();
+    let config_path = external_config_dir.path().join(".kalos.toml");
+    fs::write(
+        &config_path,
+        "[rules.KAL-F001]\nthreshold = 0.0\nseverity = \"warning\"\n",
+    )
+    .unwrap();
+    let cache_dir = seed_invalid_managed_bundle(target_workspace.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(target_workspace.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .arg("--config")
+        .arg(&config_path)
+        .arg(".")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "error class: codeql_infrastructure",
+        ))
+        .stderr(predicate::str::contains("is outside workspace root").not());
+}
+
+#[test]
+fn kalos_check_human_codeql_extraction_failure_does_not_report_error_class() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_failing_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "CodeQL `query run` failed for `rust`",
+        ))
+        .stderr(predicate::str::contains("error class: codeql_extraction").not());
+}
+
+#[test]
 fn kalos_check_workspace_root_rejects_external_target_path() {
     let workspace = seeded_workspace();
     let external = seeded_workspace();
@@ -2136,6 +2184,15 @@ fn seed_failing_codeql_bundle(workspace_root: &Path) -> PathBuf {
         .unwrap();
     }
     write_failing_codeql_executable(&codeql_executable_path(&bundle_dir));
+    cache_dir
+}
+
+fn seed_invalid_managed_bundle(workspace_root: &Path) -> PathBuf {
+    let manifest = codeql_bundle_manifest().unwrap();
+    let cache_dir = workspace_root.join(".kalos-test-cache");
+    let bundle_dir = cache_dir.join("codeql").join(&manifest.version);
+    fs::create_dir_all(&bundle_dir).unwrap();
+    fs::write(bundle_dir.join("bundle.marker"), "0".repeat(64)).unwrap();
     cache_dir
 }
 

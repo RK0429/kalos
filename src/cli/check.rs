@@ -690,7 +690,13 @@ fn emit_error(
     source: Option<&(dyn std::error::Error + 'static)>,
 ) {
     match format {
-        OutputFormat::Human => eprintln!("{message}"),
+        OutputFormat::Human => {
+            eprintln!("{message}");
+            let error_class = classify_error(message, source);
+            if error_class == "codeql_infrastructure" {
+                eprintln!("error class: {error_class}");
+            }
+        }
         OutputFormat::Json => {
             let error_class = classify_error(message, source);
             let mut payload = json!({
