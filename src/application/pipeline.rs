@@ -1572,7 +1572,10 @@ fn generate_diagnostics(
     if !config.include_tests {
         diagnostics.retain(|diagnostic| {
             !is_test_file(diagnostic.location.file_path.as_str())
-                || !matches!(diagnostic.rule_id.as_str(), "KAL-M001" | "KAL-M003")
+                || !matches!(
+                    diagnostic.rule_id.as_str(),
+                    "KAL-F001" | "KAL-F003" | "KAL-M001" | "KAL-M003"
+                )
         });
     }
     diagnostics.sort_by_key(diagnostic_sort_key);
@@ -2276,21 +2279,84 @@ mod tests {
     }
 
     #[test]
-    fn generate_diagnostics_keeps_other_rules_for_test_files() {
+    fn generate_diagnostics_suppresses_function_metrics_for_test_files_by_default() {
         let diagnostics = generate_diagnostics(
             &diagnostics_test_source_analysis(),
-            &single_scope_metrics(
-                AnalysisLevel::Function,
-                "crate::tests::helper",
-                "tests/foo.rs",
-                0.8,
-                vec![("M-F001", 1.0, 0.8)],
-            ),
+            &AnalysisMetrics {
+                function_metrics: vec![
+                    ScopeMetricsLiteral::new(
+                        ScopeId::new(
+                            AnalysisLevel::Function,
+                            "crate::tests::helper",
+                            "tests/foo.rs",
+                        ),
+                        0.8,
+                        vec![("M-F001", 1.0, 0.8)],
+                    )
+                    .into(),
+                    ScopeMetricsLiteral::new(
+                        ScopeId::new(
+                            AnalysisLevel::Function,
+                            "crate::tests::dense",
+                            "foo.test.ts",
+                        ),
+                        0.9,
+                        vec![("M-F003", 1.0, 0.9)],
+                    )
+                    .into(),
+                ],
+                module_metrics: Vec::new(),
+                project_metrics: None,
+                overall_score: zero_overall_score(),
+            },
             &fixture_config(),
         );
 
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].rule_id, RuleId::from("KAL-F001"));
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn generate_diagnostics_keeps_function_metrics_when_tests_are_included() {
+        let mut config = fixture_config();
+        config.include_tests = true;
+
+        let diagnostics = generate_diagnostics(
+            &diagnostics_test_source_analysis(),
+            &AnalysisMetrics {
+                function_metrics: vec![
+                    ScopeMetricsLiteral::new(
+                        ScopeId::new(
+                            AnalysisLevel::Function,
+                            "crate::tests::helper",
+                            "tests/foo.rs",
+                        ),
+                        0.8,
+                        vec![("M-F001", 1.0, 0.8)],
+                    )
+                    .into(),
+                    ScopeMetricsLiteral::new(
+                        ScopeId::new(
+                            AnalysisLevel::Function,
+                            "crate::tests::dense",
+                            "foo.test.ts",
+                        ),
+                        0.9,
+                        vec![("M-F003", 1.0, 0.9)],
+                    )
+                    .into(),
+                ],
+                module_metrics: Vec::new(),
+                project_metrics: None,
+                overall_score: zero_overall_score(),
+            },
+            &config,
+        );
+
+        let rule_ids = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.rule_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(rule_ids, BTreeSet::from(["KAL-F001", "KAL-F003"]));
     }
 
     #[test]
