@@ -627,7 +627,15 @@ fn kalos_check_help_documents_codeql_timeout_option() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--codeql-timeout <seconds>"))
-        .stdout(predicate::str::contains("0 disables the internal timeout"));
+        .stdout(predicate::str::contains(
+            "managed CodeQL bundle setup and each CodeQL subprocess phase",
+        ))
+        .stdout(predicate::str::contains(
+            "cold/cache-heavy managed CodeQL bundle",
+        ))
+        .stdout(predicate::str::contains(
+            "0 to disable subprocess phase timeouts; managed bundle setup keeps its default timeout",
+        ));
 }
 
 #[test]
@@ -1377,6 +1385,35 @@ fn kalos_check_quiet_human_output_file_receives_codeql_timeout_failure() {
         !rendered.contains("error class: codeql_extraction"),
         "human extraction failures should not add an error class line: {rendered}"
     );
+}
+
+#[test]
+fn kalos_check_codeql_timeout_bounds_managed_bundle_setup() {
+    let temp = seeded_workspace();
+    let manifest = codeql_bundle_manifest().unwrap();
+    let cache_dir = temp.path().join(".kalos-test-cache");
+    let lock_dir = cache_dir
+        .join("codeql")
+        .join(format!(".codeql-bundle-{}.lock.d", manifest.version));
+    fs::create_dir_all(&lock_dir).unwrap();
+    fs::write(lock_dir.join("owner"), "pid=999999\n").unwrap();
+    fs::write(lock_dir.join("heartbeat"), "fresh\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--codeql-timeout", "1"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("setup bundle"))
+        .stderr(predicate::str::contains("bootstrap lock wait"))
+        .stderr(predicate::str::contains("setup timeout is 1.0s"))
+        .stderr(predicate::str::contains(
+            "cold/cache-heavy CodeQL bundle setup",
+        ));
 }
 
 #[test]

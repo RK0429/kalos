@@ -153,7 +153,8 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
         value_name = "seconds",
         value_parser = parse_codeql_timeout_secs,
         default_value_t = 240,
-        help = "maximum seconds allowed for each CodeQL subprocess phase (0 disables the internal timeout)"
+        help = "maximum seconds allowed for CodeQL setup and subprocess phases",
+        long_help = "maximum seconds allowed for managed CodeQL bundle setup and each CodeQL subprocess phase.\n\nThe cap also applies while preparing a cold/cache-heavy managed CodeQL bundle. Pass --codeql-timeout 0 to disable subprocess phase timeouts; managed bundle setup keeps its default timeout."
     )]
     pub codeql_timeout: u64,
     #[arg(
@@ -304,6 +305,10 @@ impl CheckCommand {
         let tool_cache = match &self.cache_dir {
             Some(cache_dir) => ManagedToolCacheAdapter::with_cache_dir(manifest, cache_dir.clone()),
             None => ManagedToolCacheAdapter::new(manifest),
+        };
+        let tool_cache = match self.codeql_timeout {
+            0 => tool_cache,
+            seconds => tool_cache.with_bundle_setup_timeout(Duration::from_secs(seconds)),
         };
         let tool_cache = ProgressToolCacheAdapter::new(
             tool_cache,

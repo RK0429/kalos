@@ -844,6 +844,7 @@ pub fn codeql_bundle_manifest() -> Result<BundleManifest, ManagedToolCacheError>
 pub struct ManagedToolCacheAdapter {
     manifest: BundleManifest,
     cache_dir: Option<PathBuf>,
+    bundle_setup_timeout: Duration,
 }
 
 #[derive(Debug)]
@@ -863,12 +864,14 @@ impl BundleBootstrapLock {
         bundle_root: &Path,
         version: &str,
         deadline: Instant,
+        setup_timeout: Duration,
     ) -> Result<Self, ManagedToolCacheError> {
         Self::acquire_with_timeout_before(
             bundle_root,
             version,
             BUNDLE_BOOTSTRAP_LOCK_TIMEOUT,
             deadline,
+            setup_timeout,
         )
     }
 
@@ -883,6 +886,7 @@ impl BundleBootstrapLock {
             version,
             timeout,
             Instant::now() + BUNDLE_SETUP_TIMEOUT,
+            BUNDLE_SETUP_TIMEOUT,
         )
     }
 
@@ -891,6 +895,7 @@ impl BundleBootstrapLock {
         version: &str,
         timeout: Duration,
         deadline: Instant,
+        setup_timeout: Duration,
     ) -> Result<Self, ManagedToolCacheError> {
         let lock_path = bundle_root.join(format!(".codeql-bundle-{version}.lock.d"));
         loop {
@@ -934,15 +939,19 @@ impl BundleBootstrapLock {
                         }
                         BootstrapLockState::Active | BootstrapLockState::Missing => {}
                     }
-                    let remaining = remaining_bundle_setup_timeout(deadline, "bootstrap lock wait")
-                        .map_err(|source| {
-                            bootstrap_lock_wait_timeout_error(
-                                version.to_owned(),
-                                bundle_root,
-                                &lock_path,
-                                source,
-                            )
-                        })?;
+                    let remaining = remaining_bundle_setup_timeout(
+                        deadline,
+                        setup_timeout,
+                        "bootstrap lock wait",
+                    )
+                    .map_err(|source| {
+                        bootstrap_lock_wait_timeout_error(
+                            version.to_owned(),
+                            bundle_root,
+                            &lock_path,
+                            source,
+                        )
+                    })?;
                     std::thread::sleep(remaining.min(BUNDLE_BOOTSTRAP_LOCK_POLL_INTERVAL));
                 }
                 Err(source) => {
@@ -1032,6 +1041,7 @@ impl ManagedToolCacheAdapter {
         Self {
             manifest,
             cache_dir: None,
+            bundle_setup_timeout: BUNDLE_SETUP_TIMEOUT,
         }
     }
 
@@ -1039,7 +1049,13 @@ impl ManagedToolCacheAdapter {
         Self {
             manifest,
             cache_dir: Some(cache_dir.into()),
+            bundle_setup_timeout: BUNDLE_SETUP_TIMEOUT,
         }
+    }
+
+    pub fn with_bundle_setup_timeout(mut self, timeout: Duration) -> Self {
+        self.bundle_setup_timeout = timeout;
+        self
     }
 
     fn cache_dir(&self) -> PathBuf {
@@ -1051,7 +1067,7 @@ impl ManagedToolCacheAdapter {
     }
 
     fn bootstrap_bundle(&self, bundle_dir: &Path) -> Result<(), ManagedToolCacheError> {
-        let setup_deadline = Instant::now() + BUNDLE_SETUP_TIMEOUT;
+        let setup_deadline = Instant::now() + self.bundle_setup_timeout;
         let bundle_root = bundle_dir.parent().ok_or_else(|| {
             bootstrap_extract_error(
                 self.manifest.version.clone(),
@@ -1066,6 +1082,7 @@ impl ManagedToolCacheAdapter {
             bundle_root,
             &self.manifest.version,
             setup_deadline,
+            self.bundle_setup_timeout,
         )?;
         if self.bundle_marker_matches_manifest(bundle_dir)? {
             return Ok(());
@@ -1125,7 +1142,12 @@ impl ManagedToolCacheAdapter {
         let archive = File::open(archive_path).map_err(|source| {
             bootstrap_extract_error(self.manifest.version.clone(), Some(cache_dir), source)
         })?;
-        let mut archive = DeadlineReader::new(archive, deadline, "cached archive checksum");
+        let mut archive = DeadlineReader::new(
+            archive,
+            deadline,
+            self.bundle_setup_timeout,
+            "cached archive checksum",
+        );
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 16 * 1024];
         loop {
@@ -1163,14 +1185,20 @@ impl ManagedToolCacheAdapter {
         archive_path: &Path,
         deadline: Instant,
     ) -> Result<(), ManagedToolCacheError> {
-        let timeout =
-            remaining_bundle_setup_timeout(deadline, "download phase").map_err(|source| {
-                bootstrap_extract_error(
+        let timeout = match remaining_bundle_setup_timeout(
+            deadline,
+            self.bundle_setup_timeout,
+            "download phase",
+        ) {
+            Ok(timeout) => timeout,
+            Err(source) => {
+                return Err(bootstrap_extract_error(
                     self.manifest.version.clone(),
                     archive_path.parent(),
                     source,
-                )
-            })?;
+                ));
+            }
+        };
         let agent = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(10)))
             .timeout_recv_body(Some(Duration::from_secs(30).min(timeout)))
@@ -1436,6 +1464,7 @@ impl ManagedToolCacheAdapter {
         let decoder = GzDecoder::new(DeadlineReader::new(
             archive,
             deadline,
+            self.bundle_setup_timeout,
             "extract/install phase",
         ));
         let mut tar = Archive::new(decoder);
@@ -1679,14 +1708,16 @@ fn remove_file_if_exists(path: &Path) -> io::Result<()> {
 struct DeadlineReader<R> {
     inner: R,
     deadline: Instant,
+    setup_timeout: Duration,
     phase: &'static str,
 }
 
 impl<R> DeadlineReader<R> {
-    fn new(inner: R, deadline: Instant, phase: &'static str) -> Self {
+    fn new(inner: R, deadline: Instant, setup_timeout: Duration, phase: &'static str) -> Self {
         Self {
             inner,
             deadline,
+            setup_timeout,
             phase,
         }
     }
@@ -1694,19 +1725,23 @@ impl<R> DeadlineReader<R> {
 
 impl<R: Read> Read for DeadlineReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        remaining_bundle_setup_timeout(self.deadline, self.phase)?;
+        remaining_bundle_setup_timeout(self.deadline, self.setup_timeout, self.phase)?;
         self.inner.read(buffer)
     }
 }
 
-fn remaining_bundle_setup_timeout(deadline: Instant, phase: &'static str) -> io::Result<Duration> {
+fn remaining_bundle_setup_timeout(
+    deadline: Instant,
+    setup_timeout: Duration,
+    phase: &'static str,
+) -> io::Result<Duration> {
     let now = Instant::now();
     if now >= deadline {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
             format!(
                 "CodeQL bundle setup timed out during {phase}; setup timeout is {}",
-                format_duration(BUNDLE_SETUP_TIMEOUT)
+                format_duration(setup_timeout)
             ),
         ));
     }
@@ -2239,6 +2274,7 @@ mod tests {
             "2.0.0",
             Duration::from_secs(30),
             expired_soon,
+            Duration::from_millis(75),
         )
         .unwrap_err();
         drop(holder);
