@@ -240,18 +240,20 @@ mod tests {
         assert!(help.contains("suppress the stderr acknowledgment printed on --output success"));
         assert!(help.contains("add .kalos/ to .gitignore when missing"));
         assert!(help.contains("default: warn only"));
-        assert!(
-            help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)")
-        );
+        assert!(help.contains(
+            "include test files in test-noisy diagnostics (KAL-F001, KAL-F003, KAL-M001, KAL-M003)"
+        ));
     }
 
     #[test]
     fn check_help_explains_default_suppression_for_include_tests() {
         let help = render_help(["kalos", "check", "--help"]);
 
-        assert!(
-            help.contains("include test files in module-level diagnostics (KAL-M001, KAL-M003)")
-        );
+        assert!(help.contains(
+            "include test files in test-noisy diagnostics (KAL-F001, KAL-F003, KAL-M001, KAL-M003)"
+        ));
+        assert!(help.contains("KAL-F001 (CFG branch entropy)"));
+        assert!(help.contains("KAL-F003 (data flow density)"));
         assert!(help.contains("KAL-M001 (module fan-out)"));
         assert!(help.contains("KAL-M003 (instability)"));
         assert!(help.contains("Test files are NOT excluded from analysis"));

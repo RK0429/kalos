@@ -169,18 +169,19 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     pub codeql_total_timeout: Option<u64>,
     #[arg(
         long,
-        help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)",
-        long_help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)
+        help = "include test files in test-noisy diagnostics (KAL-F001, KAL-F003, KAL-M001, KAL-M003)",
+        long_help = "include test files in test-noisy diagnostics (KAL-F001, KAL-F003, KAL-M001, KAL-M003)
 
-By default, KAL-M001 (module fan-out) and KAL-M003 (instability) diagnostics \
-are suppressed for test files because tests inherently import many modules and \
-score as highly unstable. Test files are NOT excluded from analysis: their \
-metrics are computed, they count toward files_analyzed, and every other rule \
-(for example KAL-PAT003) still applies to them.
+By default, KAL-F001 (CFG branch entropy), KAL-F003 (data flow density), \
+KAL-M001 (module fan-out), and KAL-M003 (instability) diagnostics are suppressed \
+for test files because tests commonly contain intentionally complex helpers and \
+import many modules. Test files are NOT excluded from analysis: their metrics \
+are computed, they count toward files_analyzed, and every other rule (for \
+example KAL-PAT003) still applies to them.
 
-Pass --include-tests to re-enable KAL-M001 and KAL-M003 diagnostics on test files. \
+Pass --include-tests to re-enable these diagnostics on test files. \
 The flag has no observable effect on JSON output when no test module crosses the \
-KAL-M001 or KAL-M003 threshold configured in .kalos.toml.
+configured thresholds in .kalos.toml.
 
 Test files are detected by path:
   - tests/** (at project root or any ancestor directory)
