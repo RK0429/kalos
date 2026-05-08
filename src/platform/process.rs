@@ -232,8 +232,12 @@ fn timeout_after_cleanup(
     Err(ProcessError::Timeout {
         program: program.to_owned(),
         cwd: cwd.to_path_buf(),
-        timeout_secs: timeout.as_secs(),
+        timeout_secs: display_timeout_secs(timeout),
     })
+}
+
+fn display_timeout_secs(timeout: Duration) -> u64 {
+    timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0)
 }
 
 fn wait_with_deadline(child: &mut std::process::Child, grace: Duration) {
