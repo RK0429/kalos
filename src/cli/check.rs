@@ -313,6 +313,7 @@ impl CheckCommand {
         let tool_cache = ProgressToolCacheAdapter::new(
             tool_cache,
             self.format == OutputFormat::Human && !self.quiet,
+            (self.codeql_timeout > 0).then(|| Duration::from_secs(self.codeql_timeout)),
         );
         let exclude_patterns = config
             .exclude_patterns
@@ -552,11 +553,16 @@ impl CheckCommand {
 struct ProgressToolCacheAdapter<T> {
     inner: T,
     progress: bool,
+    setup_timeout: Option<Duration>,
 }
 
 impl<T> ProgressToolCacheAdapter<T> {
-    fn new(inner: T, progress: bool) -> Self {
-        Self { inner, progress }
+    fn new(inner: T, progress: bool, setup_timeout: Option<Duration>) -> Self {
+        Self {
+            inner,
+            progress,
+            setup_timeout,
+        }
     }
 }
 
@@ -574,7 +580,13 @@ where
             return self.inner.resolve_bundle(request);
         }
 
-        eprintln!("  codeql: setup bundle ...");
+        match self.setup_timeout {
+            Some(timeout) => eprintln!(
+                "  codeql: setup bundle ... (timeout {}; cold/cache-heavy cache phase)",
+                format_elapsed(timeout)
+            ),
+            None => eprintln!("  codeql: setup bundle ..."),
+        }
         let started = Instant::now();
         let bundle = self.inner.resolve_bundle(request)?;
         eprintln!(

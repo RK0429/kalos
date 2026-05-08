@@ -1408,11 +1408,47 @@ fn kalos_check_codeql_timeout_bounds_managed_bundle_setup() {
         .assert()
         .code(2)
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("setup bundle"))
+        .stderr(predicate::str::contains(
+            "setup bundle ... (timeout 1.0s; cold/cache-heavy cache phase)",
+        ))
         .stderr(predicate::str::contains("bootstrap lock wait"))
         .stderr(predicate::str::contains("setup timeout is 1.0s"))
         .stderr(predicate::str::contains(
             "cold/cache-heavy CodeQL bundle setup",
+        ));
+}
+
+#[test]
+fn kalos_check_project_human_default_reports_bounded_cache_heavy_setup() {
+    let temp = seeded_workspace();
+    let manifest = codeql_bundle_manifest().unwrap();
+    let cache_dir = temp.path().join(".kalos-test-cache");
+    let lock_dir = cache_dir
+        .join("codeql")
+        .join(format!(".codeql-bundle-{}.lock.d", manifest.version));
+    fs::create_dir_all(&lock_dir).unwrap();
+    fs::write(lock_dir.join("owner"), "pid=999999\n").unwrap();
+    fs::write(lock_dir.join("heartbeat"), "fresh\n").unwrap();
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", ".", "--level", "project", "--format", "human"])
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--codeql-timeout", "1"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "setup bundle ... (timeout 1.0s; cold/cache-heavy cache phase)",
+        ))
+        .stderr(predicate::str::contains("setup timeout is 1.0s"))
+        .stderr(predicate::str::contains(
+            "Timed out during cold/cache-heavy CodeQL bundle setup or extraction",
+        ))
+        .stderr(predicate::str::contains(
+            "error class: codeql_infrastructure",
         ));
 }
 
