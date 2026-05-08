@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -856,16 +856,41 @@ struct BundleBootstrapLock {
 const BUNDLE_BOOTSTRAP_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const BUNDLE_BOOTSTRAP_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const BUNDLE_BOOTSTRAP_LOCK_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
+const BUNDLE_SETUP_TIMEOUT: Duration = Duration::from_secs(540);
 
 impl BundleBootstrapLock {
-    fn acquire(bundle_root: &Path, version: &str) -> Result<Self, ManagedToolCacheError> {
-        Self::acquire_with_timeout(bundle_root, version, BUNDLE_BOOTSTRAP_LOCK_TIMEOUT)
+    fn acquire_before(
+        bundle_root: &Path,
+        version: &str,
+        deadline: Instant,
+    ) -> Result<Self, ManagedToolCacheError> {
+        Self::acquire_with_timeout_before(
+            bundle_root,
+            version,
+            BUNDLE_BOOTSTRAP_LOCK_TIMEOUT,
+            deadline,
+        )
     }
 
+    #[cfg(test)]
     fn acquire_with_timeout(
         bundle_root: &Path,
         version: &str,
         timeout: Duration,
+    ) -> Result<Self, ManagedToolCacheError> {
+        Self::acquire_with_timeout_before(
+            bundle_root,
+            version,
+            timeout,
+            Instant::now() + BUNDLE_SETUP_TIMEOUT,
+        )
+    }
+
+    fn acquire_with_timeout_before(
+        bundle_root: &Path,
+        version: &str,
+        timeout: Duration,
+        deadline: Instant,
     ) -> Result<Self, ManagedToolCacheError> {
         let lock_path = bundle_root.join(format!(".codeql-bundle-{version}.lock.d"));
         loop {
@@ -909,7 +934,16 @@ impl BundleBootstrapLock {
                         }
                         BootstrapLockState::Active | BootstrapLockState::Missing => {}
                     }
-                    std::thread::sleep(BUNDLE_BOOTSTRAP_LOCK_POLL_INTERVAL);
+                    let remaining = remaining_bundle_setup_timeout(deadline, "bootstrap lock wait")
+                        .map_err(|source| {
+                            bootstrap_lock_wait_timeout_error(
+                                version.to_owned(),
+                                bundle_root,
+                                &lock_path,
+                                source,
+                            )
+                        })?;
+                    std::thread::sleep(remaining.min(BUNDLE_BOOTSTRAP_LOCK_POLL_INTERVAL));
                 }
                 Err(source) => {
                     return Err(bootstrap_extract_error(
@@ -1017,6 +1051,7 @@ impl ManagedToolCacheAdapter {
     }
 
     fn bootstrap_bundle(&self, bundle_dir: &Path) -> Result<(), ManagedToolCacheError> {
+        let setup_deadline = Instant::now() + BUNDLE_SETUP_TIMEOUT;
         let bundle_root = bundle_dir.parent().ok_or_else(|| {
             bootstrap_extract_error(
                 self.manifest.version.clone(),
@@ -1027,21 +1062,26 @@ impl ManagedToolCacheAdapter {
         fs::create_dir_all(bundle_root).map_err(|source| {
             bootstrap_extract_error(self.manifest.version.clone(), Some(bundle_root), source)
         })?;
-        let _lock = BundleBootstrapLock::acquire(bundle_root, &self.manifest.version)?;
+        let _lock = BundleBootstrapLock::acquire_before(
+            bundle_root,
+            &self.manifest.version,
+            setup_deadline,
+        )?;
         if self.bundle_marker_matches_manifest(bundle_dir)? {
             return Ok(());
         }
 
         let archive_path = archive_cache_path(bundle_root, &self.manifest.version);
-        if self.archive_matches_manifest(&archive_path)? {
+        if self.archive_matches_manifest_before(&archive_path, setup_deadline)? {
             eprintln!(
                 "Reusing cached CodeQL bundle archive {}",
                 archive_path.display()
             );
-        } else if let Err(error) = self.download_archive(&archive_path) {
+        } else if let Err(error) = self.download_archive_before(&archive_path, setup_deadline) {
             return Err(error);
         }
-        let install_result = self.install_bundle_from_archive(&archive_path, bundle_dir);
+        let install_result =
+            self.install_bundle_from_archive_before(&archive_path, bundle_dir, setup_deadline);
         if let Err(error) = install_result {
             return Err(error);
         }
@@ -1072,15 +1112,20 @@ impl ManagedToolCacheAdapter {
         Ok(marker_content.trim() == self.manifest.sha256)
     }
 
-    fn archive_matches_manifest(&self, archive_path: &Path) -> Result<bool, ManagedToolCacheError> {
+    fn archive_matches_manifest_before(
+        &self,
+        archive_path: &Path,
+        deadline: Instant,
+    ) -> Result<bool, ManagedToolCacheError> {
         if !archive_path.exists() {
             return Ok(false);
         }
 
         let cache_dir = archive_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut archive = File::open(archive_path).map_err(|source| {
+        let archive = File::open(archive_path).map_err(|source| {
             bootstrap_extract_error(self.manifest.version.clone(), Some(cache_dir), source)
         })?;
+        let mut archive = DeadlineReader::new(archive, deadline, "cached archive checksum");
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 16 * 1024];
         loop {
@@ -1104,10 +1149,32 @@ impl ManagedToolCacheAdapter {
         }
     }
 
-    fn download_archive(&self, archive_path: &Path) -> Result<(), ManagedToolCacheError> {
+    #[cfg(test)]
+    fn download_archive_with_timeout(
+        &self,
+        archive_path: &Path,
+        timeout: Duration,
+    ) -> Result<(), ManagedToolCacheError> {
+        self.download_archive_before(archive_path, Instant::now() + timeout)
+    }
+
+    fn download_archive_before(
+        &self,
+        archive_path: &Path,
+        deadline: Instant,
+    ) -> Result<(), ManagedToolCacheError> {
+        let timeout =
+            remaining_bundle_setup_timeout(deadline, "download phase").map_err(|source| {
+                bootstrap_extract_error(
+                    self.manifest.version.clone(),
+                    archive_path.parent(),
+                    source,
+                )
+            })?;
         let agent = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(10)))
-            .timeout_recv_body(Some(Duration::from_secs(600)))
+            .timeout_recv_body(Some(Duration::from_secs(30).min(timeout)))
+            .timeout_global(Some(timeout))
             .build()
             .new_agent();
         let response = agent
@@ -1140,6 +1207,10 @@ impl ManagedToolCacheAdapter {
         } else {
             format!("Downloading CodeQL bundle v{}", self.manifest.version)
         };
+        eprintln!(
+            "CodeQL bundle setup is a cold/cache-heavy phase; using a bounded download timeout of {}. Reuse --cache-dir or pre-populate the managed CodeQL cache when running under a harness timeout.",
+            format_duration(timeout)
+        );
         let progress_bar = if let Some(content_length) = content_length {
             let progress_bar = ProgressBar::new(content_length);
             progress_bar.set_style(
@@ -1203,7 +1274,9 @@ impl ManagedToolCacheAdapter {
             });
         }
 
-        if let Err(error) = self.publish_downloaded_archive(&temp_archive_path, archive_path) {
+        if let Err(error) =
+            self.publish_downloaded_archive_before(&temp_archive_path, archive_path, deadline)
+        {
             let _ = remove_file_if_exists(&temp_archive_path);
             return Err(error);
         }
@@ -1211,10 +1284,11 @@ impl ManagedToolCacheAdapter {
         Ok(())
     }
 
-    fn publish_downloaded_archive(
+    fn publish_downloaded_archive_before(
         &self,
         temp_archive_path: &Path,
         archive_path: &Path,
+        deadline: Instant,
     ) -> Result<(), ManagedToolCacheError> {
         match fs::hard_link(temp_archive_path, archive_path) {
             Ok(()) => {
@@ -1235,7 +1309,7 @@ impl ManagedToolCacheAdapter {
                         source,
                     )
                 })?;
-                if self.archive_matches_manifest(archive_path)? {
+                if self.archive_matches_manifest_before(archive_path, deadline)? {
                     eprintln!(
                         "Reusing concurrently cached CodeQL bundle archive {}",
                         archive_path.display()
@@ -1280,22 +1354,37 @@ impl ManagedToolCacheAdapter {
         }
     }
 
-    fn install_bundle_from_archive(
+    fn install_bundle_from_archive_before(
         &self,
         archive_path: &Path,
         bundle_dir: &Path,
+        deadline: Instant,
     ) -> Result<(), ManagedToolCacheError> {
         let cache_dir = bundle_dir.parent().unwrap_or(bundle_dir);
         let archive = File::open(archive_path).map_err(|source| {
             bootstrap_extract_error(self.manifest.version.clone(), Some(cache_dir), source)
         })?;
-        self.install_bundle_from_reader(archive, bundle_dir)
+        self.install_bundle_from_reader_before(archive, bundle_dir, deadline)
     }
 
+    #[cfg(test)]
     fn install_bundle_from_reader<R: Read>(
         &self,
         archive: R,
         bundle_dir: &Path,
+    ) -> Result<(), ManagedToolCacheError> {
+        self.install_bundle_from_reader_before(
+            archive,
+            bundle_dir,
+            Instant::now() + BUNDLE_SETUP_TIMEOUT,
+        )
+    }
+
+    fn install_bundle_from_reader_before<R: Read>(
+        &self,
+        archive: R,
+        bundle_dir: &Path,
+        deadline: Instant,
     ) -> Result<(), ManagedToolCacheError> {
         let staging_dir = staging_dir(bundle_dir, &self.manifest.version);
         let cache_dir = bundle_dir.parent().unwrap_or(bundle_dir);
@@ -1309,7 +1398,7 @@ impl ManagedToolCacheAdapter {
         })?;
 
         let install_result = self
-            .unpack_archive_into(archive, &staging_dir)
+            .unpack_archive_into_before(archive, &staging_dir, deadline)
             .and_then(|_| {
                 fs::write(
                     staging_dir.join(BUNDLE_MARKER_FILE),
@@ -1337,13 +1426,18 @@ impl ManagedToolCacheAdapter {
         Ok(())
     }
 
-    fn unpack_archive_into<R: Read>(
+    fn unpack_archive_into_before<R: Read>(
         &self,
         archive: R,
         destination: &Path,
+        deadline: Instant,
     ) -> Result<(), ManagedToolCacheError> {
         let cache_dir = destination.parent().unwrap_or(destination);
-        let decoder = GzDecoder::new(archive);
+        let decoder = GzDecoder::new(DeadlineReader::new(
+            archive,
+            deadline,
+            "extract/install phase",
+        ));
         let mut tar = Archive::new(decoder);
         let mut extracted_entry = false;
 
@@ -1582,6 +1676,43 @@ fn remove_file_if_exists(path: &Path) -> io::Result<()> {
     }
 }
 
+struct DeadlineReader<R> {
+    inner: R,
+    deadline: Instant,
+    phase: &'static str,
+}
+
+impl<R> DeadlineReader<R> {
+    fn new(inner: R, deadline: Instant, phase: &'static str) -> Self {
+        Self {
+            inner,
+            deadline,
+            phase,
+        }
+    }
+}
+
+impl<R: Read> Read for DeadlineReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        remaining_bundle_setup_timeout(self.deadline, self.phase)?;
+        self.inner.read(buffer)
+    }
+}
+
+fn remaining_bundle_setup_timeout(deadline: Instant, phase: &'static str) -> io::Result<Duration> {
+    let now = Instant::now();
+    if now >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "CodeQL bundle setup timed out during {phase}; setup timeout is {}",
+                format_duration(BUNDLE_SETUP_TIMEOUT)
+            ),
+        ));
+    }
+    Ok(deadline.duration_since(now))
+}
+
 fn bootstrap_download_guidance(
     archive_path: &Path,
     cache_dir: &Path,
@@ -1607,6 +1738,8 @@ fn bootstrap_download_guidance(
     );
     if is_no_space_error(message) {
         format!("No space left while writing the CodeQL archive. {cleanup}")
+    } else if is_timeout_error(message) {
+        format!("Timed out during the cold/cache-heavy CodeQL bundle download. {cleanup}")
     } else {
         cleanup
     }
@@ -1647,6 +1780,26 @@ fn stale_bootstrap_lock_error(
     )
 }
 
+fn bootstrap_lock_wait_timeout_error(
+    version: String,
+    cache_dir: &Path,
+    lock_path: &Path,
+    source: io::Error,
+) -> ManagedToolCacheError {
+    bootstrap_extract_error(
+        version,
+        Some(cache_dir),
+        io::Error::new(
+            source.kind(),
+            format!(
+                "{}; still waiting for bootstrap lock `{}`. If no kalos process is actively bootstrapping this cache, remove the lock directory and retry",
+                source,
+                lock_path.display()
+            ),
+        ),
+    )
+}
+
 fn bootstrap_extract_guidance(cache_dir: Option<&Path>, message: &str) -> String {
     let cleanup = if let Some(cache_dir) = cache_dir {
         format!(
@@ -1659,6 +1812,10 @@ fn bootstrap_extract_guidance(cache_dir: Option<&Path>, message: &str) -> String
 
     if is_no_space_error(message) {
         format!("No space left while extracting the CodeQL bundle. {cleanup}")
+    } else if is_timeout_error(message) {
+        format!(
+            "Timed out during cold/cache-heavy CodeQL bundle setup or extraction. Reuse --cache-dir or pre-populate the managed CodeQL cache before running under a harness timeout. {cleanup}"
+        )
     } else {
         format!("If this was caused by ENOSPC/no space left on device, {cleanup}")
     }
@@ -1669,6 +1826,14 @@ fn is_no_space_error(message: &str) -> bool {
     message.contains("no space left")
         || message.contains("os error 28")
         || message.contains("enospc")
+}
+
+fn is_timeout_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("timeout")
+        || message.contains("timed out")
+        || message.contains("deadline")
+        || message.contains("elapsed")
 }
 
 fn shell_quote_path(path: &Path) -> String {
@@ -1688,6 +1853,17 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KiB", bytes as f64 / KIB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_secs() < 60 {
+        let secs = duration.as_secs();
+        let tenths = duration.subsec_millis() / 100;
+        format!("{secs}.{tenths}s")
+    } else {
+        let secs = duration.as_secs();
+        format!("{}m {}s", secs / 60, secs % 60)
     }
 }
 
@@ -1715,7 +1891,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -1724,10 +1900,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BUNDLE_MARKER_FILE, BUNDLED_QLPACKS, BUNDLED_QUERIES, BootstrapLockState,
-        BundleBootstrapLock, BundleManifest, ManagedToolCacheAdapter, ManagedToolCacheError,
-        Platform, archive_cache_path, bootstrap_download_guidance, bootstrap_extract_error,
-        bootstrap_lock_state, codeql_bundle_manifest, deploy_bundled_queries,
+        BUNDLE_MARKER_FILE, BUNDLE_SETUP_TIMEOUT, BUNDLED_QLPACKS, BUNDLED_QUERIES,
+        BootstrapLockState, BundleBootstrapLock, BundleManifest, ManagedToolCacheAdapter,
+        ManagedToolCacheError, Platform, archive_cache_path, bootstrap_download_guidance,
+        bootstrap_extract_error, bootstrap_lock_state, codeql_bundle_manifest,
+        deploy_bundled_queries,
     };
     use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
@@ -2047,6 +2224,34 @@ mod tests {
     }
 
     #[test]
+    fn bundle_bootstrap_lock_wait_is_bounded_by_setup_deadline() {
+        let temp = TempDir::new().unwrap();
+        let bundle_root = temp.path().join("codeql");
+        fs::create_dir_all(&bundle_root).unwrap();
+        let holder =
+            BundleBootstrapLock::acquire_with_timeout(&bundle_root, "2.0.0", Duration::ZERO)
+                .unwrap();
+        let lock_path = bundle_root.join(".codeql-bundle-2.0.0.lock.d");
+        let expired_soon = Instant::now() + Duration::from_millis(75);
+
+        let error = BundleBootstrapLock::acquire_with_timeout_before(
+            &bundle_root,
+            "2.0.0",
+            Duration::from_secs(30),
+            expired_soon,
+        )
+        .unwrap_err();
+        drop(holder);
+
+        let message = error.to_string();
+        assert!(message.contains("bootstrap lock wait"));
+        assert!(message.contains("cold/cache-heavy CodeQL bundle setup or extraction"));
+        assert!(message.contains("remove the lock directory and retry"));
+        assert!(message.contains(&lock_path.display().to_string()));
+        assert!(message.contains("rm -rf"));
+    }
+
+    #[test]
     fn resolve_bundle_removes_corrupt_cached_archive_before_redownload() {
         let temp = TempDir::new().unwrap();
         let archive_bytes = fixture_archive_bytes();
@@ -2142,6 +2347,37 @@ mod tests {
     }
 
     #[test]
+    fn publish_download_collision_checksum_uses_remaining_setup_deadline() {
+        let temp = TempDir::new().unwrap();
+        let bundle_root = temp.path().join("codeql");
+        fs::create_dir_all(&bundle_root).unwrap();
+        let archive_path = archive_cache_path(&bundle_root, "2.0.0");
+        let temp_archive_path = temp.path().join("downloaded.tar.gz");
+        fs::write(&archive_path, fixture_archive_bytes()).unwrap();
+        fs::write(&temp_archive_path, fixture_archive_bytes()).unwrap();
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: "a".repeat(64),
+                download_url: "https://example.invalid/codeql.tgz".to_owned(),
+            },
+            temp.path(),
+        );
+        let expired_deadline = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        let error = adapter
+            .publish_downloaded_archive_before(&temp_archive_path, &archive_path, expired_deadline)
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("cached archive checksum"));
+        assert!(message.contains("cold/cache-heavy CodeQL bundle setup or extraction"));
+        assert!(!temp_archive_path.exists());
+    }
+
+    #[test]
     fn download_archive_reports_progress() {
         let temp = TempDir::new().unwrap();
         let archive_bytes = fixture_archive_bytes();
@@ -2157,7 +2393,9 @@ mod tests {
         );
         let archive_path = temp.path().join("codeql.tar.gz");
 
-        adapter.download_archive(&archive_path).unwrap();
+        adapter
+            .download_archive_with_timeout(&archive_path, BUNDLE_SETUP_TIMEOUT)
+            .unwrap();
         server.join().unwrap();
 
         assert!(archive_path.exists());
@@ -2179,10 +2417,50 @@ mod tests {
         );
         let archive_path = temp.path().join("codeql.tar.gz");
 
-        adapter.download_archive(&archive_path).unwrap();
+        adapter
+            .download_archive_with_timeout(&archive_path, BUNDLE_SETUP_TIMEOUT)
+            .unwrap();
         server.join().unwrap();
 
         assert!(archive_path.exists());
+    }
+
+    #[test]
+    fn download_archive_timeout_reports_cache_heavy_guidance() {
+        let temp = TempDir::new().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            thread::sleep(Duration::from_millis(200));
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nslow"
+            );
+            let _ = stream.flush();
+        });
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: "a".repeat(64),
+                download_url: format!("http://{addr}/codeql.tgz"),
+            },
+            temp.path(),
+        );
+        let archive_path = temp.path().join("codeql.tar.gz");
+
+        let error = adapter
+            .download_archive_with_timeout(&archive_path, Duration::from_millis(50))
+            .unwrap_err();
+        server.join().unwrap();
+
+        let message = error.to_string();
+        assert!(message.contains("failed to download CodeQL bundle v2.0.0"));
+        assert!(message.contains("cold/cache-heavy CodeQL bundle download"));
+        assert!(message.contains("pre-populate the CodeQL bundle cache"));
+        assert!(!archive_path.exists());
     }
 
     #[test]
@@ -2282,6 +2560,18 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_download_error_includes_timeout_cache_heavy_guidance() {
+        let archive_path = Path::new("/cache/kalos/codeql/.codeql-bundle-2.0.0.tar.gz");
+        let cache_dir = Path::new("/cache/kalos/codeql");
+        let guidance =
+            bootstrap_download_guidance(archive_path, cache_dir, Some(1024), "operation timed out");
+
+        assert!(guidance.contains("Timed out during the cold/cache-heavy CodeQL bundle download"));
+        assert!(guidance.contains("pre-populate the CodeQL bundle cache"));
+        assert!(guidance.contains("rm -rf '/cache/kalos/codeql'"));
+    }
+
+    #[test]
     fn bootstrap_extract_error_includes_enospc_cleanup_guidance() {
         let cache_dir = Path::new("/cache/kalos cache/codeql");
         let error = bootstrap_extract_error(
@@ -2295,6 +2585,41 @@ mod tests {
         assert!(message.contains("No space left"));
         assert!(message.contains("rm -rf '/cache/kalos cache/codeql'"));
         assert!(message.contains("Retry after freeing space"));
+    }
+
+    #[test]
+    fn cached_archive_extract_timeout_reports_cache_heavy_guidance() {
+        let temp = TempDir::new().unwrap();
+        let archive_bytes = fixture_archive_bytes();
+        let checksum = format!("{:x}", Sha256::digest(&archive_bytes));
+        let bundle_root = temp.path().join("codeql");
+        fs::create_dir_all(&bundle_root).unwrap();
+        let archive_path = archive_cache_path(&bundle_root, "2.0.0");
+        fs::write(&archive_path, archive_bytes).unwrap();
+        let bundle_dir = bundle_root.join("2.0.0");
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: checksum,
+                download_url: "https://example.invalid/codeql.tgz".to_owned(),
+            },
+            temp.path(),
+        );
+        let expired_deadline = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        let error = adapter
+            .install_bundle_from_archive_before(&archive_path, &bundle_dir, expired_deadline)
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("failed to extract CodeQL bundle v2.0.0"));
+        assert!(message.contains("timed out during extract/install phase"));
+        assert!(message.contains("cold/cache-heavy CodeQL bundle setup or extraction"));
+        assert!(message.contains("pre-populate the managed CodeQL cache"));
+        assert!(message.contains("rm -rf"));
+        assert!(!bundle_dir.exists());
     }
 
     #[test]
