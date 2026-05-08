@@ -699,7 +699,7 @@ where
                     return Err(ProcessError::Timeout {
                         program: program.to_owned(),
                         cwd: cwd.to_path_buf(),
-                        timeout_secs: total_timeout.as_secs(),
+                        timeout_secs: display_timeout_secs(total_timeout),
                     });
                 }
                 Some(total_timeout - elapsed)
@@ -709,10 +709,10 @@ where
 
         Ok(match (self.codeql_timeout, total_remaining) {
             (Some(phase_timeout), Some(total_remaining)) => {
-                Some(min_nonzero_timeout(phase_timeout, total_remaining))
+                Some(phase_timeout.min(total_remaining))
             }
             (Some(phase_timeout), None) => Some(phase_timeout),
-            (None, Some(total_remaining)) => Some(nonzero_timeout(total_remaining)),
+            (None, Some(total_remaining)) => Some(total_remaining),
             (None, None) => None,
         })
     }
@@ -859,14 +859,6 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
-fn nonzero_timeout(timeout: Duration) -> Duration {
-    timeout.max(Duration::from_secs(1))
-}
-
-fn min_nonzero_timeout(left: Duration, right: Duration) -> Duration {
-    nonzero_timeout(left.min(right))
-}
-
 fn emit_long_running_phase_context(language: Language) {
     eprintln!(
         "    phase timing: long CodeQL phases for {} report elapsed time on completion",
@@ -875,6 +867,10 @@ fn emit_long_running_phase_context(language: Language) {
     eprintln!(
         "    timeout mitigation: if CodeQL exceeds the harness timeout or memory budget, retry with --codeql-total-timeout/--codeql-timeout to tune bounds, --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
     );
+}
+
+fn display_timeout_secs(timeout: Duration) -> u64 {
+    timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0)
 }
 
 fn count_source_files_by_language(
@@ -1006,7 +1002,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tempfile::TempDir;
 
@@ -1556,6 +1552,37 @@ mod tests {
                 .timeout
                 .is_some_and(|timeout| timeout <= Duration::from_secs(30))),
             "total CodeQL budget should cap every phase timeout: {invocations:?}"
+        );
+    }
+
+    #[test]
+    fn codeql_adapter_total_timeout_uses_subsecond_remaining_budget() {
+        let adapter = CodeQlAdapter::new(
+            InMemoryFileSystem::new(),
+            MockCommandRunner::new(),
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_codeql_timeout(Some(Duration::from_secs(1)))
+        .with_codeql_total_timeout(Some(Duration::from_secs(5)));
+        let codeql_started = Instant::now() - Duration::from_millis(4500);
+
+        let timeout = adapter
+            .effective_codeql_timeout(codeql_started, "codeql", Path::new("/workspace"))
+            .unwrap()
+            .expect("remaining total budget should bound the subprocess");
+
+        assert!(
+            timeout <= Duration::from_millis(500),
+            "timeout should use the remaining total budget without rounding up: {timeout:?}"
         );
     }
 
