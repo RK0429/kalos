@@ -108,6 +108,8 @@ mod tests {
             "0.5",
             "--codeql-ram",
             "4096",
+            "--codeql-total-timeout",
+            "600",
         ])
         .unwrap();
 
@@ -137,6 +139,7 @@ mod tests {
         assert_eq!(command.diff.as_deref(), Some("origin/main"));
         assert_eq!(command.min_risk, Some(0.5));
         assert_eq!(command.codeql_ram, Some(4096));
+        assert_eq!(command.codeql_total_timeout, Some(600));
         assert!(command.llm);
         assert!(command.strict);
         assert!(!command.update_gitignore);

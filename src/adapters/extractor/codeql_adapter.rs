@@ -19,6 +19,7 @@ use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 const DEFAULT_EXTENSIONS: [&str; 5] = [".py", ".ts", ".tsx", ".rs", ".go"];
 const DEFAULT_MIN_LANGUAGE_RATIO: f64 = 0.05;
 const DEFAULT_CODEQL_TIMEOUT: Duration = Duration::from_secs(240);
+const DEFAULT_CODEQL_TOTAL_TIMEOUT: Duration = Duration::from_secs(1200);
 const SLOW_PATH_SOURCE_FILE_THRESHOLD: usize = 100;
 
 fn supported_extensions_display() -> String {
@@ -180,6 +181,7 @@ pub struct CodeQlAdapter<F, R, T> {
     database_root: Option<PathBuf>,
     codeql_ram_mib: Option<u32>,
     codeql_timeout: Option<Duration>,
+    codeql_total_timeout: Option<Duration>,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -203,6 +205,7 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             database_root: None,
             codeql_ram_mib: None,
             codeql_timeout: Some(DEFAULT_CODEQL_TIMEOUT),
+            codeql_total_timeout: Some(DEFAULT_CODEQL_TOTAL_TIMEOUT),
         }
     }
 
@@ -233,6 +236,11 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
 
     pub fn with_codeql_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.codeql_timeout = timeout;
+        self
+    }
+
+    pub fn with_codeql_total_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.codeql_total_timeout = timeout;
         self
     }
 
@@ -372,6 +380,7 @@ where
             }
         }
 
+        let codeql_started = Instant::now();
         let bundle = self
             .tool_cache
             .resolve_bundle(&ToolCacheRequest {
@@ -489,7 +498,12 @@ where
                 }
             }
 
-            self.ensure_extractor_available(&codeql_program, &request.workspace_root, language)?;
+            self.ensure_extractor_available(
+                &codeql_program,
+                &request.workspace_root,
+                language,
+                codeql_started,
+            )?;
 
             let database_create_started = if self.progress {
                 emit_long_running_phase_context(language);
@@ -512,6 +526,7 @@ where
                 &request.workspace_root,
                 "database create",
                 language,
+                codeql_started,
             )?;
             if let Some(started) = database_create_started {
                 eprintln!(
@@ -538,6 +553,7 @@ where
                 &request.workspace_root,
                 "query run",
                 language,
+                codeql_started,
             )?;
             if let Some(started) = query_run_started {
                 eprintln!("    query run done ({})", format_elapsed(started.elapsed()));
@@ -555,6 +571,7 @@ where
                 &request.workspace_root,
                 "bqrs decode",
                 language,
+                codeql_started,
             )?;
             if let Some(started) = bqrs_decode_started {
                 eprintln!(
@@ -629,11 +646,12 @@ where
         cwd: &Path,
         stage: &'static str,
         language: Language,
+        codeql_started: Instant,
     ) -> Result<ProcessOutput, CodeQlAdapterError> {
         let program = program.to_string_lossy().into_owned();
         let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         let output = self
-            .run_codeql(program.as_str(), &arg_refs, cwd)
+            .run_codeql(program.as_str(), &arg_refs, cwd, codeql_started)
             .map_err(|source| CodeQlAdapterError::Process {
                 stage,
                 language: language_name(language).to_owned(),
@@ -658,8 +676,9 @@ where
         program: &str,
         args: &[&str],
         cwd: &Path,
+        codeql_started: Instant,
     ) -> Result<ProcessOutput, ProcessError> {
-        match self.codeql_timeout {
+        match self.effective_codeql_timeout(codeql_started, program, cwd)? {
             Some(timeout) => self
                 .command_runner
                 .run_with_timeout(program, args, cwd, timeout),
@@ -667,11 +686,43 @@ where
         }
     }
 
+    fn effective_codeql_timeout(
+        &self,
+        codeql_started: Instant,
+        program: &str,
+        cwd: &Path,
+    ) -> Result<Option<Duration>, ProcessError> {
+        let total_remaining = match self.codeql_total_timeout {
+            Some(total_timeout) => {
+                let elapsed = codeql_started.elapsed();
+                if elapsed >= total_timeout {
+                    return Err(ProcessError::Timeout {
+                        program: program.to_owned(),
+                        cwd: cwd.to_path_buf(),
+                        timeout_secs: total_timeout.as_secs(),
+                    });
+                }
+                Some(total_timeout - elapsed)
+            }
+            None => None,
+        };
+
+        Ok(match (self.codeql_timeout, total_remaining) {
+            (Some(phase_timeout), Some(total_remaining)) => {
+                Some(min_nonzero_timeout(phase_timeout, total_remaining))
+            }
+            (Some(phase_timeout), None) => Some(phase_timeout),
+            (None, Some(total_remaining)) => Some(nonzero_timeout(total_remaining)),
+            (None, None) => None,
+        })
+    }
+
     fn ensure_extractor_available(
         &self,
         program: &Path,
         cwd: &Path,
         language: Language,
+        codeql_started: Instant,
     ) -> Result<(), CodeQlAdapterError> {
         let output = self.run_checked(
             program,
@@ -679,6 +730,7 @@ where
             cwd,
             "resolve languages",
             language,
+            codeql_started,
         )?;
         let available_languages = parse_resolved_languages(&output.stdout).map_err(|source| {
             CodeQlAdapterError::ResolveLanguagesOutput {
@@ -807,13 +859,21 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
+fn nonzero_timeout(timeout: Duration) -> Duration {
+    timeout.max(Duration::from_secs(1))
+}
+
+fn min_nonzero_timeout(left: Duration, right: Duration) -> Duration {
+    nonzero_timeout(left.min(right))
+}
+
 fn emit_long_running_phase_context(language: Language) {
     eprintln!(
         "    phase timing: long CodeQL phases for {} report elapsed time on completion",
         language_name(language)
     );
     eprintln!(
-        "    timeout mitigation: if a CodeQL phase exceeds the harness timeout or memory budget, retry with --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
+        "    timeout mitigation: if CodeQL exceeds the harness timeout or memory budget, retry with --codeql-total-timeout/--codeql-timeout to tune bounds, --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
     );
 }
 
@@ -1440,6 +1500,66 @@ mod tests {
     }
 
     #[test]
+    fn codeql_adapter_total_timeout_caps_each_remaining_phase() {
+        let mut file_system = InMemoryFileSystem::new();
+        file_system.insert("/workspace/src/app.rs", "fn main() {}\n");
+        let command_runner = MockCommandRunner::new();
+        push_language_resolution_result(&command_runner, &["go", "javascript", "python", "rust"]);
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        command_runner
+            .push_result(Ok(ProcessOutput {
+                stdout: b"{}".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }))
+            .unwrap();
+        let adapter = CodeQlAdapter::new(
+            file_system,
+            command_runner.clone(),
+            MockToolCachePort {
+                bundle: ResolvedToolBundle {
+                    tool_name: "codeql".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    cache_path: PathBuf::from("/cache/codeql/2.0.0"),
+                    checksum: "a".repeat(64),
+                },
+            },
+            "2.0.0",
+            Vec::new(),
+        )
+        .with_codeql_total_timeout(Some(Duration::from_secs(30)));
+
+        adapter
+            .extract(&ExtractionRequest {
+                workspace_root: PathBuf::from("/workspace"),
+                analysis_targets: vec![FilePath::from(".")],
+            })
+            .unwrap();
+
+        let invocations = command_runner.invocations().unwrap();
+        assert_eq!(invocations.len(), 4);
+        assert!(
+            invocations.iter().all(|invocation| invocation
+                .timeout
+                .is_some_and(|timeout| timeout <= Duration::from_secs(30))),
+            "total CodeQL budget should cap every phase timeout: {invocations:?}"
+        );
+    }
+
+    #[test]
     fn codeql_adapter_can_disable_codeql_subprocess_timeout() {
         let mut file_system = InMemoryFileSystem::new();
         file_system.insert("/workspace/src/app.rs", "fn main() {}\n");
@@ -1480,7 +1600,8 @@ mod tests {
             "2.0.0",
             Vec::new(),
         )
-        .with_codeql_timeout(None);
+        .with_codeql_timeout(None)
+        .with_codeql_total_timeout(None);
 
         adapter
             .extract(&ExtractionRequest {
