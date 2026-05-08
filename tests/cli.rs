@@ -634,7 +634,20 @@ fn kalos_check_help_documents_codeql_timeout_option() {
             "cold/cache-heavy managed CodeQL bundle",
         ))
         .stdout(predicate::str::contains(
-            "0 to disable subprocess phase timeouts; managed bundle setup keeps its default timeout",
+            "0 to disable subprocess phase timeouts; managed bundle setup keeps its default timeout unless --codeql-total-timeout sets a stricter total budget",
+        ))
+        .stdout(predicate::str::contains("--codeql-total-timeout <seconds>"))
+        .stdout(predicate::str::contains(
+            "maximum total seconds allowed for CodeQL setup and subprocess phases",
+        ))
+        .stdout(predicate::str::contains(
+            "Default: 1200 seconds, unless --codeql-timeout 0 is passed",
+        ))
+        .stdout(predicate::str::contains(
+            "the total budget is also disabled unless this option is explicitly provided",
+        ))
+        .stdout(predicate::str::contains(
+            "0 to disable the total CodeQL wall-clock budget",
         ));
 }
 
@@ -931,7 +944,7 @@ fn kalos_check_emits_timeout_mitigation_before_codeql_phases() {
         .find("phase timing: long CodeQL phases for rust report elapsed time on completion")
         .expect("phase timing context should be emitted before long CodeQL phases");
     let mitigation_index = stderr
-        .find("timeout mitigation: if a CodeQL phase exceeds the harness timeout")
+        .find("timeout mitigation: if CodeQL exceeds the harness timeout")
         .expect("timeout mitigation should be emitted before long CodeQL phases");
     let database_create_index = stderr
         .find("database create")
@@ -948,6 +961,8 @@ fn kalos_check_emits_timeout_mitigation_before_codeql_phases() {
     assert!(stderr.contains("--exclude"));
     assert!(stderr.contains("--diff"));
     assert!(stderr.contains("--cache-dir"));
+    assert!(stderr.contains("--codeql-total-timeout"));
+    assert!(stderr.contains("--codeql-timeout"));
     assert!(stderr.contains("--min-language-ratio"));
 }
 
@@ -1345,6 +1360,83 @@ fn kalos_check_json_output_file_receives_codeql_timeout_failure() {
             .as_str()
             .unwrap()
             .contains("failed to execute `")
+    );
+    assert!(
+        parsed["cause"]
+            .as_str()
+            .unwrap()
+            .contains("timed out after 1s")
+    );
+}
+
+#[test]
+fn kalos_check_sarif_stdout_receives_codeql_total_timeout_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_timeout_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args([
+            "check",
+            "--codeql-timeout",
+            "0",
+            "--codeql-total-timeout",
+            "1",
+            "--format",
+            "sarif",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("SARIF timeout output should parse as JSON");
+    assert_eq!(
+        parsed["runs"][0]["invocations"][0]["executionSuccessful"],
+        Value::Bool(false)
+    );
+    assert_eq!(
+        parsed["runs"][0]["properties"]["kalos"]["error_class"],
+        Value::String("codeql_extraction".to_owned())
+    );
+    assert!(
+        stdout.contains("timed out after 1s"),
+        "expected total timeout cause in SARIF output: {stdout}"
+    );
+}
+
+#[test]
+fn kalos_check_json_stdout_receives_codeql_total_timeout_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_timeout_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args([
+            "check",
+            "--codeql-timeout",
+            "0",
+            "--codeql-total-timeout",
+            "1",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("JSON timeout output should parse as JSON");
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(
+        parsed["error_class"],
+        Value::String("codeql_extraction".to_owned())
     );
     assert!(
         parsed["cause"]

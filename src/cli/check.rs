@@ -40,6 +40,8 @@ use crate::platform::process::SystemCommandRunner;
 use crate::ports::PluginPort;
 use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
 
+const DEFAULT_CODEQL_TOTAL_TIMEOUT_SECS: u64 = 1200;
+
 #[derive(Debug, Clone, Args)]
 #[command(
     about = "run code quality analysis",
@@ -154,9 +156,17 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
         value_parser = parse_codeql_timeout_secs,
         default_value_t = 240,
         help = "maximum seconds allowed for CodeQL setup and subprocess phases",
-        long_help = "maximum seconds allowed for managed CodeQL bundle setup and each CodeQL subprocess phase.\n\nThe cap also applies while preparing a cold/cache-heavy managed CodeQL bundle. Pass --codeql-timeout 0 to disable subprocess phase timeouts; managed bundle setup keeps its default timeout."
+        long_help = "maximum seconds allowed for managed CodeQL bundle setup and each CodeQL subprocess phase.\n\nThe cap also applies while preparing a cold/cache-heavy managed CodeQL bundle. Pass --codeql-timeout 0 to disable subprocess phase timeouts; managed bundle setup keeps its default timeout unless --codeql-total-timeout sets a stricter total budget."
     )]
     pub codeql_timeout: u64,
+    #[arg(
+        long,
+        value_name = "seconds",
+        value_parser = parse_codeql_timeout_secs,
+        help = "maximum total seconds allowed for CodeQL setup and subprocess phases",
+        long_help = "maximum total seconds allowed for CodeQL setup and subprocess phases.\n\nDefault: 1200 seconds, unless --codeql-timeout 0 is passed. When --codeql-timeout 0 disables subprocess phase timeouts, the total budget is also disabled unless this option is explicitly provided. Pass --codeql-total-timeout 0 to disable the total CodeQL wall-clock budget."
+    )]
+    pub codeql_total_timeout: Option<u64>,
     #[arg(
         long,
         help = "include test files in module-level diagnostics (KAL-M001, KAL-M003)",
@@ -306,14 +316,17 @@ impl CheckCommand {
             Some(cache_dir) => ManagedToolCacheAdapter::with_cache_dir(manifest, cache_dir.clone()),
             None => ManagedToolCacheAdapter::new(manifest),
         };
-        let tool_cache = match self.codeql_timeout {
-            0 => tool_cache,
-            seconds => tool_cache.with_bundle_setup_timeout(Duration::from_secs(seconds)),
+        let codeql_total_timeout =
+            effective_codeql_total_timeout(self.codeql_timeout, self.codeql_total_timeout);
+        let setup_timeout = codeql_setup_timeout(self.codeql_timeout, codeql_total_timeout);
+        let tool_cache = match setup_timeout {
+            Some(timeout) => tool_cache.with_bundle_setup_timeout(timeout),
+            None => tool_cache,
         };
         let tool_cache = ProgressToolCacheAdapter::new(
             tool_cache,
             self.format == OutputFormat::Human && !self.quiet,
-            (self.codeql_timeout > 0).then(|| Duration::from_secs(self.codeql_timeout)),
+            setup_timeout,
         );
         let exclude_patterns = config
             .exclude_patterns
@@ -344,6 +357,11 @@ impl CheckCommand {
         }
         extractor = extractor.with_codeql_timeout(
             (self.codeql_timeout > 0).then(|| Duration::from_secs(self.codeql_timeout)),
+        );
+        extractor = extractor.with_codeql_total_timeout(
+            codeql_total_timeout
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs),
         );
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
@@ -697,6 +715,26 @@ fn parse_codeql_timeout_secs(value: &str) -> Result<u64, String> {
         .map_err(|error| format!("invalid CodeQL timeout value `{value}`: {error}"))
 }
 
+fn effective_codeql_total_timeout(
+    codeql_timeout: u64,
+    explicit_total_timeout: Option<u64>,
+) -> Option<u64> {
+    explicit_total_timeout
+        .or_else(|| (codeql_timeout > 0).then_some(DEFAULT_CODEQL_TOTAL_TIMEOUT_SECS))
+}
+
+fn codeql_setup_timeout(
+    codeql_timeout: u64,
+    codeql_total_timeout: Option<u64>,
+) -> Option<Duration> {
+    match (codeql_timeout, codeql_total_timeout) {
+        (0, None | Some(0)) => None,
+        (0, Some(total)) => Some(Duration::from_secs(total)),
+        (phase, None | Some(0)) => Some(Duration::from_secs(phase)),
+        (phase, Some(total)) => Some(Duration::from_secs(phase.min(total))),
+    }
+}
+
 fn resolve_head_tree_hash(workspace_root: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD^{tree}"])
@@ -930,7 +968,9 @@ impl From<MinimumSeverity> for Severity {
 
 #[cfg(test)]
 mod tests {
-    use super::classify_error;
+    use std::time::Duration;
+
+    use super::{classify_error, codeql_setup_timeout, effective_codeql_total_timeout};
 
     #[test]
     fn classify_error_marks_codeql_bundle_cache_lock_as_infrastructure() {
@@ -951,5 +991,39 @@ mod tests {
         let message = "CodeQL `query run` failed for `rust` (exit code 2)";
 
         assert_eq!(classify_error(message, None), "codeql_extraction");
+    }
+
+    #[test]
+    fn codeql_setup_timeout_uses_stricter_phase_or_total_budget() {
+        assert_eq!(
+            codeql_setup_timeout(240, Some(1200)),
+            Some(Duration::from_secs(240))
+        );
+        assert_eq!(
+            codeql_setup_timeout(240, Some(60)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            codeql_setup_timeout(0, Some(60)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            codeql_setup_timeout(60, None),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            codeql_setup_timeout(60, Some(0)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(codeql_setup_timeout(0, None), None);
+        assert_eq!(codeql_setup_timeout(0, Some(0)), None);
+    }
+
+    #[test]
+    fn effective_codeql_total_timeout_preserves_zero_phase_timeout_contract() {
+        assert_eq!(effective_codeql_total_timeout(240, None), Some(1200));
+        assert_eq!(effective_codeql_total_timeout(240, Some(60)), Some(60));
+        assert_eq!(effective_codeql_total_timeout(0, None), None);
+        assert_eq!(effective_codeql_total_timeout(0, Some(60)), Some(60));
     }
 }
