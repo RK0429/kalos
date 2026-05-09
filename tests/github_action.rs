@@ -118,6 +118,156 @@ fn resolve_context_outputs_effective_cache_paths_and_keys() {
 }
 
 #[test]
+fn resolve_context_explicit_cache_dir_preserves_shared_cache_keys_across_args() {
+    let first = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("resolve-context")
+        .env("GITHUB_ACTION_PATH", repo_root())
+        .env("GITHUB_REF_NAME", "feature/action-wrapper")
+        .env("GITHUB_REPOSITORY_ID", "123456")
+        .env("GITHUB_SHA", "0123456789abcdef0123456789abcdef01234567")
+        .env("GITHUB_WORKSPACE", "/workspace/repo")
+        .env("INPUT_ARGS", "--level\nproject")
+        .env("INPUT_BASELINE_CACHE_SCOPE", "pull-request")
+        .env("INPUT_CACHE_DIR", "/tmp/custom-kalos-cache")
+        .env("INPUT_SARIF_FILE", ".github/results/kalos.sarif")
+        .env("INPUT_UPLOAD_SARIF", "false")
+        .env("INPUT_WORKING_DIRECTORY", ".")
+        .env("RUNNER_ARCH", "X64")
+        .env("RUNNER_OS", "Linux")
+        .env("RUNNER_TEMP", "/tmp/runner-temp")
+        .output()
+        .unwrap();
+    let second = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("resolve-context")
+        .env("GITHUB_ACTION_PATH", repo_root())
+        .env("GITHUB_REF_NAME", "feature/action-wrapper")
+        .env("GITHUB_REPOSITORY_ID", "123456")
+        .env("GITHUB_SHA", "0123456789abcdef0123456789abcdef01234567")
+        .env("GITHUB_WORKSPACE", "/workspace/repo")
+        .env("INPUT_ARGS", "--diff\norigin/main")
+        .env("INPUT_BASELINE_CACHE_SCOPE", "pull-request")
+        .env("INPUT_CACHE_DIR", "/tmp/custom-kalos-cache")
+        .env("INPUT_SARIF_FILE", ".github/results/kalos.sarif")
+        .env("INPUT_UPLOAD_SARIF", "false")
+        .env("INPUT_WORKING_DIRECTORY", ".")
+        .env("RUNNER_ARCH", "X64")
+        .env("RUNNER_OS", "Linux")
+        .env("RUNNER_TEMP", "/tmp/runner-temp")
+        .output()
+        .unwrap();
+
+    assert!(first.status.success(), "{first:?}");
+    assert!(second.status.success(), "{second:?}");
+    let first_outputs = parse_outputs(&first.stdout);
+    let second_outputs = parse_outputs(&second.stdout);
+
+    assert_eq!(
+        first_outputs.get("cache_dir").map(String::as_str),
+        Some("/tmp/custom-kalos-cache")
+    );
+    assert_eq!(
+        second_outputs.get("cache_dir").map(String::as_str),
+        Some("/tmp/custom-kalos-cache")
+    );
+    assert_eq!(
+        first_outputs.get("bundle_cache_key"),
+        second_outputs.get("bundle_cache_key")
+    );
+    assert_eq!(
+        first_outputs.get("baseline_restore_prefix"),
+        second_outputs.get("baseline_restore_prefix")
+    );
+    assert_eq!(
+        first_outputs.get("baseline_cache_key"),
+        second_outputs.get("baseline_cache_key")
+    );
+    assert!(
+        first_outputs
+            .get("bundle_cache_key")
+            .unwrap()
+            .starts_with("kalos-bundle-Linux-X64-")
+    );
+    assert!(
+        !first_outputs
+            .get("bundle_cache_key")
+            .unwrap()
+            .contains("123456")
+    );
+    assert_eq!(
+        first_outputs
+            .get("baseline_restore_prefix")
+            .map(String::as_str),
+        Some("kalos-baseline-Linux-X64-123456-pull-request-feature-action-wrapper-")
+    );
+}
+
+#[test]
+fn resolve_context_defaults_cache_to_repo_case_namespace() {
+    let temp = TempDir::new().unwrap();
+    let first = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("resolve-context")
+        .env("GITHUB_ACTION_PATH", repo_root())
+        .env("GITHUB_REF_NAME", "feature/action-wrapper")
+        .env("GITHUB_REPOSITORY_ID", "123456")
+        .env("GITHUB_SHA", "0123456789abcdef0123456789abcdef01234567")
+        .env("GITHUB_WORKSPACE", "/workspace/repo")
+        .env("INPUT_ARGS", "--level\nproject")
+        .env("INPUT_BASELINE_CACHE_SCOPE", "pull-request")
+        .env("INPUT_CACHE_DIR", "")
+        .env("INPUT_SARIF_FILE", ".github/results/kalos.sarif")
+        .env("INPUT_UPLOAD_SARIF", "false")
+        .env("INPUT_WORKING_DIRECTORY", ".")
+        .env("RUNNER_ARCH", "X64")
+        .env("RUNNER_OS", "Linux")
+        .env("RUNNER_TEMP", temp.path())
+        .output()
+        .unwrap();
+    let second = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("resolve-context")
+        .env("GITHUB_ACTION_PATH", repo_root())
+        .env("GITHUB_REF_NAME", "feature/action-wrapper")
+        .env("GITHUB_REPOSITORY_ID", "123456")
+        .env("GITHUB_SHA", "0123456789abcdef0123456789abcdef01234567")
+        .env("GITHUB_WORKSPACE", "/workspace/repo")
+        .env("INPUT_ARGS", "--diff\norigin/main")
+        .env("INPUT_BASELINE_CACHE_SCOPE", "pull-request")
+        .env("INPUT_CACHE_DIR", "")
+        .env("INPUT_SARIF_FILE", ".github/results/kalos.sarif")
+        .env("INPUT_UPLOAD_SARIF", "false")
+        .env("INPUT_WORKING_DIRECTORY", ".")
+        .env("RUNNER_ARCH", "X64")
+        .env("RUNNER_OS", "Linux")
+        .env("RUNNER_TEMP", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(first.status.success(), "{first:?}");
+    assert!(second.status.success(), "{second:?}");
+    let first_outputs = parse_outputs(&first.stdout);
+    let second_outputs = parse_outputs(&second.stdout);
+    let first_cache_dir = first_outputs.get("cache_dir").unwrap();
+    let second_cache_dir = second_outputs.get("cache_dir").unwrap();
+
+    assert!(first_cache_dir.starts_with(&format!("{}/kalos-cache/123456-", temp.path().display())));
+    assert!(
+        second_cache_dir.starts_with(&format!("{}/kalos-cache/123456-", temp.path().display()))
+    );
+    assert_ne!(first_cache_dir, second_cache_dir);
+    assert_ne!(
+        first_outputs.get("bundle_cache_key"),
+        second_outputs.get("bundle_cache_key")
+    );
+    assert_ne!(
+        first_outputs.get("baseline_cache_key"),
+        second_outputs.get("baseline_cache_key")
+    );
+}
+
+#[test]
 fn run_check_forwards_newline_delimited_arguments_without_shell_splitting() {
     let temp = TempDir::new().unwrap();
     let trace_dir = temp.path().join("trace");

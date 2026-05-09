@@ -7,7 +7,7 @@ inputs:
     required: false
     default: .
   cache-dir:
-    description: Override KALOS_CACHE_DIR. Defaults to $RUNNER_TEMP/kalos-cache.
+    description: Override KALOS_CACHE_DIR. Defaults to $RUNNER_TEMP/kalos-cache/<repository-id>-<case-hash>.
     required: false
     default: ""
   baseline-cache-scope:
@@ -50,10 +50,12 @@ runs:
         GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
         GITHUB_SHA: ${{ github.sha }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
+        INPUT_ARGS: ${{ inputs.args }}
         INPUT_BASELINE_CACHE_SCOPE: ${{ inputs.baseline-cache-scope }}
         INPUT_CACHE_DIR: ${{ inputs.cache-dir }}
         INPUT_SARIF_FILE: ${{ inputs.sarif-file }}
         INPUT_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         RUNNER_ARCH: ${{ runner.arch }}
         RUNNER_OS: ${{ runner.os }}
         RUNNER_TEMP: ${{ runner.temp }}

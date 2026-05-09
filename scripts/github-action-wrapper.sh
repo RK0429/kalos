@@ -40,6 +40,43 @@ PY
   exit 1
 }
 
+hash_string() {
+  local value="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$value" | sha256sum | awk '{print $1}'
+    return
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$value" | shasum -a 256 | awk '{print $1}'
+    return
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$value" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest())
+PY
+    return
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    python - "$value" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest())
+PY
+    return
+  fi
+
+  echo "unable to locate a SHA-256 implementation" >&2
+  exit 1
+}
+
 sanitize_key_part() {
   printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._-' '-'
 }
@@ -76,11 +113,21 @@ resolve_context() {
   require_env GITHUB_ACTION_PATH
   require_env RUNNER_TEMP
 
+  local repo_id
+  repo_id="$(sanitize_key_part "${GITHUB_REPOSITORY_ID:-unknown-repository}")"
+  local case_material
+  case_material="$(printf 'working-directory=%s\nargs=%s' "${INPUT_WORKING_DIRECTORY:-.}" "${INPUT_ARGS:-}")"
+  local case_seed
+  case_seed="$(hash_string "$case_material")"
+  case_seed="${case_seed%% *}"
+  case_seed="${case_seed:0:16}"
+  local cache_namespace="${repo_id}-${case_seed}"
+
   local cache_dir
   if [ -n "${INPUT_CACHE_DIR:-}" ]; then
     cache_dir="${INPUT_CACHE_DIR}"
   else
-    cache_dir="${RUNNER_TEMP%/}/kalos-cache"
+    cache_dir="${RUNNER_TEMP%/}/kalos-cache/${cache_namespace}"
   fi
 
   local install_root="${RUNNER_TEMP%/}/kalos-tool"
@@ -100,8 +147,6 @@ resolve_context() {
   runner_os="$(sanitize_key_part "${RUNNER_OS:-unknown-os}")"
   local runner_arch
   runner_arch="$(sanitize_key_part "${RUNNER_ARCH:-unknown-arch}")"
-  local repo_id
-  repo_id="$(sanitize_key_part "${GITHUB_REPOSITORY_ID:-unknown-repository}")"
   local ref_name
   ref_name="$(sanitize_key_part "${GITHUB_REF_NAME:-detached-head}")"
   local scope
@@ -109,8 +154,15 @@ resolve_context() {
   local sha
   sha="$(sanitize_key_part "${GITHUB_SHA:-unknown-sha}")"
 
-  local bundle_cache_key="kalos-bundle-${runner_os}-${runner_arch}-${bundle_seed}"
-  local baseline_restore_prefix="kalos-baseline-${runner_os}-${runner_arch}-${repo_id}-${scope}-${ref_name}-"
+  local bundle_cache_key
+  local baseline_restore_prefix
+  if [ -n "${INPUT_CACHE_DIR:-}" ]; then
+    bundle_cache_key="kalos-bundle-${runner_os}-${runner_arch}-${bundle_seed}"
+    baseline_restore_prefix="kalos-baseline-${runner_os}-${runner_arch}-${repo_id}-${scope}-${ref_name}-"
+  else
+    bundle_cache_key="kalos-bundle-${runner_os}-${runner_arch}-${repo_id}-${case_seed}-${bundle_seed}"
+    baseline_restore_prefix="kalos-baseline-${runner_os}-${runner_arch}-${repo_id}-${scope}-${case_seed}-${ref_name}-"
+  fi
   local baseline_cache_key="${baseline_restore_prefix}${sha}"
   local sarif_file=""
   local sarif_file_abs=""
