@@ -611,12 +611,15 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 #### REQ-FUNC-030: デフォルト設定ファイルの生成
 
-- **説明**: `kalos init` コマンドで、すべてのルールとデフォルト閾値を含む `.kalos.toml` を生成する
+- **説明**: `kalos init` コマンドで、すべてのルールとデフォルト閾値を含む `.kalos.toml` をカレントディレクトリに生成し、`.gitignore` に `.kalos/` が含まれることを保証する。detached worktree や temporary worktree 内で評価実行する場合、これらのファイルシステム副作用は当該 worktree には見えるが、元の source repository の作業ツリー/status は変更されない
 - **受け入れ基準**:
   - Given プロジェクトディレクトリ, When `kalos init` を実行, Then すべてのルールとデフォルト閾値・設定を含む `.kalos.toml` が生成される
+  - Given `.gitignore` が存在しない, When `kalos init` を実行, Then `.kalos/` を含む `.gitignore` が生成される
+  - Given `.gitignore` が存在し `.kalos/` を含まない, When `kalos init` を実行, Then `.gitignore` に `.kalos/` が追記される
   - Given `.kalos.toml` が既に存在 AND TTY stdin, When `kalos init` を実行, Then 上書き確認のプロンプトを表示する
   - Given `.kalos.toml` が既に存在 AND `--force` または `--yes`, When `kalos init` を実行, Then プロンプトを出さず上書きする
   - Given `.kalos.toml` が既に存在 AND 非TTY stdin AND `--force` 未指定, When `kalos init` を実行, Then プロンプトを出さず exit=2 で中断する
+  - Given detached worktree または temporary worktree で評価実行する, When `kalos init` を実行, Then `.kalos.toml` 作成や `.gitignore` 更新は当該 worktree の状態変化として観測され、元の source repository の作業ツリー/status は変更されない
 - **優先度**: Should
 - **出典**: ユーザー確認済み
 
