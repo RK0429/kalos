@@ -283,6 +283,10 @@ mod tests {
         assert!(help.contains(".gitignore"));
         assert!(help.contains(".kalos/"));
         assert!(help.to_lowercase().contains("overwrit"));
+        assert!(help.contains("non-interactive stdin"));
+        assert!(help.contains("detached or temporary worktree"));
+        assert!(help.contains("filesystem side effects are visible in that worktree"));
+        assert!(help.contains("original source repository working tree/status remains unchanged"));
     }
 
     #[test]

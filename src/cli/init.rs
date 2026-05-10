@@ -33,7 +33,11 @@ pub(super) enum GitignoreStatus {
                   if .kalos.toml already exists, prompts for confirmation before overwriting \
                   on interactive stdin; any response other than `y` or `Y` preserves the \
                   existing file. pass --force (aliases -f, --yes, -y) to overwrite without \
-                  prompting, which is also required on non-interactive stdin."
+                  prompting, which is also required on non-interactive stdin.\n\
+                  \n\
+                  when evaluation runs in a detached or temporary worktree, these filesystem \
+                  side effects are visible in that worktree while the original source repository \
+                  working tree/status remains unchanged."
 )]
 pub struct InitCommand {
     #[arg(
