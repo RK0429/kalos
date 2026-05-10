@@ -124,7 +124,10 @@ fn managed_tool_cache_checksum_mismatch_exits_with_code_2_and_clear_error() {
         .stderr(predicate::str::contains("checksum mismatch"))
         .stderr(predicate::str::contains("kalos bootstrap").not());
 
-    assert!(!temp.path().join(".gitignore").exists());
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
 
     let temp = seeded_workspace();
     let cache_dir = seed_invalid_managed_bundle(temp.path());
@@ -145,7 +148,7 @@ fn managed_tool_cache_checksum_mismatch_exits_with_code_2_and_clear_error() {
 
     assert_eq!(
         fs::read_to_string(gitignore_path).unwrap(),
-        original_contents
+        format!("{original_contents}.kalos/\n")
     );
 }
 
