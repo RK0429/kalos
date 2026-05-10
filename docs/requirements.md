@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.14 |
-| 最終更新日 | 2026-03-27 |
+| バージョン | 0.4.15 |
+| 最終更新日 | 2026-05-10 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
 | レビュー者 | Codex（対象: ~v0.2.12, 2026-03-20。指摘解決は v0.3.0–v0.4.1 で適用。詳細は [design-resolution-memo.md](./design-resolution-memo.md)） |
@@ -403,7 +403,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度
   - `--diff <base-ref>`: 変更ファイル再抽出 + ベースライン再利用による差分解析
-  - `--llm`: LLM連携による改善提案を有効化（non-diff / diff 両モードで動作する。diff mode では `AffectedScopeSet` に属する診断のみをエンリッチ対象とする）
+  - `--llm`: LLM連携による改善提案を有効化（non-diff / diff 両モードで動作する。diff mode では `AffectedScopeSet` に属する診断のみをエンリッチ対象とする）。評価 runner / ヘルプでは `KALOS_LLM_API_KEY` が前提条件であることを事前に明示する
   - `--strict`: warning を error 相当の exit code 判定対象にする（診断オブジェクトの `severity` 自体は変更しない）
 - **受け入れ基準**:
   - Given 有効なプロジェクトディレクトリ, When 位置引数なしで `kalos check` を実行, Then WorkspaceRoot（正規形 `["."]`）をデフォルト対象として全ワークスペースが解析され、診断結果が端末に表示される。この実行は全ワークスペース解析としてベースライン生成（write-back）の対象となる（ベースラインの消費は `--diff` 実行時のみ）
@@ -773,7 +773,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - リポジトリ全体、診断対象外の周辺コード、環境変数、シークレット、絶対パスは LLM に送信しない
   - **v1 ディスパッチ**: LLM 呼び出しは sequential（max in-flight = 1）とする。per-request: `connect timeout = 3s`, `overall timeout = 30s`。**ステータス別リトライ**: 429 は `Retry-After` ヘッダーを尊重して 1 回だけリトライする（aggregate budget 残量が許す場合のみ）。5xx はリトライせずスキップする。それ以外のエラーもリトライせずスキップする（ADR-0005 参照）
   - **Aggregate sidecar budget**: 1 回の `kalos check` 全体で LLM sidecar に費やす壁時間（wall-clock time）の上限は `120s`（暫定値）とする。v1 では sequential ディスパッチのため、各 request の所要時間（429 リトライの待機時間を含む）の累積で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照）
-  - **Preflight failure**: `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も同様とする。`KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の値に設定されている場合も設定エラー（exit code 2）とする（ADR-0005 参照）。代表ファイルの言語解決不可・multi-file 診断の断片還元不可による request 省略は正常動作であり warning を出さない（ADR-0005 参照）
+  - **Preflight failure**: `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定の場合は設定エラー（exit code 2）とする。JSON/SARIF などの構造化エラー出力では、この未設定ケースを `error_class = "expected_skip"` として分類し、full evaluation summary が前提未充足のスキップと実ツール障害を区別できるようにする。`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文の場合も設定エラー（exit code 2）とする。`KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の値に設定されている場合も設定エラー（exit code 2）とする（ADR-0005 参照）。代表ファイルの言語解決不可・multi-file 診断の断片還元不可による request 省略は正常動作であり warning を出さない（ADR-0005 参照）
   - **URL 秘匿化**: エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL に含まれうるトークンや API キーの資格情報漏えいを防ぐ（ADR-0005 参照）
 - **優先度**: Must
 - **出典**: 2026-03-19 ユーザー判断 + 設計具体化
@@ -827,6 +827,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.15 | 2026-05-10 | Issue #183: `--llm` help に `KALOS_LLM_API_KEY` 前提を明示し、missing API key の構造化 `error_class` を evaluation summary 用の `expected_skip` とする契約を追加 | Codex |
 | 0.4.14 | 2026-03-27 | 変更履歴修正: v0.4.12 エントリの誤った REQ-ID 参照を訂正（REQ-FUNC-032 → REQ-FUNC-024。scores nullability は総合スコアサマリー要件に関連） | Claude |
 | 0.4.13 | 2026-03-27 | provenance 整備: レビュー者メタ情報にレビュー対象版・日付を追記、`SummaryScope::WholeProject` 表記を domain_model.md の dot 表記（`SummaryScope.WholeProject`）に統一 | Claude |
 | 0.4.12 | 2026-03-27 | `scores` nullability 契約の統一: `scores.overall` / `scores.function` / `scores.module` / `scores.project` の `null` 条件を「非対象階層」と「計算可能なスコープ不在」の 2 源に明確化し domain_model.md と整合（REQ-FUNC-011 ステップ 7/8、REQ-FUNC-020、REQ-FUNC-023、REQ-FUNC-024） | Claude |

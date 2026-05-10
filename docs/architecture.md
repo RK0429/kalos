@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.26 |
-| 最終更新日 | 2026-03-27 |
+| バージョン | 0.4.27 |
+| 最終更新日 | 2026-05-10 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.14, domain_model.md v0.4.14 |
+| 入力 | requirements.md v0.4.15, domain_model.md v0.4.14 |
 
 ## 1. 設計目標
 
@@ -506,7 +506,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 構造化ログ | `stage`, `duration_ms`, `file_count`, `diagnostic_count`, `cache_hit_ratio` を出す |
 | トレース | `check` 実行全体と各ステージに span を付与する |
 | ベンチマーク | 10k LOC コーパスと差分コーパスを CI で定期測定する |
-| 失敗分類 | config error / bootstrap warning / extractor error / plugin warning / analysis warning / llm timeout を区別して記録する |
+| 失敗分類 | config error / bootstrap warning / extractor error / plugin warning / analysis warning / llm timeout / expected skip を区別して記録する |
 
 ### 7.2 セキュリティ設計
 
@@ -516,7 +516,7 @@ CLI 製品なので常駐監視は持たないが、リリース品質を担保�
 | 外部ツール取得 | CodeQL bundle は kalos release 同梱の managed bundle manifest で version/checksum を固定し、managed cache へ初回取得して SHA-256 を検証する |
 | 外部プロセス呼出 | CodeQL 呼出は引数配列で実行し、シェル展開しない |
 | LLM 送信データ | `--llm` 明示時のみ送信し、対象コード断片または `CpgSubgraphExcerpt` を最小化する。プロバイダは `KALOS_LLM_PROVIDER` で選択し（v1: `openai`、デフォルト: `openai`）、プロバイダがリクエスト形式を決定する。エンドポイント URL は `KALOS_LLM_ENDPOINT_URL` で設定し、未設定時はプロバイダ固有のデフォルト URL を使用する（`REQ-NF-009`, ADR-0005 参照） |
-| LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文、または `KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の場合は設定エラー（exit code 2）とする（ADR-0005 参照） |
+| LLM preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` が未設定、`KALOS_LLM_ENDPOINT_URL` が不正な URL 構文、または `KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の場合は設定エラー（exit code 2）とする。`KALOS_LLM_API_KEY` 未設定は構造化エラー出力で `error_class = "expected_skip"` とし、評価 summary が前提未充足のスキップとして分類できるようにする（ADR-0005 参照） |
 | LLM タイムボックス | **v1 ディスパッチ**: sequential（max in-flight = 1）。per-request: `connect timeout = 3s`, `overall timeout = 30s`。**ステータス別リトライ**: 429 は `Retry-After` ヘッダーを尊重して 1 回だけリトライする（aggregate budget 残量が許す場合のみ）。5xx はリトライせずスキップする。それ以外のエラーもリトライせずスキップする。aggregate sidecar budget: `120s`（暫定値、壁時間）— 経過壁時間で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。暫定値は PoC で確定予定（ADR-0005 参照） |
 | LLM URL 秘匿化 | エンドポイント URL のログ出力時はスキーム・ホスト・パスのみを記録し、クエリパラメータとフラグメントは除去する。URL にトークンや API キーが含まれる場合の資格情報漏えいを防ぐ（ADR-0005 参照） |
 | オフライン | managed CodeQL bundle が warm で `--llm` を使わない場合はネットワーク不要。bundle 未取得時は bootstrap 要求エラーで fail-fast する |
@@ -569,7 +569,7 @@ plugin aggregate fuel budget（全解析 `30_000_000 fuel`、参考: ~3s / 差�
 | v1 ディスパッチ | sequential（max in-flight = 1） |
 | ステータス別リトライ | 429: `Retry-After` を尊重して 1 回リトライ（aggregate budget 残量が許す場合のみ）。5xx: リトライせずスキップ。その他エラー: リトライせずスキップ（ADR-0005 参照） |
 | aggregate sidecar budget | 120 秒（暫定値、壁時間）。1 回の `kalos check` 全体で LLM sidecar に費やす壁時間の上限。v1 では sequential ディスパッチのため、各 request の所要時間（429 リトライの待機時間を含む）の累積で会計する。上限到達後は残りの `LlmEnrichmentRequest` をスキップし、テンプレート提案のみ返す。`stderr` / 構造化ログへ warning を出力する。暫定値は PoC で確定予定（ADR-0005 参照） |
-| preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` 未設定、`KALOS_LLM_ENDPOINT_URL` が不正 URL、または `KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の場合は設定エラー（exit code 2）。代表ファイルの言語解決不可・multi-file 断片還元不可は warning なしで request 省略（正常動作）（ADR-0005 参照） |
+| preflight failure | `--llm` 指定時に `KALOS_LLM_API_KEY` 未設定、`KALOS_LLM_ENDPOINT_URL` が不正 URL、または `KALOS_LLM_PROVIDER` が v1 の許容値（`openai`）以外の場合は設定エラー（exit code 2）。`KALOS_LLM_API_KEY` 未設定は構造化エラー出力で `error_class = "expected_skip"` とする。代表ファイルの言語解決不可・multi-file 断片還元不可は warning なしで request 省略（正常動作）（ADR-0005 参照） |
 | post-dispatch fallback | タイムアウト・非応答・エラー時は当該診断の `llm_suggestion` のみを省略し、テンプレート提案を返す |
 | コア不変条件 | いずれの障害・省略でもコア診断・スコア・Exit code は不変 |
 
@@ -663,6 +663,7 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.27 | 2026-05-10 | Issue #183: `KALOS_LLM_API_KEY` 未設定時の構造化 `expected_skip` 分類と `--llm` 評価前提の明示を反映 | Codex |
 | 0.4.26 | 2026-03-27 | レビュー派生残件の整合修正: 先頭メタを v0.4.26 に同期し入力参照を domain_model.md v0.4.14 へ更新、§3.1 図・§4.1 責務表・個別 REQ-ID トレーサビリティ・§4.2 本文の LLM Adapter 名称を統一、§4.1 に LLM Adapter の責務行を追加 | Claude |
 | 0.4.25 | 2026-03-27 | レビュー findings 解決: §4.1 REQ-NF-009 トレーサビリティ表に LLM outbound 安全性担当コンポーネントを追加、§4.2 依存方向ルールに Published Language の `ports` 配置規則を追記（ADR-0001 参照）、§4.2・§7.2 の `linear_memory_limit` 表記を `64 MiB` に統一 | Claude |
 | 0.4.24 | 2026-03-27 | §4.1 責務表の直後に個別 REQ-ID トレーサビリティ補助表を追加（範囲記法で隠れていた REQ-FUNC-001〜007, 008〜012, 013〜017, 019〜021, 025〜028, REQ-NF-001〜003 を個別展開し、各 REQ-ID から主担当コンテキストを直接追えるようにした） | Claude |

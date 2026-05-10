@@ -805,6 +805,7 @@ fn error_class_description(error_class: &str) -> &'static str {
     match error_class {
         "codeql_infrastructure" => "CodeQL infrastructure error",
         "codeql_extraction" => "CodeQL extraction error",
+        "expected_skip" => "expected skip",
         _ => "tool error",
     }
 }
@@ -2274,6 +2275,29 @@ mod tests {
         assert_eq!(
             parsed["runs"][0]["properties"]["kalos"]["error_class"],
             "codeql_infrastructure"
+        );
+    }
+
+    #[test]
+    fn sarif_error_document_describes_expected_skip_error_class() {
+        let rendered = render_sarif_error_document(
+            "`--llm` requires KALOS_LLM_API_KEY to be set",
+            None,
+            "9.9.9",
+            2,
+            "expected_skip",
+        );
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
+
+        let invocation = &parsed["runs"][0]["invocations"][0];
+        assert_eq!(invocation["exitCodeDescription"], "expected skip");
+        assert_eq!(
+            invocation["toolExecutionNotifications"][0]["properties"]["error_class"],
+            "expected_skip"
+        );
+        assert_eq!(
+            parsed["runs"][0]["properties"]["kalos"]["error_class"],
+            "expected_skip"
         );
     }
 
