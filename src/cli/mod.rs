@@ -54,7 +54,7 @@ mod tests {
         );
         assert!(!command.targets_explicitly_specified());
         assert_eq!(command.format, OutputFormat::Human);
-        assert_eq!(command.level, RequestedLevel::All);
+        assert_eq!(command.level, RequestedLevel::Project);
         assert_eq!(command.output, None);
         assert_eq!(command.min_risk, None);
         assert!(!command.verbose);
@@ -222,7 +222,7 @@ mod tests {
         assert!(help.contains("output format"));
         assert!(help.contains("[default: human]"));
         assert!(help.contains("analysis granularity level"));
-        assert!(help.contains("[default: all]"));
+        assert!(help.contains("[default: project]"));
         assert!(help.contains("path to configuration file (.kalos.toml)"));
         assert!(help.contains("workspace root to resolve target paths against"));
         assert!(help.contains("glob patterns to exclude from analysis (repeatable)"));

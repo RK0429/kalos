@@ -393,12 +393,12 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **一覧・summary・exit code の母集団**:
   - 診断一覧: non-diff モードでは選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断のみ
   - `--severity` は一覧の表示/出力対象だけを絞り込み、summary と exit code の計算母集団は変えない
-  - non-diff モードの `--level all`（デフォルト）では、summary と exit code は解決済み `analysis_targets` 内の全階層の診断集合を母集団とする（`SummaryScope.WholeProject`）
-  - `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
+  - non-diff モードの `--level all` 明示指定時は、summary と exit code は解決済み `analysis_targets` 内の全階層の診断集合を母集団とする（`SummaryScope.WholeProject`）
+  - デフォルトの `--level project` および `--level <function|module|project>` 指定時は、指定階層の診断のみを母集団とする（REQ-FUNC-023 参照）
   - diff mode では `--level` に関わらず `summary_scope = listed_diagnostics` とし、summary と exit code は現在の診断一覧（`diagnostics_scope = affected_only`）から materialize する。`scores` は引き続き変更後メトリクス集約結果を用いる
 - **主要オプション**:
   - `--format <human|json|sarif>`: 出力形式（デフォルト: human）
-  - `--level <function|module|project|all>`: 解析階層（デフォルト: all）
+  - `--level <function|module|project|all>`: 解析階層（デフォルト: project）
   - `--config <path>`: 明示的に使用する `.kalos.toml` のパス。この親ディレクトリを `WorkspaceRoot` とする
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度
@@ -437,7 +437,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given `--llm` 指定, When human形式で出力, Then `template` と `llm` の提案が別ラベルで表示される
   - Given 端末がカラー対応, When human形式で出力, Then 重大度に応じた色分けが適用される（error: 赤, warning: 黄, info: 青）
   - Given cross-scope 診断で `location.column = null`, When human形式で出力, Then synthetic な列番号は補完せず `path:line` 形式で表示される
-  - Given `--level all`（デフォルト）で解析完了, When human形式で出力, Then 末尾に解決済み `analysis_targets` 全体の総合スコアサマリーと重大度別件数が表示される
+  - Given `--level all` で解析完了, When human形式で出力, Then 末尾に解決済み `analysis_targets` 全体の総合スコアサマリーと重大度別件数が表示される
+  - Given `--level` 省略で解析完了, When human形式で出力, Then project レベルの総合スコアサマリーと重大度別件数が表示される
   - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベルメトリクスから算出した総合スコアと、関数レベル診断のみを母集団とした重大度別件数が表示され、module/project のスコアは表示されない
 - **優先度**: Must
 - **出典**: ユーザー確認済み
@@ -485,7 +486,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-022: Exit codeによるパイプライン制御
 
 - **説明**: 解析結果に応じたexit codeを返し、CI/CDパイプラインでのpass/fail判定を可能にする
-- **判定母集団**: `--level all`（デフォルト）では exit code は解決済み `analysis_targets` 内の全階層の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。diff mode でも同様とする
+- **判定母集団**: `--level all` 明示指定時は exit code は解決済み `analysis_targets` 内の全階層の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。デフォルトの `--level project` および `--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。diff mode でも同様とする
 - **厳格モード**: `--strict` は exit code 判定だけを変更する追加ポリシーであり、`Diagnostic.severity`、summary 件数、JSON/SARIF に出力される重大度、`--severity` による表示フィルタの意味は変更しない
 
   | 状況 | Exit code |
@@ -506,7 +507,8 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 
 - **説明**: `--level` オプションで報告対象の階層を限定する。CLI Shell がオプションを解釈し、Application Pipeline は指定階層を出力・summary・exit code の対象にする。内部では常に全階層（function / module / project）のメトリクス算出・診断生成を実行する（ベースラインキャッシュの保存不変条件として全階層の結果が必要なため。ADR-0003 参照）。`--level` による非対象階層の報告除外は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う。CPG 抽出は全ファイルを対象とする（階層横断の依存解決に必要なため）
 - **パイプライン動作**:
-  - non-diff モードの `--level all`（デフォルト）: 全階層のメトリクス・診断を算出し、総合スコアを報告する。`summary_scope = "whole_project"`（解決済み `analysis_targets` 内の全階層を母集団とする）
+  - non-diff モードのデフォルトは `--level project`: project 階層のメトリクス・診断を報告し、初回実行で function レベル診断の洪水を避ける。`summary_scope = "listed_diagnostics"`（project 診断のみを母集団とする）
+  - non-diff モードの `--level all` 明示指定時: 全階層のメトリクス・診断を報告する。`summary_scope = "whole_project"`（解決済み `analysis_targets` 内の全階層を母集団とする）
   - `--level function|module|project`: 指定階層のメトリクス・診断を報告する。全階層は常に内部的に算出されるが、非対象階層は報告に含めない（must exclude）。総合スコアは指定階層の `level_risk` から算出する（指定階層に計算可能なスコープが存在しない場合は `null`）。`summary_scope = "listed_diagnostics"` は summary と exit code の母集団だけを規定し、`scores.overall` 自体は診断件数から再計算しない。機械可読出力では `scores.overall` をその総合スコアとし、非対象階層の `scores.*` は `null` とする
   - `AnalysisLevel.Module` は言語ごとの owner scope を表し、Python/TypeScript の class、Rust の module / file root module、Go の package を含む。`KAL-PAT001` のような owner-scope パターンは `--level module|all` のときのみ評価対象とする
 - **受け入れ基準**:
@@ -519,7 +521,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 #### REQ-FUNC-024: 総合スコアサマリーの表示
 
 - **説明**: 解析結果の末尾に総合スコア・各階層スコア・重大度別件数のサマリーを表示する
-- **サマリー母集団**: `--level all`（デフォルト）では summary は解決済み `analysis_targets` 内の全階層の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。`--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。表示される総合スコア自体は REQ-FUNC-011 のメトリクス集約結果を用いる
+- **サマリー母集団**: `--level all` 明示指定時は summary は解決済み `analysis_targets` 内の全階層の診断集合を基準とし、`--severity` による表示フィルタの影響を受けない。デフォルトの `--level project` および `--level` で階層を限定した場合は指定階層の診断を基準とする（REQ-FUNC-023）。表示される総合スコア自体は REQ-FUNC-011 のメトリクス集約結果を用いる
 - **materialization 契約**: summary は `DiagnosticReport` の内部で再計算しない。Application Pipeline が `summary_scope` に応じて materialize し、diff mode では常に `summary_scope = "listed_diagnostics"` として現在の診断一覧から重大度別件数を再構成する
 - **受け入れ基準**:
   - Given `--level all` で解析完了, When 結果を出力, Then 総合スコア（0〜100）・各階層スコア・重大度別診断件数が表示される
