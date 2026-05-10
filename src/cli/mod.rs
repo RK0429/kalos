@@ -228,7 +228,8 @@ mod tests {
         assert!(help.contains("glob patterns to exclude from analysis (repeatable)"));
         assert!(help.contains("minimum severity threshold for diagnostics (omit to show all)"));
         assert!(help.contains("git base ref for differential analysis"));
-        assert!(help.contains("enable llm-assisted analysis"));
+        assert!(help.contains("enable llm-assisted analysis (requires KALOS_LLM_API_KEY)"));
+        assert!(help.contains("expected_skip"));
         assert!(help.contains("treat warnings as errors"));
         assert!(help.contains("KAL-PAT001 (god unit)"));
         assert!(help.contains("overflow ratio"));

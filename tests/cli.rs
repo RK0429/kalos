@@ -2001,6 +2001,37 @@ fn kalos_check_llm_missing_api_key_fails_preflight() {
 }
 
 #[test]
+fn kalos_check_llm_missing_api_key_json_is_expected_skip() {
+    let temp = seeded_workspace();
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("KALOS_LLM_API_KEY")
+        .env_remove("KALOS_LLM_PROVIDER")
+        .env_remove("KALOS_LLM_ENDPOINT_URL")
+        .args(["check", "--llm", "--format", "json"])
+        .assert()
+        .code(2);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("JSON failure output should parse as JSON");
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(parsed["error_class"], "expected_skip");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("KALOS_LLM_API_KEY")
+    );
+    assert!(
+        assert.get_output().stderr.is_empty(),
+        "stderr should not carry JSON failure payload"
+    );
+}
+
+#[test]
 fn kalos_check_llm_unsupported_provider_fails_preflight() {
     let temp = seeded_workspace();
 

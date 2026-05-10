@@ -114,7 +114,11 @@ with threshold, severity, or enabled overrides."
         help = "git base ref for differential analysis"
     )]
     pub diff: Option<String>,
-    #[arg(long, help = "enable llm-assisted analysis")]
+    #[arg(
+        long,
+        help = "enable llm-assisted analysis (requires KALOS_LLM_API_KEY)",
+        long_help = "enable llm-assisted analysis (requires KALOS_LLM_API_KEY)\n\nSet KALOS_LLM_API_KEY before running evaluation cases that include --llm. When the key is missing, kalos exits before analysis with code 2 and structured outputs classify the case as expected_skip so evaluation summaries can distinguish it from tool failures."
+    )]
     pub llm: bool,
     #[arg(
         long,
@@ -829,7 +833,9 @@ fn classify_error(
     let cause = source.map(|source| source.to_string()).unwrap_or_default();
     let text = format!("{message}\n{cause}");
 
-    if text.contains("failed to resolve CodeQL bundle")
+    if text.contains("`--llm` requires KALOS_LLM_API_KEY to be set") {
+        "expected_skip"
+    } else if text.contains("failed to resolve CodeQL bundle")
         || text.contains("CodeQL bundle bootstrap lock")
         || text.contains("managed CodeQL cache")
         || text.contains("failed to extract CodeQL bundle")
@@ -992,6 +998,13 @@ mod tests {
         let message = "CodeQL `query run` failed for `rust` (exit code 2)";
 
         assert_eq!(classify_error(message, None), "codeql_extraction");
+    }
+
+    #[test]
+    fn classify_error_marks_missing_llm_api_key_as_expected_skip() {
+        let message = "`--llm` requires KALOS_LLM_API_KEY to be set";
+
+        assert_eq!(classify_error(message, None), "expected_skip");
     }
 
     #[test]
