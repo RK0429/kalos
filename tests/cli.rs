@@ -575,17 +575,19 @@ fn kalos_check_help_explains_project_gate_and_module_triage() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "`--level project` is the recommended baseline gate for CI",
+            "The default `project` level is the recommended first-run and CI baseline gate",
         ))
         .stdout(predicate::str::contains(
-            "module diagnostics such as KAL-M001, KAL-M002, and KAL-M003",
+            "`--level function`, `--level module`, and `--level all` opt in",
         ))
+        .stdout(predicate::str::contains("KAL-F001/KAL-F003"))
+        .stdout(predicate::str::contains(
+            "module diagnostics such as KAL-M001",
+        ))
+        .stdout(predicate::str::contains("KAL-M002, and KAL-M003"))
         .stdout(predicate::str::contains("tune noisy"))
         .stdout(predicate::str::contains(
-            "owner: inspect dependency direction, owner boundaries, and configured thresholds",
-        ))
-        .stdout(predicate::str::contains(
-            "Use project for the CI baseline gate",
+            "inspect dependency direction, owner boundaries, and configured thresholds",
         ))
         .stdout(predicate::str::contains(
             "threshold, severity, or enabled overrides",
@@ -1163,6 +1165,46 @@ fn kalos_check_json_output_has_required_top_level_fields() {
     ] {
         assert!(parsed.get(field).is_some(), "missing field `{field}`");
     }
+}
+
+#[test]
+fn kalos_check_json_default_uses_project_level_triage_view() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--format", "json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(parsed["summary_scope"], "listed_diagnostics");
+    assert!(parsed["scores"]["function"].is_null());
+    assert!(parsed["scores"]["module"].is_null());
+    assert!(parsed["scores"]["project"].is_number());
+    assert!(
+        parsed["metrics"]
+            .as_array()
+            .expect("metrics array")
+            .iter()
+            .all(|scope| scope["scope"]["level"] == "project")
+    );
+    assert!(
+        parsed["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .all(|diagnostic| {
+                diagnostic["primary_scope"]["level"] == "project"
+                    && !diagnostic["rule_id"]
+                        .as_str()
+                        .is_some_and(|rule_id| matches!(rule_id, "KAL-F001" | "KAL-F003"))
+            })
+    );
 }
 
 #[test]

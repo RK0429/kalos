@@ -65,17 +65,17 @@ pub struct CheckCommand {
     #[arg(
         long,
         value_enum,
-        default_value_t = RequestedLevel::All,
+        default_value_t = RequestedLevel::Project,
         help = "analysis granularity level",
         long_help = "analysis granularity level
 
-`--level project` is the recommended baseline gate for CI. `--level module` and
-`--level all` expose module diagnostics such as KAL-M001, KAL-M002, and KAL-M003;
-large or highly connected repositories may emit many module findings and return
-exit code 1 by design. Use module/all for architecture triage by the domain
-owner: inspect dependency direction, owner boundaries, and configured thresholds.
-Use project for the CI baseline gate, then tune noisy module rules in .kalos.toml
-with threshold, severity, or enabled overrides."
+The default `project` level is the recommended first-run and CI baseline gate.
+`--level function`, `--level module`, and `--level all` opt in to broader
+diagnostic inventories. Function/all runs may emit many KAL-F001/KAL-F003
+function findings; module/all runs expose module diagnostics such as KAL-M001,
+KAL-M002, and KAL-M003. Use the broader levels for domain-owner triage:
+inspect dependency direction, owner boundaries, and configured thresholds, then
+tune noisy rules in .kalos.toml with threshold, severity, or enabled overrides."
     )]
     pub level: RequestedLevel,
     #[arg(
@@ -930,8 +930,8 @@ pub enum OutputFormat {
 pub enum RequestedLevel {
     Function,
     Module,
-    Project,
     #[default]
+    Project,
     All,
 }
 

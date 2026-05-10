@@ -407,11 +407,11 @@ sequenceDiagram
 
 差分解析では、以下を不変条件とする。
 
-- `scores.overall` は常に `AnalysisMetrics.OverallScore` から導出され、診断件数から逆算しない。`--level all`（デフォルト）では `OverallScore.overall_score` を、`--level function|module|project` では対応する `function_score` / `module_score` / `project_score` を写像し、変更後の指定階層メトリクスを意味する
+- `scores.overall` は常に `AnalysisMetrics.OverallScore` から導出され、診断件数から逆算しない。`--level all` 明示指定時は `OverallScore.overall_score` を、デフォルトの `--level project` および `--level function|module|project` では対応する `function_score` / `module_score` / `project_score` を写像し、変更後の指定階層メトリクスを意味する
 - `--level` は報告対象を絞るだけであり、内部的には全階層（function / module / project）のメトリクス算出・診断生成を実行する。ベースラインキャッシュの保存不変条件（§5.3、ADR-0003）として全階層の結果が必要なためである。`--level` で選択されなかった階層のメトリクス・診断・スコアは報告に含めない（must exclude）。この射影は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う
 - そのため、変更が及ばないスコープのメトリクスはベースラインから再利用する。ただし、プラグインメトリクスの再利用は当該プラグインが現在の実行で正常にロード・評価された場合に限り、失敗またはスキップされたプラグインの cache 済み `MetricValue` は除外する
 - 個別診断の一覧は `AffectedScopeSet` に属するスコープだけを表示する
-- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。non-diff モードの `--level all`（デフォルト）では `whole_project`（解決済み `analysis_targets` 内の全階層を母集団とする）、`--level` で階層を限定した場合と diff mode では `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode では常に affected diagnostics 一覧から再構成する
+- `DiagnosticReport.summary` と exit code は `summary_scope` の母集団を基準に解釈する。non-diff モードの `--level all` 明示指定時は `whole_project`（解決済み `analysis_targets` 内の全階層を母集団とする）、デフォルトの `--level project`、`--level` で階層を限定した場合、diff mode では `listed_diagnostics` となる。summary 自体は Application Pipeline が materialize し、diff mode では常に affected diagnostics 一覧から再構成する
 - non-diff モードの `diagnostics_scope = whole_project` は「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
