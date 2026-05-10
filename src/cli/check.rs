@@ -19,7 +19,7 @@ use super::init::{
 use crate::adapters::baseline_cache::BaselineCacheAdapter;
 use crate::adapters::dependency_resolver::StubDependencyResolver;
 use crate::adapters::diff_source::GitDiffAdapter;
-use crate::adapters::extractor::CodeQlAdapter;
+use crate::adapters::extractor::{CodeQlAdapter, FileCollector};
 use crate::adapters::llm::HttpLlmAdapter;
 use crate::adapters::llm::http::validate_llm_config;
 use crate::adapters::plugin::{
@@ -37,8 +37,8 @@ use crate::domains::reporting::{
 };
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
-use crate::ports::PluginPort;
 use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
+use crate::ports::{DiffRequest, DiffSourcePort, PluginPort};
 
 const DEFAULT_CODEQL_TOTAL_TIMEOUT_SECS: u64 = 1200;
 
@@ -410,13 +410,43 @@ impl CheckCommand {
                     return ExitCode::from(2);
                 }
             };
+            let diff_source = GitDiffAdapter;
+            if self.cache_dir.is_none() && self.update_gitignore {
+                if !config.targets_explicitly_specified {
+                    if let Err(error) = diff_source.diff(&DiffRequest {
+                        workspace_root: config.workspace_root.abs_path.clone(),
+                        base_ref: base_ref.clone(),
+                        analysis_targets: config.analysis_targets.clone(),
+                    }) {
+                        let message = error.to_string();
+                        emit_error(
+                            self.format,
+                            self.output.as_deref(),
+                            &message,
+                            error.source(),
+                        );
+                        return ExitCode::from(2);
+                    }
+                }
+                if let Err(error) =
+                    handle_gitignore_policy_for_config(&config, self.format == OutputFormat::Human)
+                {
+                    emit_error(
+                        self.format,
+                        self.output.as_deref(),
+                        &error.message,
+                        Some(&error.source),
+                    );
+                    return ExitCode::from(2);
+                }
+            }
             match pipeline.run_diff(
                 &config,
                 view_options,
                 &DiffConfig {
                     base_ref: base_ref.clone(),
                 },
-                &GitDiffAdapter,
+                &diff_source,
                 &cache,
                 plugin_host
                     .as_mut()
@@ -445,6 +475,20 @@ impl CheckCommand {
                     let head_tree_hash = resolve_head_tree_hash(&config.workspace_root.abs_path)?;
                     Some((cache, head_tree_hash))
                 });
+
+            if self.cache_dir.is_none() && self.update_gitignore {
+                if let Err(error) =
+                    handle_gitignore_policy_for_config(&config, self.format == OutputFormat::Human)
+                {
+                    emit_error(
+                        self.format,
+                        self.output.as_deref(),
+                        &error.message,
+                        Some(&error.source),
+                    );
+                    return ExitCode::from(2);
+                }
+            }
 
             let run_result = if let Some((cache, head_tree_hash)) = baseline_result.as_ref() {
                 pipeline.run_full_workspace(
@@ -531,7 +575,7 @@ impl CheckCommand {
                 return ExitCode::from(2);
             }
 
-            if self.cache_dir.is_none() {
+            if self.cache_dir.is_none() && !self.update_gitignore {
                 handle_gitignore_policy(
                     self.update_gitignore,
                     &config.workspace_root.abs_path,
@@ -557,7 +601,7 @@ impl CheckCommand {
                 );
             }
         } else {
-            if self.cache_dir.is_none() {
+            if self.cache_dir.is_none() && !self.update_gitignore {
                 handle_gitignore_policy(
                     self.update_gitignore,
                     &config.workspace_root.abs_path,
@@ -637,6 +681,64 @@ fn baseline_cache_adapter(
     match cache_dir {
         Some(cache_dir) => Ok(BaselineCacheAdapter::with_cache_dir(cache_dir.clone())),
         None => BaselineCacheAdapter::new(),
+    }
+}
+
+fn source_file_count_for_gitignore_policy(config: &ProjectConfig) -> Result<usize, std::io::Error> {
+    let exclude_patterns = config
+        .exclude_patterns
+        .iter()
+        .map(|pattern| pattern.pattern.clone())
+        .collect::<Vec<_>>();
+    let file_system = RealFileSystem;
+    let collector = FileCollector::new(
+        &file_system,
+        &config.workspace_root.abs_path,
+        &["py", "ts", "tsx", "rs", "go"],
+        &exclude_patterns,
+    );
+    Ok(collector.collect(&config.analysis_targets)?.len())
+}
+
+struct GitignorePolicyError {
+    message: String,
+    source: std::io::Error,
+}
+
+fn handle_gitignore_policy_for_config(
+    config: &ProjectConfig,
+    human_output: bool,
+) -> Result<(), GitignorePolicyError> {
+    match source_file_count_for_gitignore_policy(config) {
+        Ok(file_count) => {
+            handle_gitignore_policy(
+                true,
+                &config.workspace_root.abs_path,
+                file_count,
+                human_output,
+            );
+            Ok(())
+        }
+        Err(source) => Err(GitignorePolicyError {
+            message: format!(
+                "failed to collect source files under `{}` for analysis target path(s) `{}`: {source}",
+                config.workspace_root.abs_path.display(),
+                format_analysis_targets(&config.analysis_targets),
+            ),
+            source,
+        }),
+    }
+}
+
+fn format_analysis_targets(analysis_targets: &[crate::domains::FilePath]) -> String {
+    if analysis_targets.is_empty() {
+        ".".to_owned()
+    } else {
+        analysis_targets
+            .iter()
+            .map(|target| target.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

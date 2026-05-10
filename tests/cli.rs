@@ -462,6 +462,9 @@ fn kalos_check_update_gitignore_missing_diff_ref_does_not_create_gitignore() {
         .args(["check", "--update-gitignore", "--diff", "missing-ref"])
         .assert()
         .code(2)
+        .stderr(predicate::str::contains(
+            "git ref `missing-ref` was not found",
+        ))
         .stderr(predicate::str::contains(".gitignore").not());
 
     assert!(!temp.path().join(".gitignore").exists());
@@ -1486,6 +1489,80 @@ fn kalos_check_json_stdout_receives_codeql_total_timeout_failure() {
             .unwrap()
             .contains("timed out after 1s")
     );
+}
+
+#[test]
+fn kalos_check_update_gitignore_happens_before_codeql_timeout_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_timeout_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args([
+            "check",
+            "--update-gitignore",
+            "--codeql-timeout",
+            "1",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("JSON timeout output should parse as JSON");
+    assert_eq!(
+        parsed["error_class"],
+        Value::String("codeql_extraction".to_owned())
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+    assert!(temp.path().join(".kalos").exists());
+}
+
+#[test]
+fn kalos_check_sarif_update_gitignore_happens_before_codeql_timeout_failure() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_timeout_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args([
+            "check",
+            "--update-gitignore",
+            "--codeql-timeout",
+            "1",
+            "--format",
+            "sarif",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value =
+        serde_json::from_str(&stdout).expect("SARIF timeout output should parse as JSON");
+    assert_eq!(
+        parsed["runs"][0]["invocations"][0]["executionSuccessful"],
+        Value::Bool(false)
+    );
+    assert_eq!(
+        parsed["runs"][0]["properties"]["kalos"]["error_class"],
+        Value::String("codeql_extraction".to_owned())
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        ".kalos/\n"
+    );
+    assert!(temp.path().join(".kalos").exists());
 }
 
 #[test]
