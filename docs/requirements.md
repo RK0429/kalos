@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.15 |
-| 最終更新日 | 2026-05-10 |
+| バージョン | 0.4.16 |
+| 最終更新日 | 2026-05-12 |
 | ステータス | ドラフト |
 | 作成者 | Claude（requirements-definer スキル） |
 | レビュー者 | Codex（対象: ~v0.2.12, 2026-03-20。指摘解決は v0.3.0–v0.4.1 で適用。詳細は [design-resolution-memo.md](./design-resolution-memo.md)） |
@@ -440,15 +440,17 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - Given `--level all` で解析完了, When human形式で出力, Then 末尾に解決済み `analysis_targets` 全体の総合スコアサマリーと重大度別件数が表示される
   - Given `--level` 省略で解析完了, When human形式で出力, Then project レベルの総合スコアサマリーと重大度別件数が表示される
   - Given `--level function` で解析完了, When human形式で出力, Then 末尾に関数レベルメトリクスから算出した総合スコアと、関数レベル診断のみを母集団とした重大度別件数が表示され、module/project のスコアは表示されない
+  - Given 解析結果または error path, When human形式で出力, Then Summary または error message に `outcome: ...` 行が表示され、値は REQ-FUNC-020 の outcome taxonomy と一致する
 - **優先度**: Must
 - **出典**: ユーザー確認済み
 
 #### REQ-FUNC-020: JSON形式での結果出力
 
-- **説明**: 解析結果を機械可読なJSON構造で出力する。`metrics` は `--level` で選択された対象階層のメトリクスのみを含み、非対象階層のメトリクスは含めない（must exclude）。`diagnostics` は non-diff モードでは選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。総合スコア・summary・`schema_version` を持つ
+- **説明**: 解析結果を機械可読なJSON構造で出力する。`metrics` は `--level` で選択された対象階層のメトリクスのみを含み、非対象階層のメトリクスは含めない（must exclude）。`diagnostics` は non-diff モードでは選択された `--level` に対する完全な診断集合、diff mode では `AffectedScopeSet` に属する診断部分集合を返す。総合スコア・summary・`schema_version`・`outcome` を持つ
 - **最低限のJSON契約**:
-  - ルートには `schema_version`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
-  - `schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
+  - ルートには `schema_version`, `outcome`, `analysis_targets`, `scores`, `metrics`, `diagnostics`, `diagnostics_scope`, `summary`, `summary_scope`, `tool_version` を必須とする
+  - `schema_version` の初期値は `"1.0.0"` とする。Application Pipeline が生成する report schema は、top-level `outcome` 追加後は `"1.1.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、既存 consumer が未知フィールドを無視できる後方互換なフィールド追加は minor、フィールド削除・型変更・既存フィールドのセマンティクス変更は major とする
+  - `outcome` は機械可読な実行結果分類で、値は `passed`（exit code 0）, `diagnostics_failed`（診断または strict 品質ゲートにより exit code 1）, `expected_skip`（評価前提未充足による意図的スキップ）, `input_error`（ユーザー入力・解析対象 path の誤り）, `infrastructure_error`（CodeQL setup/extraction など実行基盤の失敗）, `tool_error`（設定読込など kalos/tool 実行エラー）のいずれかとする
   - `analysis_targets` は CLI で受け取った解析対象 path 群を Configuration が `WorkspaceRoot` 基準で正規化・検証した配列とし、入力順を保持する。位置引数省略時のデフォルト `.` も同様に正規化する。単一 target の場合も配列で表現する
   - `metrics` には組み込みメトリクスとプラグインメトリクスの両方を含める。`--level` に従い対象階層のメトリクスのみを射影し、非対象階層のメトリクスは含めない（must exclude）。この射影は Reporting コンテキストが `ReportViewOptions.requested_level` に基づいて担う。各メトリクスエントリには `participation` フィールド（`"scored_and_diagnosable"` | `"report_only"`）を付与し、当該メトリクスがスコアリング・診断に参加するか report 専用かを識別可能にする。v1 のプラグインメトリクスは `participation = "report_only"` であり `diagnostics[*]`、`scores`、exit code の判定母集団には含めない
   - `diagnostics[*]` は `kind` を discriminant とし、`kind = "metric"` なら `metric` オブジェクト、`kind = "pattern"` なら `pattern` オブジェクトを必須とする
@@ -457,6 +459,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - `diagnostics_scope` は `whole_project | affected_only` とする。`whole_project` は non-diff モードで「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全である」ことを表す（未選択階層の診断欠落を意味しない）。`affected_only` は diff mode で `AffectedScopeSet` に属する診断のみを含むことを表す。`summary_scope` は `whole_project | listed_diagnostics` とする。`whole_project` は解決済み `analysis_targets` 内の全階層の診断を母集団とする
 - **受け入れ基準**:
   - Given 解析結果, When `--format json` で出力, Then 出力が有効なJSONであり、上記の必須フィールドがすべて存在する
+  - Given 解析結果, When `--format json` で出力, Then ルートの `schema_version = "1.1.0"` かつ `outcome` が上記 taxonomy のいずれかである
   - Given `--level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "whole_project"` となり、`scores.function/module/project` は計算可能なスコープが存在する階層では整数、存在しない階層では `null` となる
   - Given `--level function` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "whole_project"` かつ `summary_scope = "listed_diagnostics"` となり、`scores.overall` と `scores.function` は計算可能な function スコープが存在する場合は整数（存在しない場合はいずれも `null`）、`scores.module` と `scores.project` は `null` となり、`metrics` には関数レベルのメトリクスのみが含まれ module / project レベルのメトリクスは含まれない
   - Given `--diff <base-ref> --level all` かつ `--format json`, When 解析結果を出力, Then `diagnostics_scope = "affected_only"` かつ `summary_scope = "listed_diagnostics"` となり、`summary.error_count + warning_count + info_count` は `diagnostics.length` と一致する
@@ -473,11 +476,13 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
   - **位置**: `Diagnostic.location` を `result.locations[].physicalLocation` へ写像する。`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` は `location.start_line`、`region.endLine` は `location.end_line` とする。`location.column` が非 `null` の場合は `region.startColumn` を出力し、`location.column = null` の場合は `startColumn` / `endColumn` を出力しない
   - **メッセージ**: `Diagnostic.message` は常に `result.message.text` へ格納する
   - **改善提案**: `template_suggestion` は常に `result.properties.kalos.template_suggestion` へ格納する。`llm_suggestion` が存在する場合は `result.properties.kalos.llm_suggestion` に格納する
+  - **実行結果分類**: 通常 report では `runs[0].properties.kalos.outcome` に、error path では同 field と `toolExecutionNotifications[].properties.outcome` に REQ-FUNC-020 の outcome taxonomy 値を出力する
 - **受け入れ基準**:
   - Given 解析結果, When `--format sarif` で出力, Then 出力がSARIF 2.1.0スキーマに準拠する
   - Given メトリクス閾値違反の診断, When `--format sarif` で出力, Then `run.tool.driver.rules[]` に当該 `rule_id` が登録され、`result.ruleId` が一致し、`result.level` が重大度の SARIF 写像と一致する
   - Given `location.column` が非 `null` の診断, When `--format sarif` で出力, Then `result.locations[].physicalLocation.region` に `startLine`, `endLine`, `startColumn` が含まれる
   - Given `location.column = null` の cross-scope 診断, When `--format sarif` で出力, Then `result.locations[].physicalLocation.region` に `startLine` と `endLine` は含まれるが `startColumn` / `endColumn` は含まれない
+  - Given 解析結果または error path, When `--format sarif` で出力, Then `runs[0].properties.kalos.outcome` が REQ-FUNC-020 の outcome taxonomy のいずれかであり、error path では `toolExecutionNotifications[].properties.outcome` にも同じ値が含まれる
   - Given GitHub Code Scanning に SARIF をアップロード, When PR 上で結果を表示, Then 各診断がルール ID・重大度・ソース位置付きのアノテーションとして表示される
 - **優先度**: Should
 - **出典**: ユーザー確認済み
@@ -832,6 +837,7 @@ CPG抽出 (001-007) → メトリクス算出 (008-011) → 診断生成 (013-01
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.16 | 2026-05-12 | Issue #196: report schema `1.1.0` として top-level `outcome` を JSON 必須フィールドに追加し、human/SARIF での outcome 配置と taxonomy を明記 | Codex |
 | 0.4.15 | 2026-05-10 | Issue #183: `--llm` help に `KALOS_LLM_API_KEY` 前提を明示し、missing API key の構造化 `error_class` を evaluation summary 用の `expected_skip` とする契約を追加 | Codex |
 | 0.4.14 | 2026-03-27 | 変更履歴修正: v0.4.12 エントリの誤った REQ-ID 参照を訂正（REQ-FUNC-032 → REQ-FUNC-024。scores nullability は総合スコアサマリー要件に関連） | Claude |
 | 0.4.13 | 2026-03-27 | provenance 整備: レビュー者メタ情報にレビュー対象版・日付を追記、`SummaryScope::WholeProject` 表記を domain_model.md の dot 表記（`SummaryScope.WholeProject`）に統一 | Claude |

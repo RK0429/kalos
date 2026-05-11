@@ -823,6 +823,7 @@ fn kalos_check_external_config_with_current_infrastructure_failure_reports_error
         .stderr(predicate::str::contains(
             "error class: codeql_infrastructure",
         ))
+        .stderr(predicate::str::contains("outcome: infrastructure_error"))
         .stderr(predicate::str::contains("is outside workspace root").not());
 }
 
@@ -842,6 +843,7 @@ fn kalos_check_human_codeql_extraction_failure_does_not_report_error_class() {
         .stderr(predicate::str::contains(
             "CodeQL `query run` failed for `rust`",
         ))
+        .stderr(predicate::str::contains("outcome: infrastructure_error"))
         .stderr(predicate::str::contains("error class: codeql_extraction").not());
 }
 
@@ -1242,6 +1244,7 @@ fn kalos_check_json_output_has_required_top_level_fields() {
 
     for field in [
         "schema_version",
+        "outcome",
         "analysis_targets",
         "analysis_warnings",
         "scores",
@@ -1252,6 +1255,78 @@ fn kalos_check_json_output_has_required_top_level_fields() {
     ] {
         assert!(parsed.get(field).is_some(), "missing field `{field}`");
     }
+    assert_eq!(parsed["schema_version"], "1.1.0");
+}
+
+#[test]
+fn kalos_check_json_strict_quality_gate_reports_diagnostics_failed_outcome() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_strict_warning_fixture(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--strict", "--format", "json"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["outcome"], "diagnostics_failed");
+    assert!(
+        parsed["summary"]["error_count"].as_u64().unwrap()
+            + parsed["summary"]["warning_count"].as_u64().unwrap()
+            > 0,
+        "strict failure should be caused by diagnostics: {stdout}"
+    );
+}
+
+#[test]
+fn kalos_check_human_strict_quality_gate_reports_diagnostics_failed_outcome() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_strict_warning_fixture(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--strict", "--format", "human"])
+        .assert()
+        .code(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("── Summary ──────────────────────────\noutcome: diagnostics_failed"),
+        "human summary should expose diagnostics_failed outcome: {stdout}"
+    );
+}
+
+#[test]
+fn kalos_check_sarif_strict_quality_gate_reports_diagnostics_failed_outcome() {
+    let temp = seeded_git_workspace();
+    let cache_dir = seed_strict_warning_fixture(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args(["check", "--strict", "--format", "sarif"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        parsed["runs"][0]["properties"]["kalos"]["schema_version"],
+        "1.1.0"
+    );
+    assert_eq!(
+        parsed["runs"][0]["properties"]["kalos"]["outcome"],
+        "diagnostics_failed"
+    );
 }
 
 #[test]
@@ -1404,6 +1479,7 @@ fn kalos_check_json_output_file_receives_late_codeql_failure() {
         parsed["error_class"],
         Value::String("codeql_extraction".to_owned())
     );
+    assert_eq!(parsed["outcome"], "infrastructure_error");
     assert!(
         parsed["message"]
             .as_str()
@@ -1449,6 +1525,10 @@ fn kalos_check_quiet_human_output_file_receives_late_codeql_failure() {
         !rendered.contains("error class: codeql_extraction"),
         "human extraction failures should not add an error class line: {rendered}"
     );
+    assert!(
+        rendered.contains("outcome: infrastructure_error"),
+        "human extraction failures should expose infrastructure outcome: {rendered}"
+    );
 }
 
 #[test]
@@ -1484,6 +1564,7 @@ fn kalos_check_json_output_file_receives_codeql_timeout_failure() {
         parsed["error_class"],
         Value::String("codeql_extraction".to_owned())
     );
+    assert_eq!(parsed["outcome"], "infrastructure_error");
     assert!(
         parsed["message"]
             .as_str()
@@ -1531,6 +1612,10 @@ fn kalos_check_sarif_stdout_receives_codeql_total_timeout_failure() {
         parsed["runs"][0]["properties"]["kalos"]["error_class"],
         Value::String("codeql_extraction".to_owned())
     );
+    assert_eq!(
+        parsed["runs"][0]["properties"]["kalos"]["outcome"],
+        Value::String("infrastructure_error".to_owned())
+    );
     assert!(
         stdout.contains("timed out after 1s"),
         "expected total timeout cause in SARIF output: {stdout}"
@@ -1567,6 +1652,7 @@ fn kalos_check_json_stdout_receives_codeql_total_timeout_failure() {
         parsed["error_class"],
         Value::String("codeql_extraction".to_owned())
     );
+    assert_eq!(parsed["outcome"], "infrastructure_error");
     assert!(
         parsed["cause"]
             .as_str()
@@ -1603,6 +1689,7 @@ fn kalos_check_update_gitignore_happens_before_codeql_timeout_failure() {
         parsed["error_class"],
         Value::String("codeql_extraction".to_owned())
     );
+    assert_eq!(parsed["outcome"], "infrastructure_error");
     assert_eq!(
         fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
         ".kalos/\n"
@@ -1679,6 +1766,10 @@ fn kalos_check_quiet_human_output_file_receives_codeql_timeout_failure() {
     assert!(
         !rendered.contains("error class: codeql_extraction"),
         "human extraction failures should not add an error class line: {rendered}"
+    );
+    assert!(
+        rendered.contains("outcome: infrastructure_error"),
+        "human timeout failures should expose infrastructure outcome: {rendered}"
     );
 }
 
@@ -1990,6 +2081,8 @@ fn kalos_check_missing_config_json_error_output_is_structured() {
     let parsed: Value =
         serde_json::from_str(&stdout).expect("JSON failure output on stdout should parse as JSON");
     assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(parsed["error_class"], "tool_error");
+    assert_eq!(parsed["outcome"], "tool_error");
     assert!(
         parsed["message"]
             .as_str()
@@ -2030,6 +2123,8 @@ fn kalos_check_missing_target_json_error_output_names_requested_path() {
     let parsed: Value =
         serde_json::from_str(&stdout).expect("JSON failure output on stdout should parse as JSON");
     assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(parsed["error_class"], "input_error");
+    assert_eq!(parsed["outcome"], "input_error");
 
     let message = parsed["message"].as_str().unwrap();
     assert!(message.contains("analysis target path"));
@@ -2038,6 +2133,24 @@ fn kalos_check_missing_target_json_error_output_names_requested_path() {
         assert.get_output().stderr.is_empty(),
         "stderr should not carry JSON failure payload"
     );
+}
+
+#[test]
+fn kalos_check_missing_target_human_error_output_reports_input_error_outcome() {
+    let temp = TempDir::new().unwrap();
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--level", "project", "does-not-exist-kalos-eval"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty());
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("analysis target path"));
+    assert!(stderr.contains("outcome: input_error"));
+    assert!(serde_json::from_str::<Value>(&stderr).is_err());
 }
 
 #[test]
@@ -2080,6 +2193,7 @@ fn kalos_check_missing_config_sarif_error_output_is_sarif_document() {
 
     let notification = &invocation["toolExecutionNotifications"][0];
     assert_eq!(notification["level"], Value::String("error".to_owned()));
+    assert_eq!(notification["properties"]["outcome"], "tool_error");
     assert!(
         notification["message"]["text"]
             .as_str()
@@ -2095,6 +2209,7 @@ fn kalos_check_missing_config_sarif_error_output_is_sarif_document() {
 
     let kalos_props = &run["properties"]["kalos"];
     assert_eq!(kalos_props["error"], Value::Bool(true));
+    assert_eq!(kalos_props["outcome"], "tool_error");
     assert!(
         kalos_props["message"]
             .as_str()
@@ -2181,6 +2296,7 @@ fn kalos_check_missing_config_human_error_output_remains_plain_text() {
     assert!(serde_json::from_str::<Value>(&stderr).is_err());
     assert!(stderr.contains("failed to load config file"));
     assert!(stderr.contains("No such file or directory"));
+    assert!(stderr.contains("outcome: tool_error"));
 }
 
 #[test]
@@ -2199,6 +2315,7 @@ fn kalos_check_llm_missing_api_key_fails_preflight() {
 
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("KALOS_LLM_API_KEY"));
+    assert!(stderr.contains("outcome: expected_skip"));
     assert_no_gitignore_chatter(&stderr);
     assert!(!temp.path().join(".gitignore").exists());
 }
@@ -2222,6 +2339,7 @@ fn kalos_check_llm_missing_api_key_json_is_expected_skip() {
         serde_json::from_str(&stdout).expect("JSON failure output should parse as JSON");
     assert_eq!(parsed["error"], Value::Bool(true));
     assert_eq!(parsed["error_class"], "expected_skip");
+    assert_eq!(parsed["outcome"], "expected_skip");
     assert!(
         parsed["message"]
             .as_str()
@@ -2712,6 +2830,53 @@ fn seeded_issue_56_workspace() -> TempDir {
 
 fn seed_fake_codeql_bundle(workspace_root: &Path) -> PathBuf {
     seed_fake_codeql_bundle_with_fixture(workspace_root, &load_fixture("rust.json"))
+}
+
+fn seed_strict_warning_fixture(workspace_root: &Path) -> PathBuf {
+    fs::write(
+        workspace_root.join(".kalos.toml"),
+        "[rules.KAL-PAT003]\nseverity = \"warning\"\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "mod a;\nmod b;\n\npub fn placeholder() -> i32 {\n    a::call_b() + b::call_a()\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace_root.join("src/a.rs"),
+        "pub fn call_b() -> i32 {\n    crate::b::call_a()\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace_root.join("src/b.rs"),
+        "pub fn call_a() -> i32 {\n    crate::a::call_b()\n}\n",
+    )
+    .unwrap();
+    run_git(workspace_root, &["add", "."]);
+    run_git(workspace_root, &["commit", "-m", "strict warning fixture"]);
+
+    seed_fake_codeql_bundle_with_fixture(
+        workspace_root,
+        r#"{
+  "modules": [
+    { "id": "m1", "name": "crate::a", "file": "src/a.rs", "start_line": 1, "end_line": 3, "language": "rust" },
+    { "id": "m2", "name": "crate::b", "file": "src/b.rs", "start_line": 1, "end_line": 3, "language": "rust" }
+  ],
+  "functions": [
+    { "id": "f1", "name": "crate::a::call_b", "file": "src/a.rs", "start_line": 1, "end_line": 3, "language": "rust" },
+    { "id": "f2", "name": "crate::b::call_a", "file": "src/b.rs", "start_line": 1, "end_line": 3, "language": "rust" }
+  ],
+  "calls": [
+    { "source": "f1", "target": "f2", "language": "rust" },
+    { "source": "f2", "target": "f1", "language": "rust" }
+  ],
+  "contains": [
+    { "source": "m1", "target": "f1", "language": "rust" },
+    { "source": "m2", "target": "f2", "language": "rust" }
+  ]
+}"#,
+    )
 }
 
 fn seed_failing_codeql_bundle(workspace_root: &Path) -> PathBuf {

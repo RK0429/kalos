@@ -5,11 +5,17 @@ use serde_json::{Value, json};
 
 pub const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 pub const SARIF_VERSION: &str = "2.1.0";
+pub const OUTCOME_PASSED: &str = "passed";
+pub const OUTCOME_DIAGNOSTICS_FAILED: &str = "diagnostics_failed";
+pub const OUTCOME_EXPECTED_SKIP: &str = "expected_skip";
+pub const OUTCOME_INPUT_ERROR: &str = "input_error";
+pub const OUTCOME_INFRASTRUCTURE_ERROR: &str = "infrastructure_error";
+pub const OUTCOME_TOOL_ERROR: &str = "tool_error";
 const KAL_M003_GATE_GUIDANCE_PREFIX: &str = "module/all gate guidance: KAL-M003";
 const MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE: usize = 25;
 
 use crate::domains::diagnostics::{
-    Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope,
+    Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope, ExitCode,
     LlmSuggestionBundle, PatternEdgeProvenance, PatternType, SummaryScope, builtin_metric_rules,
     builtin_pattern_rules,
 };
@@ -357,6 +363,11 @@ impl AnalysisReport {
             let _ = writeln!(output, "{note}");
         }
         let _ = writeln!(output, "── Summary ──────────────────────────");
+        let _ = writeln!(
+            output,
+            "outcome: {}",
+            outcome_for_exit_code(self.diagnostics.determine_exit_code(self.view.strict))
+        );
         let _ = writeln!(output, "{}", self.human_score_line());
         for note in self.human_score_notes() {
             let _ = writeln!(output, "{note}");
@@ -426,6 +437,7 @@ impl AnalysisReport {
 
         Ok(serde_json::to_string_pretty(&json!({
             "schema_version": self.metadata.schema_version,
+            "outcome": outcome_for_exit_code(self.diagnostics.determine_exit_code(self.view.strict)),
             "analysis_targets": self
                 .metadata
                 .analysis_targets
@@ -573,6 +585,7 @@ impl AnalysisReport {
                     "diff_execution": self.diff_execution.as_ref().map(diff_execution_json),
                     "kalos": {
                         "schema_version": self.metadata.schema_version,
+                        "outcome": outcome_for_exit_code(self.diagnostics.determine_exit_code(self.view.strict)),
                         "tool_version": self.metadata.tool_version,
                         "files_analyzed": self.metadata.file_count,
                         "diagnostics_scope": diagnostics_scope_str(self.diagnostics.diagnostics_scope),
@@ -756,10 +769,14 @@ pub fn render_sarif_error_document(
     exit_code: i64,
     error_class: &str,
 ) -> String {
+    let outcome = outcome_for_error_class(error_class);
     let mut notification = json!({
         "level": "error",
         "message": { "text": message },
-        "properties": { "error_class": error_class },
+        "properties": {
+            "error_class": error_class,
+            "outcome": outcome,
+        },
     });
     if let Some(cause) = cause {
         notification["properties"]["cause"] = json!(cause);
@@ -768,6 +785,7 @@ pub fn render_sarif_error_document(
     let mut kalos_properties = json!({
         "error": true,
         "error_class": error_class,
+        "outcome": outcome,
         "message": message,
     });
     if let Some(cause) = cause {
@@ -806,7 +824,25 @@ fn error_class_description(error_class: &str) -> &'static str {
         "codeql_infrastructure" => "CodeQL infrastructure error",
         "codeql_extraction" => "CodeQL extraction error",
         "expected_skip" => "expected skip",
+        "input_error" => "input error",
         _ => "tool error",
+    }
+}
+
+pub fn outcome_for_error_class(error_class: &str) -> &'static str {
+    match error_class {
+        "expected_skip" => OUTCOME_EXPECTED_SKIP,
+        "input_error" => OUTCOME_INPUT_ERROR,
+        "codeql_infrastructure" | "codeql_extraction" => OUTCOME_INFRASTRUCTURE_ERROR,
+        _ => OUTCOME_TOOL_ERROR,
+    }
+}
+
+fn outcome_for_exit_code(exit_code: ExitCode) -> &'static str {
+    match exit_code {
+        ExitCode::Success => OUTCOME_PASSED,
+        ExitCode::DiagnosticFailure => OUTCOME_DIAGNOSTICS_FAILED,
+        ExitCode::ToolError => OUTCOME_TOOL_ERROR,
     }
 }
 
@@ -2224,10 +2260,12 @@ mod tests {
             "No such file or directory (os error 2)"
         );
         assert_eq!(notification["properties"]["error_class"], "tool_error");
+        assert_eq!(notification["properties"]["outcome"], "tool_error");
 
         let kalos_props = &run["properties"]["kalos"];
         assert_eq!(kalos_props["error"], Value::Bool(true));
         assert_eq!(kalos_props["error_class"], "tool_error");
+        assert_eq!(kalos_props["outcome"], "tool_error");
         assert_eq!(kalos_props["message"], "failed to load config file");
         assert!(
             kalos_props["evaluation_artifact"].is_null(),
@@ -2247,9 +2285,11 @@ mod tests {
         let notification = &parsed["runs"][0]["invocations"][0]["toolExecutionNotifications"][0];
         assert!(notification["properties"]["cause"].is_null());
         assert_eq!(notification["properties"]["error_class"], "tool_error");
+        assert_eq!(notification["properties"]["outcome"], "tool_error");
         let kalos_props = &parsed["runs"][0]["properties"]["kalos"];
         assert!(kalos_props.get("cause").is_none() || kalos_props["cause"].is_null());
         assert_eq!(kalos_props["error_class"], "tool_error");
+        assert_eq!(kalos_props["outcome"], "tool_error");
     }
 
     #[test]
@@ -2273,8 +2313,16 @@ mod tests {
             "codeql_infrastructure"
         );
         assert_eq!(
+            invocation["toolExecutionNotifications"][0]["properties"]["outcome"],
+            "infrastructure_error"
+        );
+        assert_eq!(
             parsed["runs"][0]["properties"]["kalos"]["error_class"],
             "codeql_infrastructure"
+        );
+        assert_eq!(
+            parsed["runs"][0]["properties"]["kalos"]["outcome"],
+            "infrastructure_error"
         );
     }
 
@@ -2296,8 +2344,39 @@ mod tests {
             "expected_skip"
         );
         assert_eq!(
+            invocation["toolExecutionNotifications"][0]["properties"]["outcome"],
+            "expected_skip"
+        );
+        assert_eq!(
             parsed["runs"][0]["properties"]["kalos"]["error_class"],
             "expected_skip"
+        );
+        assert_eq!(
+            parsed["runs"][0]["properties"]["kalos"]["outcome"],
+            "expected_skip"
+        );
+    }
+
+    #[test]
+    fn sarif_error_document_describes_input_error_outcome() {
+        let rendered = render_sarif_error_document(
+            "analysis target path `missing` could not be read",
+            Some("No such file or directory (os error 2)"),
+            "9.9.9",
+            2,
+            "input_error",
+        );
+        let parsed: Value = serde_json::from_str(&rendered).expect("sarif error should parse");
+
+        let invocation = &parsed["runs"][0]["invocations"][0];
+        assert_eq!(invocation["exitCodeDescription"], "input error");
+        assert_eq!(
+            invocation["toolExecutionNotifications"][0]["properties"]["outcome"],
+            "input_error"
+        );
+        assert_eq!(
+            parsed["runs"][0]["properties"]["kalos"]["outcome"],
+            "input_error"
         );
     }
 
@@ -3553,6 +3632,7 @@ mod tests {
         let sarif: Value = serde_json::from_str(&sarif_rendered).expect("sarif should parse");
         let kalos = &sarif["runs"][0]["properties"]["kalos"];
 
+        assert_eq!(kalos["outcome"], json["outcome"]);
         assert_eq!(kalos["scores"]["overall"], json["scores"]["overall"]);
         assert_eq!(kalos["scores"]["function"], json["scores"]["function"]);
         assert_eq!(kalos["scores"]["module"], json["scores"]["module"]);
