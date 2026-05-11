@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.14 |
-| 最終更新日 | 2026-03-27 |
+| バージョン | 0.4.15 |
+| 最終更新日 | 2026-05-12 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.14 |
+| 入力 | requirements.md v0.4.16 |
 
 ## 1. サブドメイン分類
 
@@ -673,7 +673,8 @@ classDiagram
 | 同上 | JSON | REQ-FUNC-020 |
 | 同上 | SARIF 2.1.0 | REQ-FUNC-021 |
 
-- `ReportMetadata` は、`analysis_targets`（`WorkspaceRoot` 基準の正規化済み path 群で入力順を保持）、`tool_version`、`schema_version` を保持する。JSON/SARIF のルートメタデータはここを source of truth とする。`schema_version` の初期値は `"1.0.0"` とし、バンプポリシーは payload shape とセマンティクスの双方に影響しない明確化・注記追加で patch、後方互換な optional フィールド追加で minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更で major とする
+- `ReportMetadata` は、`analysis_targets`（`WorkspaceRoot` 基準の正規化済み path 群で入力順を保持）、`tool_version`、`schema_version` を保持する。JSON/SARIF のルートメタデータはここを source of truth とする。`schema_version` の初期値は `"1.0.0"` とし、Application Pipeline が生成する report schema は outcome taxonomy 追加後 `"1.1.0"` とする。バンプポリシーは payload shape とセマンティクスの双方に影響しない明確化・注記追加で patch、既存 consumer が未知フィールドを無視できる後方互換なフィールド追加で minor、フィールド削除・型変更・既存フィールドのセマンティクス変更で major とする
+- `outcome` は `DiagnosticReport.determine_exit_code(strict)` または error path の `error_class` から導出される実行結果分類である。値集合は `passed`, `diagnostics_failed`, `expected_skip`, `input_error`, `infrastructure_error`, `tool_error` とし、JSON では top-level field、SARIF では `runs[0].properties.kalos.outcome`（error path では `toolExecutionNotifications[].properties.outcome` にも同値）、human では Summary または error message の `outcome: ...` 行として露出する
 - `ReportViewOptions` は `requested_level` と `minimum_severity` を保持する。CLI が `--level` 省略時に設定する既定値は `project` であり、全階層の報告は `--level all` 明示指定時に行う。`minimum_severity = None` は重大度フィルタなし（全重大度を表示）を意味する。`minimum_severity` は一覧の投影だけに影響し、`DiagnosticReport.summary` と `ExitCode` の母集団は常に `DiagnosticReport.summary_scope` に従う。diff mode では Application Pipeline が `requested_level` に関わらず `summary_scope = ListedDiagnostics` を強制する
 - レポートコンテキストは managed bundle の状態や bootstrap 成否を保持しない。運用メッセージは application/infrastructure 側で `stderr` / 構造化ログへ出し、外部出力の `stdout` 契約とは分離する
 - SARIF writer は以下の固定写像を用いる: `Diagnostic.rule_id` → `run.tool.driver.rules[].id` と `result.ruleId` / `result.ruleIndex`、`Diagnostic.severity` → `result.level`（`error` / `warning` / `note`）、`Diagnostic.location` → `result.locations[].physicalLocation`（`artifactLocation.uri` は `WorkspaceRoot` 相対パス、`region.startLine` / `endLine` は `location.start_line` / `end_line`）。`location.column` が `None` の診断では `startColumn` / `endColumn` を出力しない
@@ -803,7 +804,8 @@ stateDiagram-v2
 |---|---|---|
 | LLM補助提案バンドル (LlmSuggestionBundle) | `DiagnosticId` ごとに report 層で併記される任意の補助提案集合。コア診断は変更しない | DiagnosticId, LlmSuggestion |
 | LLM補助提案 (LlmSuggestion) | LLM が生成する任意の補助提案テキスト。テンプレート提案の代替ではなく補足 | LlmSuggestionBundle |
-| レポートメタデータ (ReportMetadata) | `analysis_targets`、`tool_version`、`schema_version` を束ねる値。`analysis_targets` は `WorkspaceRoot` 基準の正規化済み path 群で入力順を保持する | AnalysisTarget |
+| レポートメタデータ (ReportMetadata) | `analysis_targets`、`tool_version`、`schema_version` を束ねる値。`analysis_targets` は `WorkspaceRoot` 基準の正規化済み path 群で入力順を保持する。Application Pipeline 生成 report の現行 schema は `1.1.0` | AnalysisTarget |
+| 実行結果分類 (Outcome) | report から機械的に読める実行結果 taxonomy。値は `passed`, `diagnostics_failed`, `expected_skip`, `input_error`, `infrastructure_error`, `tool_error` | DiagnosticReport, ReportMetadata |
 | 解析対象 (AnalysisTarget) | レポート出力に載せる 1 つの解析対象 path。`WorkspaceRoot` 相対の正規化済み `FilePath` で表す | ReportMetadata |
 | レポート表示オプション (ReportViewOptions) | `requested_level`（`None` = 全階層）と `minimum_severity`（`None` = フィルタなし）を保持する値。`requested_level` はメトリクス・診断・スコアの報告対象階層を射影し、`minimum_severity` は診断一覧のフィルタだけを担う。いずれも summary/exit code は変更しない | DiagnosticReport |
 | LLMエンリッチ要求 (LlmEnrichmentRequest) | Application Pipeline が `Diagnostic` と `SourceAnalysis` から組み立てる allowlist 済み sidecar 入力 `{ rule_id, severity, language, workspace_relative_path, metric?, pattern?, source_excerpt?, cpg_excerpt? }`。`language` は `Diagnostic.location.file_path` に対応する `SourceAnalysis.source_files` から解決し、`metric` と `pattern`、`source_excerpt` と `cpg_excerpt` はそれぞれ相互排他的にどちらか一方だけを持つ。根拠を代表ファイルへ還元できない場合は生成しない | Diagnostic, SourceAnalysis |
@@ -864,6 +866,7 @@ stateDiagram-v2
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.15 | 2026-05-12 | Issue #196: report schema `1.1.0` と outcome taxonomy の値集合・JSON/SARIF/human 配置を ReportMetadata/Reporting 契約へ反映 | Codex |
 | 0.4.14 | 2026-03-27 | §5.6 用語集 `ReportViewOptions` の定義を本文契約と整合（`requested_level` がメトリクス・診断・スコアの射影を担い、`minimum_severity` が診断一覧フィルタのみを担うことを明記） | Claude |
 | 0.4.13 | 2026-03-27 | 入力参照を requirements.md v0.4.14 に同期（本体の変更なし） | Claude |
 | 0.4.12 | 2026-03-27 | 入力参照を requirements.md v0.4.13 に同期（本体の変更なし） | Claude |

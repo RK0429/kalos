@@ -4,10 +4,10 @@
 
 | 項目 | 内容 |
 |---|---|
-| バージョン | 0.4.27 |
-| 最終更新日 | 2026-05-10 |
+| バージョン | 0.4.28 |
+| 最終更新日 | 2026-05-12 |
 | ステータス | ドラフト |
-| 入力 | requirements.md v0.4.15, domain_model.md v0.4.14 |
+| 入力 | requirements.md v0.4.16, domain_model.md v0.4.15 |
 
 ## 1. 設計目標
 
@@ -164,7 +164,7 @@ graph TB
 | Managed Tool Cache Adapter | CodeQL bundle の bootstrap、checksum 検証、ローカル cache 解決 | kalos release と一体で versioning された固定版 manifest、cache directory | 解決済み extractor bundle | `REQ-FUNC-031`, `REQ-FUNC-032`, `REQ-NF-009`, `REQ-NF-010` |
 | Metrics | メトリクス計算、正規化、階層スコア集約。`enabled = false` のルールにバインドされたメトリクスは計算・`metrics` 出力は維持するが、`scope_risk` 算術平均の母集団から除外する | `SourceAnalysis`、`ScoreWeights` | `AnalysisMetrics` | `REQ-FUNC-008`〜`012`, `REQ-NF-003`, `REQ-NF-006` |
 | Diagnostics | 閾値判定、パターン検出、テンプレート改善提案、抑制適用。`enabled = false` のルールは診断を生成せず、当該ルールにバインドされたメトリクスは `scope_risk` 集約から除外される（スコアリング・summary・exit code に影響しない） | `AnalysisMetrics`、`SourceAnalysis`、`ProjectConfig` | `List<Diagnostic>` | `REQ-FUNC-013`〜`017`, `REQ-FUNC-026`, `REQ-FUNC-029`（適用）, `REQ-NF-008` |
-| Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・診断・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | フォーマット済み出力（stdout） | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
+| Reporting | human / JSON / SARIF への変換、`diagnostics_scope` / `summary_scope` / `outcome` を含む出力整形、`analysis_targets` / `tool_version` / `schema_version` メタデータ付与、`--level` に応じた非対象階層メトリクス・診断・スコアの除外射影（Reporting が射影の owner）、任意 LLM 提案の併記 | `AnalysisMetrics`、`DiagnosticReport`、`ReportMetadata`、`ReportViewOptions`、`LlmSuggestionBundle?` | フォーマット済み出力（stdout） | `REQ-FUNC-019`〜`021`, `REQ-FUNC-024`, `REQ-FUNC-033` |
 | LLM Adapter | allowlist 済み `LlmEnrichmentRequest` の HTTP 送信、プロバイダ別 request/endpoint 解決、timeout・429 単発リトライ・5xx skip の適用 | `LlmEnrichmentRequest`、`KALOS_LLM_PROVIDER`、`KALOS_LLM_ENDPOINT_URL`、`KALOS_LLM_API_KEY` | `LlmSuggestionBundle?` | `REQ-FUNC-015`, `REQ-NF-008`, `REQ-NF-009` |
 | Plugin Host | WASM プラグイン検証・SPI 読込・capability 制御、per-scope 評価ディスパッチ（`metric_id` × `ScopeId`）、fuel/memory budget enforcement（per-invocation + aggregate）、失敗時 warning + skip。SPI version `kalos-metric-spi-v1` の normative ABI 仕様（read ヘルパー戻り値契約、ptr/len エンコーディング、ScopeId 直列化、線形メモリデータレイアウト、スカラー戻り値エンコーディング、SPI v1 列挙契約〈フィルタ済みカウント/インデックス空間・再番号付け〉、未登録 metric_id の扱い）は [ADR-0004](./adr/0004-wasm-metric-plugin-runtime.md) を参照 | `ProjectConfig.plugin_manifest`、WASM モジュール、`CpgSubgraph`、`MetricConfig` | `MetricDefinition` 拡張群（v1 では `participation = ReportOnly`）、プラグイン評価 `MetricValue` 群（失敗時は warning のみ） | `REQ-FUNC-012`, `REQ-NF-006`, `REQ-NF-003` |
 | Impact Analysis Service | 逆依存インデックス構築、影響範囲閉包、キャッシュ無効化判定 | 差分 `SourceAnalysis`、`DiffBaseline`、`base_snapshot_hash` | `AffectedScopeSet`、`InvalidationPlan`、`merged DependencyIndexManifest`、再利用断片 | `REQ-FUNC-034`, `REQ-NF-002`, `REQ-NF-003` |
@@ -415,7 +415,8 @@ sequenceDiagram
 - non-diff モードの `diagnostics_scope = whole_project` は「選択された `--level` に関して、解決済み `analysis_targets` 内の診断集合が完全」を意味し、未選択階層の診断欠落を意味しない
 - 機械可読出力は `diagnostics_scope` と `summary_scope` を明示する
 - `analysis_targets` は CLI 入力順を保持した `WorkspaceRoot` 相対 path 群であり、human/json/sarif すべて同一の `ReportMetadata` を参照する
-- `ReportMetadata.schema_version` の初期値は `"1.0.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、後方互換な optional フィールド追加は minor、フィールド削除・型変更・必須化・既存フィールドのセマンティクス変更は major とする
+- `ReportMetadata.schema_version` の初期値は `"1.0.0"` とする。Application Pipeline が生成する report schema は outcome taxonomy 追加後 `"1.1.0"` とする。バンプポリシー: payload shape とセマンティクスの双方に影響しない明確化・注記追加は patch、既存 consumer が未知フィールドを無視できる後方互換なフィールド追加は minor、フィールド削除・型変更・既存フィールドのセマンティクス変更は major とする
+- Reporting は `outcome` を `passed`, `diagnostics_failed`, `expected_skip`, `input_error`, `infrastructure_error`, `tool_error` のいずれかとして出力する。通常解析 report では `DiagnosticReport.determine_exit_code(strict)` から、error path では `error_class` から導出する。配置は JSON top-level `outcome`、SARIF `runs[0].properties.kalos.outcome`（error path では `toolExecutionNotifications[].properties.outcome` にも同値）、human Summary または error message の `outcome: ...` 行とする
 - `--diff` の最適化が有効な実行では `Impact Analysis Service` が `Project` scope を `recompute_scopes` に必ず含め、project-level metrics と `scores.overall` / `scores.project` を post-change 状態から再構成する
 - `analysis_targets` が全ワークスペースの部分集合である実行、ベースライン不在、互換性不一致、影響範囲を安全に確定できない、または project scope を安全に再計算できない場合は、要求された `analysis_targets` / `--level` を保った non-diff 全スコープ解析へフォールバックする（要求された `analysis_targets` のみを対象とし、全ワークスペースへ拡張しない）
 - **ベースラインキャッシュ write-back 契約**:
@@ -663,6 +664,7 @@ requirements.md §5 の検証項目を設計観点で具体化したリストで
 
 | バージョン | 日付 | 変更内容 | 変更者 |
 |---|---|---|---|
+| 0.4.28 | 2026-05-12 | Issue #196: Application Pipeline 生成 report schema を `1.1.0` に更新し、Reporting の outcome taxonomy と JSON/SARIF/human 配置を明文化 | Codex |
 | 0.4.27 | 2026-05-10 | Issue #183: `KALOS_LLM_API_KEY` 未設定時の構造化 `expected_skip` 分類と `--llm` 評価前提の明示を反映 | Codex |
 | 0.4.26 | 2026-03-27 | レビュー派生残件の整合修正: 先頭メタを v0.4.26 に同期し入力参照を domain_model.md v0.4.14 へ更新、§3.1 図・§4.1 責務表・個別 REQ-ID トレーサビリティ・§4.2 本文の LLM Adapter 名称を統一、§4.1 に LLM Adapter の責務行を追加 | Claude |
 | 0.4.25 | 2026-03-27 | レビュー findings 解決: §4.1 REQ-NF-009 トレーサビリティ表に LLM outbound 安全性担当コンポーネントを追加、§4.2 依存方向ルールに Published Language の `ports` 配置規則を追記（ADR-0001 参照）、§4.2・§7.2 の `linear_memory_limit` 表記を `64 MiB` に統一 | Claude |

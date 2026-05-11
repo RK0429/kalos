@@ -801,7 +801,7 @@ fn assemble_report(
             config.analysis_targets.clone(),
             file_count,
             env!("CARGO_PKG_VERSION"),
-            "1.0.0",
+            "1.1.0",
         ),
         &metrics,
         metric_catalog,

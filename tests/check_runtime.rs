@@ -173,6 +173,10 @@ fn managed_tool_cache_checksum_mismatch_json_reports_infrastructure_error_class(
         parsed["error_class"],
         Value::String("codeql_infrastructure".to_owned())
     );
+    assert_eq!(
+        parsed["outcome"],
+        Value::String("infrastructure_error".to_owned())
+    );
     assert!(
         parsed["message"]
             .as_str()

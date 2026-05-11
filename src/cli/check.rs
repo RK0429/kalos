@@ -33,7 +33,7 @@ use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
 use crate::domains::metrics::builtin_metric_definitions;
 use crate::domains::reporting::{
     OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
-    render_sarif_error_document,
+    outcome_for_error_class, render_sarif_error_document,
 };
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
@@ -874,10 +874,12 @@ fn emit_error(
     match format {
         OutputFormat::Human => {
             let error_class = classify_error(message, source);
+            let outcome = outcome_for_error_class(error_class);
             let mut document = message.to_owned();
             if error_class == "codeql_infrastructure" {
                 document.push_str(&format!("\nerror class: {error_class}"));
             }
+            document.push_str(&format!("\noutcome: {outcome}"));
             if let Some(path) = output {
                 if write_error_output_file(path, &document) {
                     return;
@@ -888,12 +890,14 @@ fn emit_error(
             if error_class == "codeql_infrastructure" {
                 eprintln!("error class: {error_class}");
             }
+            eprintln!("outcome: {outcome}");
         }
         OutputFormat::Json => {
             let error_class = classify_error(message, source);
             let mut payload = json!({
                 "error": true,
                 "error_class": error_class,
+                "outcome": outcome_for_error_class(error_class),
                 "message": message,
             });
             if let Some(source) = source {
@@ -938,6 +942,13 @@ fn classify_error(
 
     if text.contains("`--llm` requires KALOS_LLM_API_KEY to be set") {
         "expected_skip"
+    } else if text.contains("analysis target path")
+        && (text.contains("No such file or directory")
+            || text.contains("not found")
+            || text.contains("does not exist")
+            || text.contains("is outside workspace root"))
+    {
+        "input_error"
     } else if text.contains("failed to resolve CodeQL bundle")
         || text.contains("CodeQL bundle bootstrap lock")
         || text.contains("managed CodeQL cache")
@@ -1108,6 +1119,13 @@ mod tests {
         let message = "`--llm` requires KALOS_LLM_API_KEY to be set";
 
         assert_eq!(classify_error(message, None), "expected_skip");
+    }
+
+    #[test]
+    fn classify_error_marks_missing_analysis_target_as_input_error() {
+        let message = "failed to collect source files under `/repo` for analysis target path(s) `missing`: No such file or directory (os error 2)";
+
+        assert_eq!(classify_error(message, None), "input_error");
     }
 
     #[test]
