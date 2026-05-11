@@ -357,15 +357,13 @@ where
         let language_counts = count_source_files_by_language(&source_files);
         let (languages, language_warnings) =
             filter_incidental_languages(&source_files, self.min_language_ratio);
+        let slow_path_guidance = slow_path_guidance_message(source_files.len());
 
         if self.progress {
             emit_analysis_inventory_progress(&language_counts);
             let total_files = source_files.len();
-            if total_files >= SLOW_PATH_SOURCE_FILE_THRESHOLD {
-                eprintln!(
-                    "  codeql: slow-path guidance: {} source files may take several minutes on the first run; interrupt and retry with --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL databases, or --min-language-ratio to skip incidental languages",
-                    total_files
-                );
+            if let Some(guidance) = &slow_path_guidance {
+                eprintln!("  codeql: slow-path guidance: {guidance}");
             }
             for (language, count) in &language_counts {
                 if !languages.contains(language) {
@@ -720,6 +718,13 @@ where
                 user_facing: true,
             });
         }
+        if let Some(guidance) = slow_path_guidance {
+            analysis.warnings.push(AnalysisWarning {
+                file_path: FilePath::from("."),
+                message: format!("CodeQL slow-path guidance: {guidance}"),
+                user_facing: true,
+            });
+        }
         analysis.warnings.extend(language_warnings);
         Ok(analysis)
     }
@@ -963,7 +968,7 @@ fn emit_long_running_phase_context(language: Language) {
         language_name(language)
     );
     eprintln!(
-        "    timeout mitigation: if CodeQL exceeds the harness timeout or memory budget, retry with --codeql-total-timeout/--codeql-timeout to tune bounds, --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, or --min-language-ratio to skip incidental languages"
+        "    timeout mitigation: if CodeQL exceeds the harness timeout or memory budget, retry with --codeql-total-timeout/--codeql-timeout to tune bounds, --codeql-ram to raise the CodeQL heap, --exclude for generated/vendor paths, --diff for a bounded target set, --cache-dir to reuse CodeQL work, --level project for the baseline run, or --min-language-ratio to skip incidental languages"
     );
 }
 
@@ -992,6 +997,15 @@ fn emit_analysis_inventory_progress(language_counts: &BTreeMap<Language, usize>)
         "  codeql: found {} source files ({})",
         total_files, language_breakdown
     );
+}
+
+fn slow_path_guidance_message(source_file_count: usize) -> Option<String> {
+    (source_file_count >= SLOW_PATH_SOURCE_FILE_THRESHOLD).then(|| {
+        format!(
+            "{} source files may take several minutes on full matrix runs; recommended evaluation profile is one full --level project --format json run with a shared --cache-dir, then use --diff, narrower targets/levels, --exclude for generated/vendor paths, or --min-language-ratio before broader level/format matrices",
+            source_file_count
+        )
+    })
 }
 
 fn filter_incidental_languages(

@@ -625,6 +625,22 @@ fn kalos_check_help_documents_filesystem_side_effects() {
 }
 
 #[test]
+fn kalos_check_help_recommends_large_matrix_evaluation_profile() {
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "For repeated matrix evaluation over large repositories",
+        ))
+        .stdout(predicate::str::contains("--level project --format json"))
+        .stdout(predicate::str::contains("shared `--cache-dir`"))
+        .stdout(predicate::str::contains("--diff"))
+        .stdout(predicate::str::contains("--exclude"));
+}
+
+#[test]
 fn kalos_check_help_documents_codeql_timeout_option() {
     Command::cargo_bin("kalos")
         .unwrap()
@@ -1028,6 +1044,8 @@ fn kalos_check_human_format_emits_source_inventory_before_codeql_slow_path() {
         "source inventory should be emitted before database create progress: {stderr}"
     );
     assert!(stderr.contains("slow-path guidance"));
+    assert!(stderr.contains("recommended evaluation profile"));
+    assert!(stderr.contains("--level project --format json"));
     assert!(stderr.contains("--exclude"));
     assert!(stderr.contains("--cache-dir"));
     assert!(stderr.contains("--diff"));
@@ -1132,7 +1150,7 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
     let temp = seeded_large_workspace(100);
     let cache_dir = seed_fake_codeql_bundle(temp.path());
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_CACHE_DIR", &cache_dir)
@@ -1150,6 +1168,20 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
         .stderr(predicate::str::contains("bqrs parse").not())
         .stderr(predicate::str::contains("cache fingerprint").not())
         .stderr(predicate::str::contains("normalization").not());
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let warnings = parsed["analysis_warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|warning| {
+                warning.contains("CodeQL slow-path guidance")
+                    && warning.contains("recommended evaluation profile")
+                    && warning.contains("--level project --format json")
+                    && warning.contains("shared --cache-dir")
+            })
+        }),
+        "JSON analysis_warnings should expose slow-path guidance: {stdout}"
+    );
 }
 
 #[test]
@@ -1157,7 +1189,7 @@ fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
     let temp = seeded_large_workspace(100);
     let cache_dir = seed_fake_codeql_bundle(temp.path());
 
-    Command::cargo_bin("kalos")
+    let assert = Command::cargo_bin("kalos")
         .unwrap()
         .current_dir(temp.path())
         .env("KALOS_CACHE_DIR", &cache_dir)
@@ -1175,6 +1207,22 @@ fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
         .stderr(predicate::str::contains("bqrs parse").not())
         .stderr(predicate::str::contains("cache fingerprint").not())
         .stderr(predicate::str::contains("normalization").not());
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    let warnings = parsed["runs"][0]["properties"]["analysis_warnings"]
+        .as_array()
+        .unwrap();
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|warning| {
+                warning.contains("CodeQL slow-path guidance")
+                    && warning.contains("recommended evaluation profile")
+                    && warning.contains("--level project --format json")
+                    && warning.contains("shared --cache-dir")
+            })
+        }),
+        "SARIF analysis_warnings should expose slow-path guidance: {stdout}"
+    );
 }
 
 #[test]
