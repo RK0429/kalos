@@ -424,6 +424,12 @@ where
                 .read_to_string(&query_path)
                 .unwrap_or_default();
 
+            let source_fingerprint_started = if self.progress {
+                eprintln!("    cache fingerprint ...");
+                Some(Instant::now())
+            } else {
+                None
+            };
             let source_fingerprint = compute_source_fingerprint(
                 &self.file_system,
                 &request.workspace_root,
@@ -432,11 +438,32 @@ where
                 &self.bundle_version,
                 &query_content,
             );
+            if let Some(started) = source_fingerprint_started {
+                let outcome = if source_fingerprint.is_some() {
+                    "done"
+                } else {
+                    "skipped"
+                };
+                eprintln!(
+                    "    cache fingerprint {outcome} ({})",
+                    format_elapsed(started.elapsed())
+                );
+            }
 
             if let Some(ref fingerprint) = source_fingerprint {
+                let cache_lookup_started = if self.progress {
+                    eprintln!("    cache lookup ...");
+                    Some(Instant::now())
+                } else {
+                    None
+                };
                 match try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path) {
                     Ok(parsed) => {
                         if self.progress {
+                            let elapsed = cache_lookup_started
+                                .map(|started| format_elapsed(started.elapsed()))
+                                .unwrap_or_else(|| format_elapsed(Duration::ZERO));
+                            eprintln!("    cache lookup hit ({elapsed})");
                             eprintln!("    cached");
                         }
                         debug!(
@@ -448,6 +475,12 @@ where
                         continue;
                     }
                     Err(reason) => {
+                        if let Some(started) = cache_lookup_started {
+                            eprintln!(
+                                "    cache lookup miss ({})",
+                                format_elapsed(started.elapsed())
+                            );
+                        }
                         debug!(
                             language = ?language,
                             cache_key = %cache_key_path.display(),
@@ -465,6 +498,12 @@ where
             }
 
             let lock_path = database_path.with_extension("lock");
+            let lock_wait_started = if self.progress {
+                eprintln!("    cache lock wait ...");
+                Some(Instant::now())
+            } else {
+                None
+            };
             let _lock_guard = self
                 .file_system
                 .lock_exclusive(&lock_path)
@@ -472,12 +511,28 @@ where
                     path: lock_path.clone(),
                     source,
                 })?;
+            if let Some(started) = lock_wait_started {
+                eprintln!(
+                    "    cache lock wait done ({})",
+                    format_elapsed(started.elapsed())
+                );
+            }
 
             // Re-check cache: another process may have completed while we waited for the lock.
             if let Some(ref fingerprint) = source_fingerprint {
+                let cache_lookup_started = if self.progress {
+                    eprintln!("    cache lookup after lock ...");
+                    Some(Instant::now())
+                } else {
+                    None
+                };
                 match try_load_cache(fingerprint, &cache_key_path, &decoded_cache_path) {
                     Ok(parsed) => {
                         if self.progress {
+                            let elapsed = cache_lookup_started
+                                .map(|started| format_elapsed(started.elapsed()))
+                                .unwrap_or_else(|| format_elapsed(Duration::ZERO));
+                            eprintln!("    cache lookup after lock hit ({elapsed})");
                             eprintln!("    cached (after lock)");
                         }
                         debug!(
@@ -489,6 +544,12 @@ where
                         continue;
                     }
                     Err(reason) => {
+                        if let Some(started) = cache_lookup_started {
+                            eprintln!(
+                                "    cache lookup after lock miss ({})",
+                                format_elapsed(started.elapsed())
+                            );
+                        }
                         debug!(
                             language = ?language,
                             reason = %reason,
@@ -580,6 +641,12 @@ where
                 );
             }
             if let Some(ref fingerprint) = source_fingerprint {
+                let cache_write_started = if self.progress {
+                    eprintln!("    cache write ...");
+                    Some(Instant::now())
+                } else {
+                    None
+                };
                 if let Err(error) = write_cache_atomic(&decoded_cache_path, &decode_output.stdout) {
                     warn!(
                         path = %decoded_cache_path.display(),
@@ -601,14 +668,45 @@ where
                         "kalos cache written"
                     );
                 }
+                if let Some(started) = cache_write_started {
+                    eprintln!(
+                        "    cache write done ({})",
+                        format_elapsed(started.elapsed())
+                    );
+                }
             }
-            combined_output.extend_from(CpgNormalizer::parse_output(&decode_output.stdout)?);
+            let bqrs_parse_started = if self.progress {
+                eprintln!("    bqrs parse ...");
+                Some(Instant::now())
+            } else {
+                None
+            };
+            let parsed_output = CpgNormalizer::parse_output(&decode_output.stdout)?;
+            if let Some(started) = bqrs_parse_started {
+                eprintln!(
+                    "    bqrs parse done ({})",
+                    format_elapsed(started.elapsed())
+                );
+            }
+            combined_output.extend_from(parsed_output);
         }
 
         let source_file_count = source_files.len();
+        let normalization_started = if self.progress {
+            eprintln!("  codeql: normalization ...");
+            Some(Instant::now())
+        } else {
+            None
+        };
         let mut analysis =
             self.normalizer
                 .normalize(&request.workspace_root, source_files, combined_output)?;
+        if let Some(started) = normalization_started {
+            eprintln!(
+                "  codeql: normalization done ({})",
+                format_elapsed(started.elapsed())
+            );
+        }
         if source_file_count > 0
             && analysis.cpg.functions().is_empty()
             && analysis.cpg.modules().is_empty()

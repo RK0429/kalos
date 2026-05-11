@@ -894,6 +894,36 @@ fn kalos_check_emits_codeql_phase_progress_on_stderr() {
 }
 
 #[test]
+fn kalos_check_progress_accounts_non_subprocess_codeql_stages() {
+    let temp = seeded_workspace();
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .arg("check")
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+
+    for expected in [
+        "cache fingerprint done (",
+        "cache lookup miss (",
+        "cache lock wait done (",
+        "cache lookup after lock miss (",
+        "cache write done (",
+        "bqrs parse done (",
+        "codeql: normalization done (",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "expected progress to account for `{expected}` in stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn kalos_check_emits_first_run_hint_on_initial_run() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
@@ -1116,7 +1146,10 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
         .stderr(predicate::str::contains("first run").not())
         .stderr(predicate::str::contains("database create").not())
         .stderr(predicate::str::contains("query run").not())
-        .stderr(predicate::str::contains("bqrs decode").not());
+        .stderr(predicate::str::contains("bqrs decode").not())
+        .stderr(predicate::str::contains("bqrs parse").not())
+        .stderr(predicate::str::contains("cache fingerprint").not())
+        .stderr(predicate::str::contains("normalization").not());
 }
 
 #[test]
@@ -1138,7 +1171,10 @@ fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
         .stderr(predicate::str::contains("first run").not())
         .stderr(predicate::str::contains("database create").not())
         .stderr(predicate::str::contains("query run").not())
-        .stderr(predicate::str::contains("bqrs decode").not());
+        .stderr(predicate::str::contains("bqrs decode").not())
+        .stderr(predicate::str::contains("bqrs parse").not())
+        .stderr(predicate::str::contains("cache fingerprint").not())
+        .stderr(predicate::str::contains("normalization").not());
 }
 
 #[test]
