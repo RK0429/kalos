@@ -634,6 +634,18 @@ fn kalos_check_help_recommends_large_matrix_evaluation_profile() {
         .stdout(predicate::str::contains(
             "For repeated matrix evaluation over large repositories",
         ))
+        .stdout(predicate::str::contains(
+            "one stable shared `--cache-dir` per repository",
+        ))
+        .stdout(predicate::str::contains(
+            "pre-populate or warm the managed CodeQL cache",
+        ))
+        .stdout(predicate::str::contains(
+            "Avoid per-case cache directories for repeated level/format evaluation",
+        ))
+        .stdout(predicate::str::contains(
+            "Account for cold bundle setup and CodeQL database creation separately from rule runtime",
+        ))
         .stdout(predicate::str::contains("--level project --format json"))
         .stdout(predicate::str::contains("shared `--cache-dir`"))
         .stdout(predicate::str::contains("--diff"))

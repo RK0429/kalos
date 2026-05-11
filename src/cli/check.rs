@@ -51,7 +51,7 @@ const DEFAULT_CODEQL_TOTAL_TIMEOUT_SECS: u64 = 1200;
                   - `$KALOS_CACHE_DIR/baselines/` or `--cache-dir <path>/baselines/` may store cached baselines for full-workspace runs in Git repositories.\n  \
                   - `--cache-dir <path>/codeql/databases/<language>/` stores per-language CodeQL databases when --cache-dir is passed.\n  \
                   - `<repo>/.gitignore` is only created or updated when --update-gitignore is passed.\n\n\
-                  NOTE: For repeated matrix evaluation over large repositories, start with a single full `--level project --format json` run using a shared `--cache-dir`, then run level/format matrices with `--diff`, narrower targets, and `--exclude` for generated or vendor paths.\n\n\
+                  NOTE: For repeated matrix evaluation over large repositories, use one stable shared `--cache-dir` per repository and pre-populate or warm the managed CodeQL cache before cold harness runs. Avoid per-case cache directories for repeated level/format evaluation. Account for cold bundle setup and CodeQL database creation separately from rule runtime. Start with a single full `--level project --format json` run, then run level/format matrices with `--diff`, narrower targets, and `--exclude` for generated or vendor paths.\n\n\
                   NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
                   which may cause significantly slower analysis on first invocation."
 )]
