@@ -1129,6 +1129,13 @@ mod tests {
     }
 
     #[test]
+    fn classify_error_marks_extraction_wrapped_missing_target_as_input_error() {
+        let message = "failed to extract CPG: failed to collect source files under `/repo` for analysis target path(s) `__kalos_missing_path__`: No such file or directory (os error 2)";
+
+        assert_eq!(classify_error(message, None), "input_error");
+    }
+
+    #[test]
     fn codeql_setup_timeout_uses_stricter_phase_or_total_budget() {
         assert_eq!(
             codeql_setup_timeout(240, Some(1200)),
