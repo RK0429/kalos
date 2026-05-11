@@ -1067,6 +1067,58 @@ fn kalos_check_human_format_emits_source_inventory_before_codeql_slow_path() {
 }
 
 #[test]
+fn kalos_check_quiet_human_output_still_emits_codeql_progress() {
+    let temp = seeded_large_workspace(100);
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+    let output_path = temp.path().join("reports").join("function.txt");
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--level",
+            "function",
+            "--format",
+            "human",
+            "--quiet",
+            "--codeql-timeout",
+            "0",
+            "--codeql-total-timeout",
+            "0",
+            "--cache-dir",
+        ])
+        .arg(&cache_dir)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("wrote ").not());
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+
+    for expected in [
+        "codeql: found 100 source files (rust=100)",
+        "slow-path guidance",
+        "setup bundle",
+        "database create",
+        "query run",
+        "bqrs decode",
+        "codeql: normalization done",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "quiet human output-file runs should retain CodeQL progress `{expected}` in stderr: {stderr}"
+        );
+    }
+    let rendered = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        rendered.contains("Summary") && rendered.contains("outcome:"),
+        "expected human report to be written to output file: {rendered}"
+    );
+}
+
+#[test]
 fn kalos_check_cached_run_does_not_emit_first_run_hint() {
     let temp = seeded_workspace();
     let cache_dir = seed_fake_codeql_bundle(temp.path());
@@ -1521,7 +1573,9 @@ fn kalos_check_quiet_human_output_file_receives_late_codeql_failure() {
         .assert()
         .code(2)
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::is_empty());
+        .stderr(predicate::str::contains("setup bundle"))
+        .stderr(predicate::str::contains("query run"))
+        .stderr(predicate::str::contains("wrote ").not());
 
     let rendered = fs::read_to_string(&output_path).unwrap();
     assert!(rendered.ends_with('\n'), "expected trailing newline");
@@ -1763,7 +1817,9 @@ fn kalos_check_quiet_human_output_file_receives_codeql_timeout_failure() {
         .assert()
         .code(2)
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::is_empty());
+        .stderr(predicate::str::contains("setup bundle"))
+        .stderr(predicate::str::contains("database create"))
+        .stderr(predicate::str::contains("wrote ").not());
 
     let rendered = fs::read_to_string(&output_path).unwrap();
     assert!(rendered.ends_with('\n'), "expected trailing newline");

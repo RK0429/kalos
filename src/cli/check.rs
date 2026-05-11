@@ -312,7 +312,8 @@ impl CheckCommand {
             }
         };
         let platform = Platform::detect();
-        if self.format == OutputFormat::Human && !self.quiet {
+        let human_progress = self.format == OutputFormat::Human;
+        if human_progress {
             if let Some(notice) = platform.and_then(|platform| platform.emulation_notice()) {
                 eprintln!("{notice}");
             }
@@ -329,11 +330,7 @@ impl CheckCommand {
             Some(timeout) => tool_cache.with_bundle_setup_timeout(timeout),
             None => tool_cache,
         };
-        let tool_cache = ProgressToolCacheAdapter::new(
-            tool_cache,
-            self.format == OutputFormat::Human && !self.quiet,
-            setup_timeout,
-        );
+        let tool_cache = ProgressToolCacheAdapter::new(tool_cache, human_progress, setup_timeout);
         let exclude_patterns = config
             .exclude_patterns
             .iter()
@@ -349,7 +346,7 @@ impl CheckCommand {
         if let Some(cache_dir) = &self.cache_dir {
             extractor = extractor.with_database_root(cache_dir.join("codeql").join("databases"));
         }
-        if self.format == OutputFormat::Human && !self.quiet {
+        if human_progress {
             extractor = extractor.with_progress();
         }
         if platform.map_or(false, |platform| platform.is_emulated()) {
