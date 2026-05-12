@@ -182,6 +182,7 @@ pub struct CodeQlAdapter<F, R, T> {
     codeql_ram_mib: Option<u32>,
     codeql_timeout: Option<Duration>,
     codeql_total_timeout: Option<Duration>,
+    fail_fast_unbounded_slow_path: bool,
 }
 
 impl<F, R, T> CodeQlAdapter<F, R, T> {
@@ -206,6 +207,7 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
             codeql_ram_mib: None,
             codeql_timeout: Some(DEFAULT_CODEQL_TIMEOUT),
             codeql_total_timeout: Some(DEFAULT_CODEQL_TOTAL_TIMEOUT),
+            fail_fast_unbounded_slow_path: false,
         }
     }
 
@@ -241,6 +243,11 @@ impl<F, R, T> CodeQlAdapter<F, R, T> {
 
     pub fn with_codeql_total_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.codeql_total_timeout = timeout;
+        self
+    }
+
+    pub fn with_fail_fast_unbounded_slow_path(mut self, enabled: bool) -> Self {
+        self.fail_fast_unbounded_slow_path = enabled;
         self
     }
 
@@ -307,6 +314,10 @@ pub enum CodeQlAdapterError {
         stderr: String,
         guidance: String,
     },
+    #[error(
+        "unbounded large-repo CodeQL analysis skipped before CodeQL execution: found {source_file_count} source files with --codeql-timeout 0 and --codeql-total-timeout 0 for structured output\n\nrecommended narrower command: kalos check . --level project --format json --codeql-total-timeout 1200 --codeql-timeout 240 --cache-dir <shared-cache-dir>\n\nfor matrix runs, reuse --cache-dir, start with one full project/json baseline, then use --diff, narrower targets/levels, --exclude, or --min-language-ratio before broader level/format matrices\n\npass --allow-unbounded-large-repo-analysis only for intentional interactive runs outside bounded matrix harnesses"
+    )]
+    UnboundedSlowPath { source_file_count: usize },
     #[error(transparent)]
     Normalize(#[from] NormalizationError),
 }
@@ -358,6 +369,15 @@ where
         let (languages, language_warnings) =
             filter_incidental_languages(&source_files, self.min_language_ratio);
         let slow_path_guidance = slow_path_guidance_message(source_files.len());
+        if self.fail_fast_unbounded_slow_path
+            && self.codeql_timeout.is_none()
+            && self.codeql_total_timeout.is_none()
+            && slow_path_guidance.is_some()
+        {
+            return Err(CodeQlAdapterError::UnboundedSlowPath {
+                source_file_count: source_files.len(),
+            });
+        }
 
         if self.progress {
             emit_analysis_inventory_progress(&language_counts);

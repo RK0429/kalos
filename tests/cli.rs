@@ -1251,6 +1251,68 @@ fn kalos_check_json_format_does_not_emit_progress_on_stderr() {
 }
 
 #[test]
+fn kalos_check_json_unbounded_large_repo_fails_fast_with_guidance() {
+    let temp = seeded_large_workspace(100);
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--codeql-timeout",
+            "0",
+            "--codeql-total-timeout",
+            "0",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["error"], Value::Bool(true));
+    assert_eq!(parsed["error_class"], "expected_skip");
+    assert_eq!(parsed["outcome"], "expected_skip");
+    let message = parsed["message"].as_str().unwrap();
+    assert!(message.contains("unbounded large-repo CodeQL analysis skipped"));
+    assert!(message.contains("found 100 source files"));
+    assert!(message.contains("recommended narrower command"));
+    assert!(message.contains("--codeql-total-timeout 1200"));
+    assert!(message.contains("--codeql-timeout 240"));
+    assert!(message.contains("--cache-dir <shared-cache-dir>"));
+    assert!(message.contains("--diff"));
+    assert!(message.contains("--exclude"));
+    assert!(message.contains("--min-language-ratio"));
+    assert!(message.contains("--allow-unbounded-large-repo-analysis"));
+}
+
+#[test]
+fn kalos_check_json_unbounded_large_repo_allows_explicit_opt_in() {
+    let temp = seeded_large_workspace(100);
+    let cache_dir = seed_fake_codeql_bundle(temp.path());
+
+    Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("KALOS_CACHE_DIR", &cache_dir)
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--codeql-timeout",
+            "0",
+            "--codeql-total-timeout",
+            "0",
+            "--allow-unbounded-large-repo-analysis",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn kalos_check_sarif_format_does_not_emit_progress_on_stderr() {
     let temp = seeded_large_workspace(100);
     let cache_dir = seed_fake_codeql_bundle(temp.path());

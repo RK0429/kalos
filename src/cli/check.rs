@@ -174,6 +174,12 @@ Override severity per rule in .kalos.toml under [rules.<rule-id>]."
     pub codeql_total_timeout: Option<u64>,
     #[arg(
         long,
+        help = "allow structured-output runs to disable all CodeQL timeouts on large repositories",
+        long_help = "allow structured-output runs to disable all CodeQL timeouts on large repositories.\n\nWithout this opt-in, `kalos check --format json|sarif --codeql-timeout 0 --codeql-total-timeout 0` fails fast on large source inventories before CodeQL execution and returns a structured expected_skip outcome with a narrower recommended command. Human output keeps progress guidance visible and is not blocked by this guard."
+    )]
+    pub allow_unbounded_large_repo_analysis: bool,
+    #[arg(
+        long,
         help = "include test files in test-noisy diagnostics (KAL-F001, KAL-F003, KAL-M001, KAL-M003)",
         long_help = "include test files in test-noisy diagnostics (KAL-F001, KAL-F003, KAL-M001, KAL-M003)
 
@@ -365,6 +371,14 @@ impl CheckCommand {
             codeql_total_timeout
                 .filter(|seconds| *seconds > 0)
                 .map(Duration::from_secs),
+        );
+        extractor = extractor.with_fail_fast_unbounded_slow_path(
+            self.format != OutputFormat::Human
+                && self.codeql_timeout == 0
+                && codeql_total_timeout
+                    .filter(|seconds| *seconds > 0)
+                    .is_none()
+                && !self.allow_unbounded_large_repo_analysis,
         );
         let dependency_resolver = StubDependencyResolver;
         let pipeline = AnalysisPipeline::new(extractor, dependency_resolver);
@@ -937,7 +951,9 @@ fn classify_error(
     let cause = source.map(|source| source.to_string()).unwrap_or_default();
     let text = format!("{message}\n{cause}");
 
-    if text.contains("`--llm` requires KALOS_LLM_API_KEY to be set") {
+    if text.contains("`--llm` requires KALOS_LLM_API_KEY to be set")
+        || text.contains("unbounded large-repo CodeQL analysis skipped before CodeQL execution")
+    {
         "expected_skip"
     } else if text.contains("analysis target path")
         && (text.contains("No such file or directory")
@@ -1114,6 +1130,13 @@ mod tests {
     #[test]
     fn classify_error_marks_missing_llm_api_key_as_expected_skip() {
         let message = "`--llm` requires KALOS_LLM_API_KEY to be set";
+
+        assert_eq!(classify_error(message, None), "expected_skip");
+    }
+
+    #[test]
+    fn classify_error_marks_unbounded_large_repo_guard_as_expected_skip() {
+        let message = "unbounded large-repo CodeQL analysis skipped before CodeQL execution: found 100 source files";
 
         assert_eq!(classify_error(message, None), "expected_skip");
     }
