@@ -250,6 +250,94 @@ args_contain_conflicting_flag() {
   return 1
 }
 
+git_ref_exists() {
+  git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1
+}
+
+remote_default_branch_ref() {
+  local ref
+
+  ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [ -n "$ref" ] && git_ref_exists "$ref"; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+
+  for ref in origin/main origin/master; do
+    if git_ref_exists "$ref"; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+  done
+
+  local remote_refs=()
+  while IFS= read -r ref; do
+    if [ -n "$ref" ] && git_ref_exists "$ref"; then
+      remote_refs+=("$ref")
+    fi
+  done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | grep -v '^origin/HEAD$' || true)
+
+  if [ "${#remote_refs[@]}" -eq 1 ]; then
+    printf '%s\n' "${remote_refs[0]}"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_diff_ref() {
+  local ref="$1"
+  local fallback_ref
+
+  if [ "$ref" != "origin/develop" ]; then
+    printf '%s\n' "$ref"
+    return
+  fi
+
+  if git_ref_exists "$ref"; then
+    printf '%s\n' "$ref"
+    return
+  fi
+
+  if fallback_ref="$(remote_default_branch_ref)"; then
+    echo "notice: --diff origin/develop is unavailable; using remote default branch ${fallback_ref}" >&2
+    printf '%s\n' "$fallback_ref"
+    return
+  fi
+
+  echo "notice: --diff origin/develop is unavailable and no remote default branch ref could be resolved; forwarding origin/develop unchanged" >&2
+  printf '%s\n' "$ref"
+}
+
+resolve_diff_args() {
+  local resolved=()
+  local pending_diff=0
+  local arg
+
+  for arg in "$@"; do
+    if [ "$pending_diff" -eq 1 ]; then
+      resolved+=("$(resolve_diff_ref "$arg")")
+      pending_diff=0
+      continue
+    fi
+
+    case "$arg" in
+      --diff)
+        resolved+=("$arg")
+        pending_diff=1
+        ;;
+      --diff=*)
+        resolved+=("--diff=$(resolve_diff_ref "${arg#--diff=}")")
+        ;;
+      *)
+        resolved+=("$arg")
+        ;;
+    esac
+  done
+
+  printf '%s\n' "${resolved[@]}"
+}
+
 run_check() {
   require_env KALOS_BIN
 
@@ -262,6 +350,15 @@ run_check() {
     done <<EOF
 ${KALOS_ACTION_ARGS}
 EOF
+  fi
+
+  if [ "${#args[@]}" -gt 0 ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local resolved_args=()
+    local resolved_arg
+    while IFS= read -r resolved_arg; do
+      resolved_args+=("$resolved_arg")
+    done < <(resolve_diff_args "${args[@]}")
+    args=("${resolved_args[@]}")
   fi
 
   if [ -n "${KALOS_ACTION_SARIF_FILE:-}" ]; then
