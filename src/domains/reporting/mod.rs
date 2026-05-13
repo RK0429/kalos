@@ -13,7 +13,7 @@ pub const OUTCOME_INFRASTRUCTURE_ERROR: &str = "infrastructure_error";
 pub const OUTCOME_TOOL_ERROR: &str = "tool_error";
 const KAL_M003_GATE_GUIDANCE_PREFIX: &str = "module/all gate guidance: KAL-M003";
 const MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE: usize = 25;
-const MAX_FUNCTION_LEVEL_HUMAN_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE: usize = 25;
+const MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE: usize = 25;
 
 use crate::domains::diagnostics::{
     Diagnostic, DiagnosticKind, DiagnosticReport, DiagnosticSummary, DiagnosticsScope, ExitCode,
@@ -199,6 +199,8 @@ impl AnalysisReport {
     ) -> Self {
         let projected_metrics = project_metrics(metrics, view.requested_level, metric_catalog);
         let projected_diagnostics = project_diagnostics(&diagnostics, view.requested_level);
+        let projected_diagnostic_count_before_flood_control =
+            projected_diagnostic_count_before_flood_control(&diagnostics, view.requested_level);
         let summary_scope = summary_scope_for(view.requested_level);
         let file_count = metadata.file_count;
         let summary = materialize_summary(match summary_scope {
@@ -209,7 +211,7 @@ impl AnalysisReport {
         let analysis_warnings = append_function_metric_flood_guidance(
             analysis_warnings,
             view.requested_level,
-            diagnostics.len(),
+            projected_diagnostic_count_before_flood_control,
             projected_diagnostics.len(),
         );
         let analysis_warnings = append_module_gate_guidance(
@@ -352,7 +354,7 @@ impl AnalysisReport {
         if let Some(summary) = function_metric_flood_summary {
             let _ = writeln!(
                 output,
-                "note: function metric flood control: hid {} lower-priority function metric diagnostic(s) in --level function human output ({}); JSON/SARIF keep the full diagnostic inventory.",
+                "note: function metric flood control: hid {} lower-priority function metric diagnostic(s) in --level function human output ({}).",
                 summary.total_hidden,
                 summary.hidden_by_rule_summary()
             );
@@ -901,11 +903,27 @@ pub fn project_diagnostics(
         .cloned()
         .collect::<Vec<_>>();
 
-    if requested_level == RequestedLevel::All {
-        cap_all_level_function_metric_diagnostics(projected)
-    } else {
-        projected
+    match requested_level {
+        RequestedLevel::All => cap_function_metric_diagnostics(
+            projected,
+            MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE,
+        ),
+        RequestedLevel::Function => cap_function_metric_diagnostics(
+            projected,
+            MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE,
+        ),
+        RequestedLevel::Module | RequestedLevel::Project => projected,
     }
+}
+
+fn projected_diagnostic_count_before_flood_control(
+    diagnostics: &[Diagnostic],
+    requested_level: RequestedLevel,
+) -> usize {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| requested_level.includes(diagnostic.primary_scope_id.level))
+        .count()
 }
 
 pub fn project_scores(
@@ -1006,14 +1024,24 @@ fn append_function_metric_flood_guidance(
     original_count: usize,
     projected_count: usize,
 ) -> Vec<String> {
-    if requested_level != RequestedLevel::All || projected_count >= original_count {
+    if !matches!(
+        requested_level,
+        RequestedLevel::All | RequestedLevel::Function
+    ) || projected_count >= original_count
+    {
         return analysis_warnings;
     }
 
     let hidden_count = original_count - projected_count;
-    let warning = format!(
-        "function metric flood control: hid {hidden_count} lower-priority function metric diagnostic(s) in --level all; showing at most {MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE} per function metric rule. Use --level function for the full function diagnostic inventory."
-    );
+    let warning = match requested_level {
+        RequestedLevel::All => format!(
+            "function metric flood control: hid {hidden_count} lower-priority function metric diagnostic(s) in --level all; showing at most {MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE} per function metric rule."
+        ),
+        RequestedLevel::Function => format!(
+            "function metric flood control: hid {hidden_count} lower-priority function metric diagnostic(s) in --level function; showing at most {MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE} per function metric rule."
+        ),
+        RequestedLevel::Module | RequestedLevel::Project => return analysis_warnings,
+    };
     if !analysis_warnings
         .iter()
         .any(|existing| existing == &warning)
@@ -1073,7 +1101,7 @@ fn human_visible_diagnostics<'a>(
         rule_diagnostics.sort_by(|left, right| compare_function_metric_priority(left, right));
         let visible_count = rule_diagnostics
             .len()
-            .min(MAX_FUNCTION_LEVEL_HUMAN_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE);
+            .min(MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE);
         visible_function_metric_diagnostics
             .extend(rule_diagnostics.iter().take(visible_count).copied());
 
@@ -1098,7 +1126,10 @@ fn human_visible_diagnostics<'a>(
     (visible, summary)
 }
 
-fn cap_all_level_function_metric_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+fn cap_function_metric_diagnostics(
+    diagnostics: Vec<Diagnostic>,
+    max_per_rule: usize,
+) -> Vec<Diagnostic> {
     let mut non_function_metric_diagnostics = Vec::new();
     let mut function_metric_diagnostics_by_rule: BTreeMap<String, Vec<Diagnostic>> =
         BTreeMap::new();
@@ -1117,12 +1148,7 @@ fn cap_all_level_function_metric_diagnostics(diagnostics: Vec<Diagnostic>) -> Ve
     let mut capped = non_function_metric_diagnostics;
     for diagnostics in function_metric_diagnostics_by_rule.values_mut() {
         diagnostics.sort_by(compare_function_metric_priority);
-        capped.extend(
-            diagnostics
-                .iter()
-                .take(MAX_ALL_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE)
-                .cloned(),
-        );
+        capped.extend(diagnostics.iter().take(max_per_rule).cloned());
     }
     capped.sort_by(compare_diagnostic_output_order);
     capped
@@ -1828,7 +1854,7 @@ mod tests {
         assert_eq!(report.diagnostics.summary.error_count, 34);
         assert!(report.analysis_warnings.iter().any(|warning| {
             warning.contains("function metric flood control: hid 5")
-                && warning.contains("Use --level function")
+                && warning.contains("showing at most 25 per function metric rule")
         }));
     }
 
@@ -1857,7 +1883,7 @@ mod tests {
                 .iter()
                 .any(|warning| warning.as_str().is_some_and(|warning| {
                     warning.contains("function metric flood control")
-                        && warning.contains("Use --level function")
+                        && warning.contains("showing at most 25 per function metric rule")
                 }))
         );
     }
@@ -1888,13 +1914,13 @@ mod tests {
                 .iter()
                 .any(|warning| warning.as_str().is_some_and(|warning| {
                     warning.contains("function metric flood control")
-                        && warning.contains("Use --level function")
+                        && warning.contains("showing at most 25 per function metric rule")
                 }))
         );
     }
 
     #[test]
-    fn function_level_keeps_full_function_metric_inventory() {
+    fn function_level_caps_function_metric_diagnostics_per_rule() {
         let diagnostics = (0..30)
             .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
             .collect::<Vec<_>>();
@@ -1906,13 +1932,12 @@ mod tests {
             diagnostics,
         );
 
-        assert_eq!(report.diagnostics.diagnostics.len(), 30);
-        assert!(
-            report
-                .analysis_warnings
-                .iter()
-                .all(|warning| !warning.contains("function metric flood control"))
-        );
+        assert_eq!(report.diagnostics.diagnostics.len(), 25);
+        assert!(report.analysis_warnings.iter().any(|warning| {
+            warning.contains("function metric flood control: hid 5")
+                && warning.contains("--level function")
+                && warning.contains("showing at most 25 per function metric rule")
+        }));
     }
 
     #[test]
@@ -1933,13 +1958,10 @@ mod tests {
 
         let rendered = report.render_human(None, false);
 
-        assert_eq!(report.diagnostics.diagnostics.len(), 60);
+        assert_eq!(report.diagnostics.diagnostics.len(), 50);
         assert_eq!(rendered.matches("error[KAL-F001]").count(), 25);
         assert_eq!(rendered.matches("error[KAL-F003]").count(), 25);
         assert!(rendered.contains("function metric flood control: hid 10"));
-        assert!(rendered.contains("KAL-F001: 5 hidden"));
-        assert!(rendered.contains("KAL-F003: 5 hidden"));
-        assert!(rendered.contains("JSON/SARIF keep the full diagnostic inventory"));
         assert!(rendered.contains("src/f29.rs:30:1"));
         assert!(rendered.contains("src/f129.rs:130:1"));
         assert!(!rendered.contains("src/f0.rs:1:1"));
@@ -1971,10 +1993,14 @@ mod tests {
     }
 
     #[test]
-    fn function_level_json_keeps_full_function_metric_inventory() {
-        let diagnostics = (0..30)
+    fn function_level_json_keeps_function_metric_flood_bounded() {
+        let mut diagnostics = (0..30)
             .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
             .collect::<Vec<_>>();
+        diagnostics.extend((0..30).map(|index| {
+            fixture_function_metric_diagnostic("KAL-F003", "M-F003", index + 100, 0.7)
+        }));
+        diagnostics.push(fixture_function_pattern_diagnostic());
         let report = project_report(
             RequestedLevel::Function,
             None,
@@ -1991,24 +2017,41 @@ mod tests {
                 .iter()
                 .filter(|diagnostic| diagnostic["rule_id"] == "KAL-F001")
                 .count(),
-            30
+            super::MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic["rule_id"] == "KAL-F003")
+                .count(),
+            super::MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["rule_id"] == "KAL-PAT001")
         );
         assert!(
             parsed["analysis_warnings"]
                 .as_array()
                 .expect("analysis warnings")
                 .iter()
-                .all(|warning| warning
-                    .as_str()
-                    .is_none_or(|warning| !warning.contains("function metric flood control")))
+                .any(|warning| warning.as_str().is_some_and(|warning| {
+                    warning.contains("function metric flood control: hid 10")
+                        && warning.contains("--level function")
+                }))
         );
     }
 
     #[test]
-    fn function_level_sarif_keeps_full_function_metric_inventory() {
-        let diagnostics = (0..30)
+    fn function_level_sarif_keeps_function_metric_flood_bounded() {
+        let mut diagnostics = (0..30)
             .map(|index| fixture_function_metric_diagnostic("KAL-F001", "M-F001", index, 0.5))
             .collect::<Vec<_>>();
+        diagnostics.extend((0..30).map(|index| {
+            fixture_function_metric_diagnostic("KAL-F003", "M-F003", index + 100, 0.7)
+        }));
+        diagnostics.push(fixture_function_pattern_diagnostic());
         let report = project_report(
             RequestedLevel::Function,
             None,
@@ -2027,7 +2070,29 @@ mod tests {
                 .iter()
                 .filter(|result| result["ruleId"] == "KAL-F001")
                 .count(),
-            30
+            super::MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result["ruleId"] == "KAL-F003")
+                .count(),
+            super::MAX_FUNCTION_LEVEL_FUNCTION_METRIC_DIAGNOSTICS_PER_RULE
+        );
+        assert!(
+            results
+                .iter()
+                .any(|result| result["ruleId"] == "KAL-PAT001")
+        );
+        assert!(
+            parsed["runs"][0]["properties"]["analysis_warnings"]
+                .as_array()
+                .expect("analysis warnings")
+                .iter()
+                .any(|warning| warning.as_str().is_some_and(|warning| {
+                    warning.contains("function metric flood control: hid 10")
+                        && warning.contains("--level function")
+                }))
         );
     }
 
