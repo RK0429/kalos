@@ -18,6 +18,7 @@ use thiserror::Error;
 use crate::ports::tool_cache::{ResolvedToolBundle, ToolCachePort, ToolCacheRequest};
 
 pub const BUNDLE_MARKER_FILE: &str = "bundle.marker";
+const BUNDLE_BOOTSTRAP_FAILURE_FILE: &str = "bootstrap.failure";
 
 /// Kalos CPG extraction queries embedded in the binary.
 ///
@@ -1078,6 +1079,10 @@ impl ManagedToolCacheAdapter {
         fs::create_dir_all(bundle_root).map_err(|source| {
             bootstrap_extract_error(self.manifest.version.clone(), Some(bundle_root), source)
         })?;
+        if self.bundle_marker_matches_manifest(bundle_dir)? {
+            return Ok(());
+        }
+        self.fail_fast_if_previous_no_space(bundle_root)?;
         let _lock = BundleBootstrapLock::acquire_before(
             bundle_root,
             &self.manifest.version,
@@ -1087,6 +1092,7 @@ impl ManagedToolCacheAdapter {
         if self.bundle_marker_matches_manifest(bundle_dir)? {
             return Ok(());
         }
+        self.fail_fast_if_previous_no_space(bundle_root)?;
 
         let archive_path = archive_cache_path(bundle_root, &self.manifest.version);
         if self.archive_matches_manifest_before(&archive_path, setup_deadline)? {
@@ -1095,13 +1101,19 @@ impl ManagedToolCacheAdapter {
                 archive_path.display()
             );
         } else if let Err(error) = self.download_archive_before(&archive_path, setup_deadline) {
+            self.record_bootstrap_failure_if_no_space(bundle_root, &error);
             return Err(error);
         }
         let install_result =
             self.install_bundle_from_archive_before(&archive_path, bundle_dir, setup_deadline);
         if let Err(error) = install_result {
+            self.record_bootstrap_failure_if_no_space(bundle_root, &error);
             return Err(error);
         }
+        remove_file_if_exists(&bootstrap_failure_path(bundle_root, &self.manifest.version))
+            .map_err(|source| {
+                bootstrap_extract_error(self.manifest.version.clone(), Some(bundle_root), source)
+            })?;
 
         eprintln!(
             "CodeQL bundle v{} installed to {}",
@@ -1310,6 +1322,55 @@ impl ManagedToolCacheAdapter {
         }
 
         Ok(())
+    }
+
+    fn fail_fast_if_previous_no_space(
+        &self,
+        bundle_root: &Path,
+    ) -> Result<(), ManagedToolCacheError> {
+        let marker_path = bootstrap_failure_path(bundle_root, &self.manifest.version);
+        let content = match fs::read_to_string(&marker_path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(bootstrap_extract_error(
+                    self.manifest.version.clone(),
+                    Some(bundle_root),
+                    source,
+                ));
+            }
+        };
+
+        if !is_no_space_error(&content) {
+            return Ok(());
+        }
+
+        Err(bootstrap_extract_error(
+            self.manifest.version.clone(),
+            Some(bundle_root),
+            io::Error::other(format!(
+                "previous CodeQL bundle bootstrap failed due to ENOSPC; fail fast before retrying download/extraction. Remove `{}` after freeing space, or clean the managed cache and rerun",
+                marker_path.display()
+            )),
+        ))
+    }
+
+    fn record_bootstrap_failure_if_no_space(
+        &self,
+        bundle_root: &Path,
+        error: &ManagedToolCacheError,
+    ) {
+        let message = error.to_string();
+        if !is_no_space_error(&message) {
+            return;
+        }
+
+        let marker_path = bootstrap_failure_path(bundle_root, &self.manifest.version);
+        let content = format!(
+            "kind=enospc\nversion={}\nmessage={}\n",
+            self.manifest.version, message
+        );
+        let _ = fs::write(marker_path, content);
     }
 
     fn publish_downloaded_archive_before(
@@ -1689,6 +1750,12 @@ fn archive_cache_path(bundle_root: &Path, version: &str) -> PathBuf {
     bundle_root.join(format!(".codeql-bundle-{version}.tar.gz"))
 }
 
+fn bootstrap_failure_path(bundle_root: &Path, version: &str) -> PathBuf {
+    bundle_root.join(format!(
+        ".codeql-bundle-{version}.{BUNDLE_BOOTSTRAP_FAILURE_FILE}"
+    ))
+}
+
 fn temp_archive_path(archive_path: &Path) -> PathBuf {
     let file_name = archive_path
         .file_name()
@@ -1938,8 +2005,8 @@ mod tests {
         BUNDLE_MARKER_FILE, BUNDLE_SETUP_TIMEOUT, BUNDLED_QLPACKS, BUNDLED_QUERIES,
         BootstrapLockState, BundleBootstrapLock, BundleManifest, ManagedToolCacheAdapter,
         ManagedToolCacheError, Platform, archive_cache_path, bootstrap_download_guidance,
-        bootstrap_extract_error, bootstrap_lock_state, codeql_bundle_manifest,
-        deploy_bundled_queries,
+        bootstrap_extract_error, bootstrap_failure_path, bootstrap_lock_state,
+        codeql_bundle_manifest, deploy_bundled_queries,
     };
     use crate::ports::tool_cache::{ToolCachePort, ToolCacheRequest};
 
@@ -2565,6 +2632,78 @@ mod tests {
             hidden_archives.is_empty(),
             "unexpected temp archives: {hidden_archives:?}"
         );
+    }
+
+    #[test]
+    fn resolve_bundle_fails_fast_after_previous_enospc_bootstrap_failure() {
+        let temp = TempDir::new().unwrap();
+        let bundle_root = temp.path().join("codeql");
+        fs::create_dir_all(&bundle_root).unwrap();
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: "a".repeat(64),
+                download_url: "http://127.0.0.1:1/codeql.tgz".to_owned(),
+            },
+            temp.path(),
+        );
+        fs::write(
+            bootstrap_failure_path(&bundle_root, "2.0.0"),
+            "kind=enospc\nmessage=No space left on device (os error 28)\n",
+        )
+        .unwrap();
+
+        let error = adapter
+            .resolve_bundle(&ToolCacheRequest {
+                tool_name: "codeql".to_owned(),
+                version: "2.0.0".to_owned(),
+            })
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("failed to extract CodeQL bundle v2.0.0"));
+        assert!(message.contains("previous CodeQL bundle bootstrap failed due to ENOSPC"));
+        assert!(message.contains("fail fast before retrying download/extraction"));
+        assert!(message.contains("No space left"));
+        assert!(!archive_cache_path(&bundle_root, "2.0.0").exists());
+        assert!(!bundle_root.join("2.0.0").exists());
+    }
+
+    #[test]
+    fn no_space_bootstrap_error_records_failure_marker_for_later_fail_fast() {
+        let temp = TempDir::new().unwrap();
+        let bundle_root = temp.path().join("codeql");
+        fs::create_dir_all(&bundle_root).unwrap();
+        let archive_path = archive_cache_path(&bundle_root, "2.0.0");
+        let adapter = ManagedToolCacheAdapter::with_cache_dir(
+            BundleManifest {
+                version: "2.0.0".to_owned(),
+                sha256: "a".repeat(64),
+                download_url: "https://example.invalid/codeql.tgz".to_owned(),
+            },
+            temp.path(),
+        );
+        let error = ManagedToolCacheError::BootstrapDownload {
+            version: "2.0.0".to_owned(),
+            url: "https://example.invalid/codeql.tgz".to_owned(),
+            archive_path: archive_path.clone(),
+            cache_dir: bundle_root.clone(),
+            content_length: Some(1024),
+            message: "No space left on device (os error 28)".to_owned(),
+            guidance: bootstrap_download_guidance(
+                &archive_path,
+                &bundle_root,
+                Some(1024),
+                "No space left on device (os error 28)",
+            ),
+        };
+
+        adapter.record_bootstrap_failure_if_no_space(&bundle_root, &error);
+
+        let marker = bootstrap_failure_path(&bundle_root, "2.0.0");
+        let marker_content = fs::read_to_string(marker).unwrap();
+        assert!(marker_content.contains("kind=enospc"));
+        assert!(marker_content.contains("No space left on device"));
     }
 
     #[test]
