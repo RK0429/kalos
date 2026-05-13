@@ -1289,6 +1289,57 @@ fn kalos_check_json_unbounded_large_repo_fails_fast_with_guidance() {
     assert!(message.contains("--exclude"));
     assert!(message.contains("--min-language-ratio"));
     assert!(message.contains("--allow-unbounded-large-repo-analysis"));
+    let coverage_gap = &parsed["coverage_gap"];
+    assert_eq!(coverage_gap["kind"], "large_repo_structured_output_skip");
+    assert!(
+        coverage_gap["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unbounded large-repo CodeQL analysis skipped")
+    );
+    assert_eq!(
+        coverage_gap["recommended_next_command"],
+        "kalos check . --level project --format json --codeql-total-timeout 1200 --codeql-timeout 240 --cache-dir <shared-cache-dir>"
+    );
+}
+
+#[test]
+fn kalos_check_sarif_unbounded_large_repo_reports_coverage_gap() {
+    let temp = seeded_large_workspace(100);
+
+    let assert = Command::cargo_bin("kalos")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--format",
+            "sarif",
+            "--codeql-timeout",
+            "0",
+            "--codeql-total-timeout",
+            "0",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::is_empty());
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        parsed["runs"][0]["properties"]["kalos"]["outcome"],
+        "expected_skip"
+    );
+    let coverage_gap = &parsed["runs"][0]["properties"]["kalos"]["coverage_gap"];
+    assert_eq!(coverage_gap["kind"], "large_repo_structured_output_skip");
+    assert_eq!(
+        coverage_gap["recommended_next_command"],
+        "kalos check . --level project --format json --codeql-total-timeout 1200 --codeql-timeout 240 --cache-dir <shared-cache-dir>"
+    );
+    assert_eq!(
+        parsed["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]["properties"]["coverage_gap"]
+            ["kind"],
+        "large_repo_structured_output_skip"
+    );
 }
 
 #[test]
@@ -2514,6 +2565,10 @@ fn kalos_check_llm_missing_api_key_json_is_expected_skip() {
             .as_str()
             .unwrap()
             .contains("KALOS_LLM_API_KEY")
+    );
+    assert!(
+        parsed.get("coverage_gap").is_none(),
+        "LLM expected_skip is not a matrix coverage gap"
     );
     assert!(
         assert.get_output().stderr.is_empty(),
