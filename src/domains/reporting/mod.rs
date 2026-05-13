@@ -783,6 +783,7 @@ pub fn render_sarif_error_document(
     error_class: &str,
 ) -> String {
     let outcome = outcome_for_error_class(error_class);
+    let coverage_gap = error_coverage_gap(error_class, message);
     let mut notification = json!({
         "level": "error",
         "message": { "text": message },
@@ -794,6 +795,9 @@ pub fn render_sarif_error_document(
     if let Some(cause) = cause {
         notification["properties"]["cause"] = json!(cause);
     }
+    if let Some(coverage_gap) = coverage_gap.clone() {
+        notification["properties"]["coverage_gap"] = coverage_gap.clone();
+    }
 
     let mut kalos_properties = json!({
         "error": true,
@@ -803,6 +807,9 @@ pub fn render_sarif_error_document(
     });
     if let Some(cause) = cause {
         kalos_properties["cause"] = json!(cause);
+    }
+    if let Some(coverage_gap) = coverage_gap {
+        kalos_properties["coverage_gap"] = coverage_gap;
     }
 
     let document = json!({
@@ -830,6 +837,35 @@ pub fn render_sarif_error_document(
     });
 
     serde_json::to_string_pretty(&document).expect("SARIF error document should serialize")
+}
+
+pub fn error_coverage_gap(error_class: &str, message: &str) -> Option<Value> {
+    if error_class != "expected_skip"
+        || !message.contains("unbounded large-repo CodeQL analysis skipped before CodeQL execution")
+    {
+        return None;
+    }
+
+    let reason = message
+        .split("\n\nrecommended narrower command:")
+        .next()
+        .unwrap_or(message)
+        .trim();
+    let recommended_next_command = message
+        .split("\n\nrecommended narrower command:")
+        .nth(1)
+        .and_then(|tail| tail.split("\n\n").next())
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .unwrap_or(
+            "kalos check . --level project --format json --codeql-total-timeout 1200 --codeql-timeout 240 --cache-dir <shared-cache-dir>",
+        );
+
+    Some(json!({
+        "kind": "large_repo_structured_output_skip",
+        "reason": reason,
+        "recommended_next_command": recommended_next_command,
+    }))
 }
 
 fn error_class_description(error_class: &str) -> &'static str {

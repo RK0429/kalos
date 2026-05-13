@@ -33,7 +33,7 @@ use crate::domains::config::{Defaults, ProjectConfig, ResolveOptions};
 use crate::domains::metrics::builtin_metric_definitions;
 use crate::domains::reporting::{
     OutputFormat as DomainOutputFormat, ReportViewOptions, RequestedLevel as DomainRequestedLevel,
-    outcome_for_error_class, render_sarif_error_document,
+    error_coverage_gap, outcome_for_error_class, render_sarif_error_document,
 };
 use crate::platform::fs::RealFileSystem;
 use crate::platform::process::SystemCommandRunner;
@@ -950,6 +950,15 @@ fn emit_error(
                 document.push_str(&format!("\nerror class: {error_class}"));
             }
             document.push_str(&format!("\noutcome: {outcome}"));
+            if let Some(coverage_gap) = error_coverage_gap(error_class, message) {
+                document.push_str(&format!(
+                    "\ncoverage gap: {}",
+                    coverage_gap["kind"].as_str().unwrap_or("unknown")
+                ));
+                if let Some(command) = coverage_gap["recommended_next_command"].as_str() {
+                    document.push_str(&format!("\nrecommended next command: {command}"));
+                }
+            }
             if let Some(path) = output {
                 if write_error_output_file(path, &document) {
                     return;
@@ -961,6 +970,15 @@ fn emit_error(
                 eprintln!("error class: {error_class}");
             }
             eprintln!("outcome: {outcome}");
+            if let Some(coverage_gap) = error_coverage_gap(error_class, message) {
+                eprintln!(
+                    "coverage gap: {}",
+                    coverage_gap["kind"].as_str().unwrap_or("unknown")
+                );
+                if let Some(command) = coverage_gap["recommended_next_command"].as_str() {
+                    eprintln!("recommended next command: {command}");
+                }
+            }
         }
         OutputFormat::Json => {
             let error_class = classify_error(message, source);
@@ -972,6 +990,9 @@ fn emit_error(
             });
             if let Some(source) = source {
                 payload["cause"] = json!(source.to_string());
+            }
+            if let Some(coverage_gap) = error_coverage_gap(error_class, message) {
+                payload["coverage_gap"] = coverage_gap;
             }
             let document = payload.to_string();
             if let Some(path) = output {
