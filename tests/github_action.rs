@@ -331,6 +331,129 @@ printf '%s\n' "$@" > "$TRACE_DIR/args.txt"
 }
 
 #[test]
+fn run_check_falls_back_from_missing_develop_to_remote_default_branch() {
+    let temp = TempDir::new().unwrap();
+    let trace_dir = temp.path().join("trace");
+    fs::create_dir_all(&trace_dir).unwrap();
+    let working_dir = temp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    seed_git_remote_default_branch(&working_dir, "main", true);
+
+    let fake_kalos = temp.path().join("kalos");
+    write_fake_kalos_binary(
+        &fake_kalos,
+        &trace_dir,
+        r#"printf '%s\n' "$@" > "$TRACE_DIR/args.txt"
+"#,
+    );
+
+    let output = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("run-check")
+        .current_dir(&working_dir)
+        .env("KALOS_ACTION_ARGS", "--diff\norigin/develop")
+        .env("KALOS_BIN", &fake_kalos)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let forwarded_args = fs::read_to_string(trace_dir.join("args.txt")).unwrap();
+    assert_eq!(
+        forwarded_args.lines().collect::<Vec<_>>(),
+        vec!["check", "--diff", "origin/main"]
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "notice: --diff origin/develop is unavailable; using remote default branch origin/main"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_check_falls_back_from_missing_develop_when_origin_head_is_absent() {
+    let temp = TempDir::new().unwrap();
+    let trace_dir = temp.path().join("trace");
+    fs::create_dir_all(&trace_dir).unwrap();
+    let working_dir = temp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    seed_git_remote_default_branch(&working_dir, "main", false);
+
+    let fake_kalos = temp.path().join("kalos");
+    write_fake_kalos_binary(
+        &fake_kalos,
+        &trace_dir,
+        r#"printf '%s\n' "$@" > "$TRACE_DIR/args.txt"
+"#,
+    );
+
+    let output = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("run-check")
+        .current_dir(&working_dir)
+        .env("KALOS_ACTION_ARGS", "--diff\norigin/develop")
+        .env("KALOS_BIN", &fake_kalos)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let forwarded_args = fs::read_to_string(trace_dir.join("args.txt")).unwrap();
+    assert_eq!(
+        forwarded_args.lines().collect::<Vec<_>>(),
+        vec!["check", "--diff", "origin/main"]
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "notice: --diff origin/develop is unavailable; using remote default branch origin/main"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_check_falls_back_from_equals_diff_missing_develop_to_remote_default_branch() {
+    let temp = TempDir::new().unwrap();
+    let trace_dir = temp.path().join("trace");
+    fs::create_dir_all(&trace_dir).unwrap();
+    let working_dir = temp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    seed_git_remote_default_branch(&working_dir, "main", false);
+
+    let fake_kalos = temp.path().join("kalos");
+    write_fake_kalos_binary(
+        &fake_kalos,
+        &trace_dir,
+        r#"printf '%s\n' "$@" > "$TRACE_DIR/args.txt"
+"#,
+    );
+
+    let output = StdCommand::new("bash")
+        .arg(wrapper_script_path())
+        .arg("run-check")
+        .current_dir(&working_dir)
+        .env("KALOS_ACTION_ARGS", "--diff=origin/develop")
+        .env("KALOS_BIN", &fake_kalos)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let forwarded_args = fs::read_to_string(trace_dir.join("args.txt")).unwrap();
+    assert_eq!(
+        forwarded_args.lines().collect::<Vec<_>>(),
+        vec!["check", "--diff=origin/main"]
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "notice: --diff origin/develop is unavailable; using remote default branch origin/main"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn run_check_allows_empty_argument_list() {
     let temp = TempDir::new().unwrap();
     let trace_dir = temp.path().join("trace");
@@ -577,6 +700,56 @@ fn write_fake_kalos_binary(path: &Path, trace_dir: &Path, body: &str) {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
+    }
+}
+
+fn seed_git_remote_default_branch(path: &Path, branch: &str, with_origin_head: bool) {
+    let init = StdCommand::new("git")
+        .args(["init", "-b", branch])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+    fs::write(path.join("README.md"), "# fixture\n").unwrap();
+    let remote_branch_ref = format!("refs/remotes/origin/{branch}");
+    let commands = [
+        vec![
+            "config".to_owned(),
+            "user.email".to_owned(),
+            "kalos@example.invalid".to_owned(),
+        ],
+        vec![
+            "config".to_owned(),
+            "user.name".to_owned(),
+            "Kalos Test".to_owned(),
+        ],
+        vec!["add".to_owned(), "README.md".to_owned()],
+        vec!["commit".to_owned(), "-m".to_owned(), "initial".to_owned()],
+        vec![
+            "update-ref".to_owned(),
+            remote_branch_ref.clone(),
+            "HEAD".to_owned(),
+        ],
+    ];
+    for args in commands {
+        let output = StdCommand::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    if with_origin_head {
+        let output = StdCommand::new("git")
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                &remote_branch_ref,
+            ])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 }
 

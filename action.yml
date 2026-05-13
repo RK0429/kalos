@@ -15,7 +15,7 @@ inputs:
     required: false
     default: default
   args:
-    description: Newline-delimited arguments passed to kalos check.
+    description: Newline-delimited arguments passed to kalos check. When `--diff origin/develop` is requested but `origin/develop` is unavailable, the wrapper falls back to the remote default branch so repositories without a develop branch remain covered.
     required: false
     default: ""
   upload-sarif:
