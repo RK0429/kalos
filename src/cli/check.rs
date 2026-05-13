@@ -51,7 +51,7 @@ const DEFAULT_CODEQL_TOTAL_TIMEOUT_SECS: u64 = 1200;
                   - `$KALOS_CACHE_DIR/baselines/` or `--cache-dir <path>/baselines/` may store cached baselines for full-workspace runs in Git repositories.\n  \
                   - `--cache-dir <path>/codeql/databases/<language>/` stores per-language CodeQL databases when --cache-dir is passed.\n  \
                   - `<repo>/.gitignore` is only created or updated when --update-gitignore is passed.\n\n\
-                  NOTE: For repeated matrix evaluation over large repositories, use one stable shared `--cache-dir` per repository and pre-populate or warm the managed CodeQL cache before cold harness runs. Avoid per-case cache directories for repeated level/format evaluation. Account for cold bundle setup and CodeQL database creation separately from rule runtime. Start with a single full `--level project --format json` run, then run level/format matrices with `--diff`, narrower targets, and `--exclude` for generated or vendor paths.\n\n\
+                  NOTE: For repeated matrix evaluation over large repositories, start with `--evaluation-profile recommended --cache-dir <shared-cache-dir>` and pre-populate or warm the managed CodeQL cache before cold harness runs. The recommended profile is equivalent to `--level project --format json --codeql-total-timeout 1200 --codeql-timeout 240`. Avoid per-case cache directories for repeated level/format evaluation. Account for cold bundle setup and CodeQL database creation separately from rule runtime. Then run level/format matrices with `--diff`, narrower targets, and `--exclude` for generated or vendor paths.\n\n\
                   NOTE: On Apple Silicon (aarch64), CodeQL runs via Rosetta 2 using an x86_64 bundle, \
                   which may cause significantly slower analysis on first invocation."
 )]
@@ -91,6 +91,14 @@ tune noisy rules in .kalos.toml with threshold, severity, or enabled overrides."
         help = "store managed bundles, baselines, and CodeQL databases under this cache directory"
     )]
     pub cache_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        help = "apply a named evaluation profile",
+        long_help = "apply a named evaluation profile.\n\n`recommended` is the first-run profile for bounded large-repository evaluation harnesses. It applies `--level project --format json --codeql-total-timeout 1200 --codeql-timeout 240`. Pair it with one stable shared `--cache-dir` per repository so managed bundles, baselines, and CodeQL databases can be reused across subsequent level/format matrix cases.",
+        conflicts_with_all = ["format", "level", "codeql_timeout", "codeql_total_timeout"]
+    )]
+    pub evaluation_profile: Option<EvaluationProfile>,
     #[arg(
         long,
         value_name = "path",
@@ -248,11 +256,20 @@ impl CheckCommand {
     }
 
     pub fn execute(&self) -> ExitCode {
+        let effective_format = self.effective_format();
+        let effective_level = self.effective_level();
+        let effective_codeql_timeout = self.effective_codeql_timeout();
+        let effective_explicit_total_timeout = self.effective_codeql_total_timeout();
         let cwd = match env::current_dir() {
             Ok(cwd) => cwd,
             Err(error) => {
                 let message = format!("failed to determine current directory: {error}");
-                emit_error(self.format, self.output.as_deref(), &message, Some(&error));
+                emit_error(
+                    effective_format,
+                    self.output.as_deref(),
+                    &message,
+                    Some(&error),
+                );
                 return ExitCode::from(2);
             }
         };
@@ -262,7 +279,7 @@ impl CheckCommand {
             Err(error) => {
                 let message = error.to_string();
                 emit_error(
-                    self.format,
+                    effective_format,
                     self.output.as_deref(),
                     &message,
                     error.source(),
@@ -277,7 +294,7 @@ impl CheckCommand {
                     "output path `{}` is a directory; pass a file path to --output",
                     path.display()
                 );
-                emit_error(self.format, self.output.as_deref(), &message, None);
+                emit_error(effective_format, self.output.as_deref(), &message, None);
                 return ExitCode::from(2);
             }
         }
@@ -293,7 +310,7 @@ impl CheckCommand {
                 Err(error) => {
                     let message = error.to_string();
                     emit_error(
-                        self.format,
+                        effective_format,
                         self.output.as_deref(),
                         &message,
                         error.source(),
@@ -309,7 +326,7 @@ impl CheckCommand {
             Err(error) => {
                 let message = error.to_string();
                 emit_error(
-                    self.format,
+                    effective_format,
                     self.output.as_deref(),
                     &message,
                     error.source(),
@@ -318,7 +335,7 @@ impl CheckCommand {
             }
         };
         let platform = Platform::detect();
-        let human_progress = self.format == OutputFormat::Human;
+        let human_progress = effective_format == OutputFormat::Human;
         if human_progress {
             if let Some(notice) = platform.and_then(|platform| platform.emulation_notice()) {
                 eprintln!("{notice}");
@@ -329,9 +346,11 @@ impl CheckCommand {
             Some(cache_dir) => ManagedToolCacheAdapter::with_cache_dir(manifest, cache_dir.clone()),
             None => ManagedToolCacheAdapter::new(manifest),
         };
-        let codeql_total_timeout =
-            effective_codeql_total_timeout(self.codeql_timeout, self.codeql_total_timeout);
-        let setup_timeout = codeql_setup_timeout(self.codeql_timeout, codeql_total_timeout);
+        let codeql_total_timeout = effective_codeql_total_timeout(
+            effective_codeql_timeout,
+            effective_explicit_total_timeout,
+        );
+        let setup_timeout = codeql_setup_timeout(effective_codeql_timeout, codeql_total_timeout);
         let tool_cache = match setup_timeout {
             Some(timeout) => tool_cache.with_bundle_setup_timeout(timeout),
             None => tool_cache,
@@ -365,7 +384,7 @@ impl CheckCommand {
             extractor = extractor.with_codeql_ram_mib(ram_mib);
         }
         extractor = extractor.with_codeql_timeout(
-            (self.codeql_timeout > 0).then(|| Duration::from_secs(self.codeql_timeout)),
+            (effective_codeql_timeout > 0).then(|| Duration::from_secs(effective_codeql_timeout)),
         );
         extractor = extractor.with_codeql_total_timeout(
             codeql_total_timeout
@@ -373,8 +392,8 @@ impl CheckCommand {
                 .map(Duration::from_secs),
         );
         extractor = extractor.with_fail_fast_unbounded_slow_path(
-            self.format != OutputFormat::Human
-                && self.codeql_timeout == 0
+            effective_format != OutputFormat::Human
+                && effective_codeql_timeout == 0
                 && codeql_total_timeout
                     .filter(|seconds| *seconds > 0)
                     .is_none()
@@ -396,8 +415,8 @@ impl CheckCommand {
             emit_module_load_warnings(plugin_host.warnings());
         }
         let view_options = ReportViewOptions {
-            requested_level: self.level.into(),
-            output_format: self.format.into(),
+            requested_level: effective_level.into(),
+            output_format: effective_format.into(),
             strict: self.strict,
             minimum_severity: self.severity.map(Severity::from),
             min_risk: self.min_risk,
@@ -414,7 +433,7 @@ impl CheckCommand {
                 Err(error) => {
                     let message = error.to_string();
                     emit_error(
-                        self.format,
+                        effective_format,
                         self.output.as_deref(),
                         &message,
                         error.source(),
@@ -432,7 +451,7 @@ impl CheckCommand {
                     }) {
                         let message = error.to_string();
                         emit_error(
-                            self.format,
+                            effective_format,
                             self.output.as_deref(),
                             &message,
                             error.source(),
@@ -440,11 +459,12 @@ impl CheckCommand {
                         return ExitCode::from(2);
                     }
                 }
-                if let Err(error) =
-                    handle_gitignore_policy_for_config(&config, self.format == OutputFormat::Human)
-                {
+                if let Err(error) = handle_gitignore_policy_for_config(
+                    &config,
+                    effective_format == OutputFormat::Human,
+                ) {
                     emit_error(
-                        self.format,
+                        effective_format,
                         self.output.as_deref(),
                         &error.message,
                         Some(&error.source),
@@ -472,7 +492,7 @@ impl CheckCommand {
                     }
                     let message = error.to_string();
                     emit_error(
-                        self.format,
+                        effective_format,
                         self.output.as_deref(),
                         &message,
                         error.source(),
@@ -489,11 +509,12 @@ impl CheckCommand {
                 });
 
             if self.cache_dir.is_none() && self.update_gitignore {
-                if let Err(error) =
-                    handle_gitignore_policy_for_config(&config, self.format == OutputFormat::Human)
-                {
+                if let Err(error) = handle_gitignore_policy_for_config(
+                    &config,
+                    effective_format == OutputFormat::Human,
+                ) {
                     emit_error(
-                        self.format,
+                        effective_format,
                         self.output.as_deref(),
                         &error.message,
                         Some(&error.source),
@@ -532,7 +553,7 @@ impl CheckCommand {
                     }
                     let message = error.to_string();
                     emit_error(
-                        self.format,
+                        effective_format,
                         self.output.as_deref(),
                         &message,
                         error.source(),
@@ -558,7 +579,7 @@ impl CheckCommand {
             Err(error) => {
                 let message = error.to_string();
                 emit_error(
-                    self.format,
+                    effective_format,
                     self.output.as_deref(),
                     &message,
                     error.source(),
@@ -576,14 +597,24 @@ impl CheckCommand {
                         "failed to create output directory `{}`: {error}",
                         parent.display()
                     );
-                    emit_error(self.format, self.output.as_deref(), &message, Some(&error));
+                    emit_error(
+                        effective_format,
+                        self.output.as_deref(),
+                        &message,
+                        Some(&error),
+                    );
                     return ExitCode::from(2);
                 }
             }
 
             if let Err(error) = fs::write(path, format!("{rendered}\n")) {
                 let message = format!("failed to write output file `{}`: {error}", path.display());
-                emit_error(self.format, self.output.as_deref(), &message, Some(&error));
+                emit_error(
+                    effective_format,
+                    self.output.as_deref(),
+                    &message,
+                    Some(&error),
+                );
                 return ExitCode::from(2);
             }
 
@@ -592,7 +623,7 @@ impl CheckCommand {
                     self.update_gitignore,
                     &config.workspace_root.abs_path,
                     result.report.metadata.file_count,
-                    self.format == OutputFormat::Human,
+                    effective_format == OutputFormat::Human,
                 );
             }
 
@@ -618,13 +649,41 @@ impl CheckCommand {
                     self.update_gitignore,
                     &config.workspace_root.abs_path,
                     result.report.metadata.file_count,
-                    self.format == OutputFormat::Human,
+                    effective_format == OutputFormat::Human,
                 );
             }
             println!("{rendered}");
         }
 
         map_exit_code(result.exit_code)
+    }
+
+    fn effective_format(&self) -> OutputFormat {
+        match self.evaluation_profile {
+            Some(EvaluationProfile::Recommended) => OutputFormat::Json,
+            None => self.format,
+        }
+    }
+
+    fn effective_level(&self) -> RequestedLevel {
+        match self.evaluation_profile {
+            Some(EvaluationProfile::Recommended) => RequestedLevel::Project,
+            None => self.level,
+        }
+    }
+
+    fn effective_codeql_timeout(&self) -> u64 {
+        match self.evaluation_profile {
+            Some(EvaluationProfile::Recommended) => 240,
+            None => self.codeql_timeout,
+        }
+    }
+
+    fn effective_codeql_total_timeout(&self) -> Option<u64> {
+        match self.evaluation_profile {
+            Some(EvaluationProfile::Recommended) => Some(DEFAULT_CODEQL_TOTAL_TIMEOUT_SECS),
+            None => self.codeql_total_timeout,
+        }
     }
 }
 
@@ -1060,6 +1119,11 @@ pub enum RequestedLevel {
     #[default]
     Project,
     All,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum EvaluationProfile {
+    Recommended,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]

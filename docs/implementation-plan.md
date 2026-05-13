@@ -80,7 +80,7 @@ kalos は Rust 製の CLI ツールで、ソースコードから CPG（Code Pro
 | 1-4 | 差分解析コンテキストの型定義 | `DiffBaseline`, `BaselineFingerprint`, `AffectedScopeSet`, `InvalidationPlan`, `DependencyIndexManifest`, `ScopeDiagnosticSnapshot` が domain_model.md §3.4 に準拠して定義される | 0-2 | 高 |
 | 1-5 | ポートトレイト定義 | `ExtractorPort`, `DependencyResolverPort`, `LlmPort`, `PluginPort`, `CachePort`, `ToolCachePort`, `DiffSourcePort` の trait が ports/ に定義される | 1-1, 1-2, 1-3, 1-4 | 高 |
 | 1-6 | Configuration コンテキスト実装 | `.kalos.toml` パース、`WorkspaceRoot` 解決、`ProjectConfig` 生成、優先順位マージ（CLI > ファイル > デフォルト）、`analysis_targets` 正規化が動作し、設定バリデーション（weights > 0, threshold ∈ [0,1], sha256 形式）で不正値を exit code 2 で拒否する。テスト付き | 1-5 | 高 |
-| 1-7 | CLI Shell 実装（clap） | `kalos check [<path>...] --format --level --config --exclude --severity --diff --llm --strict` と `kalos init` の引数パースが動作する。位置引数省略時のデフォルト `.` 処理を含む | 1-6 | 高 |
+| 1-7 | CLI Shell 実装（clap） | `kalos check [<path>...] --format --level --evaluation-profile --config --exclude --severity --diff --llm --strict` と `kalos init` の引数パースが動作する。位置引数省略時のデフォルト `.` 処理を含む | 1-6 | 高 |
 
 ### Wave 2: メトリクスエンジン
 

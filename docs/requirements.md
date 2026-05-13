@@ -399,6 +399,7 @@ v1 では、すべてのメトリクスを `raw_value` と `normalized_risk` の
 - **主要オプション**:
   - `--format <human|json|sarif>`: 出力形式（デフォルト: human）
   - `--level <function|module|project|all>`: 解析階層（デフォルト: project）
+  - `--evaluation-profile recommended`: 大規模リポジトリの初回評価向けプロファイル。`--level project --format json --codeql-total-timeout 1200 --codeql-timeout 240` を適用し、これらの明示指定とは併用不可
   - `--config <path>`: 明示的に使用する `.kalos.toml` のパス。この親ディレクトリを `WorkspaceRoot` とする
   - `--exclude <pattern>`: 除外パターン
   - `--severity <error|warning|info>`: 表示する最低重大度

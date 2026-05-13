@@ -38,7 +38,7 @@ pub fn run() -> std::process::ExitCode {
 mod tests {
     use clap::{Parser, error::ErrorKind};
 
-    use super::check::{MinimumSeverity, OutputFormat, RequestedLevel};
+    use super::check::{EvaluationProfile, MinimumSeverity, OutputFormat, RequestedLevel};
     use super::{Cli, Command};
 
     #[test]
@@ -57,6 +57,7 @@ mod tests {
         assert_eq!(command.level, RequestedLevel::Project);
         assert_eq!(command.output, None);
         assert_eq!(command.min_risk, None);
+        assert_eq!(command.evaluation_profile, None);
         assert!(!command.verbose);
         assert!(!command.quiet);
     }
@@ -143,6 +144,54 @@ mod tests {
         assert!(command.llm);
         assert!(command.strict);
         assert!(!command.update_gitignore);
+    }
+
+    #[test]
+    fn check_parses_recommended_evaluation_profile() {
+        let cli = Cli::try_parse_from([
+            "kalos",
+            "check",
+            "--evaluation-profile",
+            "recommended",
+            "--cache-dir",
+            ".kalos-eval-cache",
+        ])
+        .unwrap();
+
+        let Command::Check(command) = cli.command else {
+            panic!("expected check command");
+        };
+
+        assert_eq!(
+            command.evaluation_profile,
+            Some(EvaluationProfile::Recommended)
+        );
+        assert_eq!(
+            command.cache_dir,
+            Some(std::path::PathBuf::from(".kalos-eval-cache"))
+        );
+    }
+
+    #[test]
+    fn check_recommended_evaluation_profile_rejects_explicit_overrides() {
+        for conflicting_args in [
+            ["--format", "json"],
+            ["--level", "all"],
+            ["--codeql-timeout", "60"],
+            ["--codeql-total-timeout", "600"],
+        ] {
+            let error = Cli::try_parse_from([
+                "kalos",
+                "check",
+                "--evaluation-profile",
+                "recommended",
+                conflicting_args[0],
+                conflicting_args[1],
+            ])
+            .unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        }
     }
 
     #[test]
